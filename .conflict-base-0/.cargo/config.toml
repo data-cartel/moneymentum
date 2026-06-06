@@ -1,0 +1,8 @@
+# Build against the bundled offline query caches (`.sqlx/`) shipped by our
+# event-store dependencies (apalis-sqlite, sqlite-es) instead of verifying their
+# compile-time `sqlx::query!` macros against a live database. Our own code uses
+# runtime `sqlx::query` and `sqlx::migrate!`, which need no live connection, so
+# offline mode is correct for the whole workspace and keeps `cargo check`/`nix
+# build` hermetic regardless of whether DATABASE_URL points at a real database.
+[env]
+SQLX_OFFLINE = "true"

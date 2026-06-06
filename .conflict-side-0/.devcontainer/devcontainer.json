@@ -1,0 +1,20 @@
+{
+  "name": "Moneymentum Dev Environment",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
+  "features": {
+    "ghcr.io/devcontainers/features/nix:1": {
+      "installDirty": true
+    }
+  },
+  "postCreateCommand": "nix develop --impure",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "jnoortheen.nix-ide",
+        "arrterian.nix-env-selector",
+        "mkhl.direnv"
+      ]
+    }
+  },
+  "remoteUser": "vscode"
+}

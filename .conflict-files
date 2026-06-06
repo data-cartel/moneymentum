@@ -1,0 +1,3 @@
+ancestorEntries = ["src/lib.rs"]
+ourEntries = ["src/lib.rs"]
+theirEntries = ["src/lib.rs"]

@@ -1,0 +1,34 @@
+[package]
+name = "timeseries"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+polars = { workspace = true, features = [
+  "lazy",
+  "temporal",
+  "dtype-datetime",
+  "rolling_window",
+  "cum_agg",
+  "log",
+] }
+thiserror.workspace = true
+tower = { workspace = true, features = ["util"] }
+tracing.workspace = true
+
+[dev-dependencies]
+polars = { workspace = true, features = [
+  "lazy",
+  "temporal",
+  "dtype-datetime",
+  "rolling_window",
+  "cum_agg",
+  "log",
+  "csv",
+] }
+proptest.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing-test.workspace = true
+
+[lints]
+workspace = true

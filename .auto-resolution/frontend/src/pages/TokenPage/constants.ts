@@ -1,0 +1,21 @@
+// Available metrics for selection
+export const AVAILABLE_METRICS = [
+  { value: "price", label: "Price Chart (OHLC)" },
+  { value: "log_return", label: "Log Return" },
+  { value: "cum_return", label: "Cumulative Return" },
+  { value: "autocorrelation", label: "Autocorrelation" },
+  { value: "stddev", label: "Standard Deviation" },
+  { value: "annualized_volatility", label: "Annualized Volatility" },
+  { value: "sma", label: "Simple Moving Average" },
+  { value: "mean_return", label: "Mean Return" },
+  { value: "price_stddev", label: "Price Standard Deviation" },
+  { value: "return_stddev", label: "Return Standard Deviation" },
+  { value: "price_zscore", label: "Price Z-Score" },
+  { value: "covariance", label: "Covariance" },
+  { value: "beta", label: "Beta" },
+  { value: "information_discreteness", label: "Information Discreteness" },
+  { value: "sharpe", label: "Sharpe Ratio" },
+  { value: "log_return_above_mar", label: "Log Return Above MAR" },
+  { value: "downside_deviation", label: "Downside Deviation" },
+  { value: "sortino", label: "Sortino Ratio" },
+]

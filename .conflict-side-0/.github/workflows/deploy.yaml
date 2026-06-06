@@ -1,0 +1,234 @@
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    concurrency:
+      # Shared with staging workflow -- deployServer touches staging too
+      group: deploy-production
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+        with:
+          nix_version: "2.31.2"
+          nix_conf: |
+            accept-flake-config = true
+            fallback = true
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            keep-env-derivations = true
+            keep-outputs = true
+
+      - uses: cachix/cachix-action@ad2ddac53f961de1989924296a1f236fcfbaa4fc # v15
+        with:
+          name: data-cartel-public
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-deploy-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-deploy-
+          gc-max-store-size-linux: 5G
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@f4d14e03ff726c06358e5557344e1da148b56cf7
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.bun/install/cache
+            frontend/node_modules
+          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/bun.lock', 'frontend/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Setup SSH
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Resolve host IP
+        run: |
+          host_ip=$(nix run .#resolveIp)
+          echo "::add-mask::$host_ip"
+
+          # The host key is pinned in keys.nix, not fetched from the target host.
+          host_key=$(nix eval --raw --file keys.nix keys.host)
+          if [ -z "$host_key" ]; then
+            echo "Host key is empty" >&2
+            exit 1
+          fi
+
+          echo "$host_ip $host_key" > ~/.ssh/known_hosts
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Deploy system and backend
+        run: nix run .#deployServer
+
+      - name: Deploy frontend
+        run: nix run .#deployFrontend
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -rf ~/.ssh
+
+  post-deploy-smoke-test:
+    if: github.ref == 'refs/heads/master'
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+        with:
+          nix_version: "2.31.2"
+          nix_conf: |
+            accept-flake-config = true
+            fallback = true
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            keep-env-derivations = true
+            keep-outputs = true
+
+      - uses: cachix/cachix-action@ad2ddac53f961de1989924296a1f236fcfbaa4fc # v15
+        with:
+          name: data-cartel-public
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-smoke-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-smoke-
+          gc-max-store-size-linux: 5G
+
+      - name: Setup SSH key for state decryption
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Verify deployed frontend and backend
+        env:
+          FRONTEND_URL: ${{ vars.DEPLOY_FRONTEND_URL }}
+          HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL }}
+          SMOKE_HOST: ${{ vars.DEPLOY_SMOKE_HOST }}
+          SMOKE_INSECURE: ${{ vars.DEPLOY_SMOKE_INSECURE }}
+        run: |
+          host_ip=$(nix run .#resolveIp)
+          if [ -z "$host_ip" ]; then
+            echo "Host IP was not resolved" >&2
+            exit 1
+          fi
+          echo "::add-mask::$host_ip"
+
+          frontend_url="${FRONTEND_URL:-http://$host_ip/}"
+          health_url="${HEALTH_URL:-http://$host_ip/api/health}"
+
+          health_response_ok() {
+            response_file="$1"
+            content_type="$2"
+
+            case "$content_type" in
+              application/json|application/json\;*) ;;
+              *) return 1 ;;
+            esac
+
+            python3 - "$response_file" <<'PY'
+          import json
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as response:
+                  payload = json.load(response)
+          except (OSError, json.JSONDecodeError):
+              sys.exit(1)
+
+          if not isinstance(payload, dict):
+              sys.exit(1)
+
+          version = payload.get("version")
+          if payload.get("status") == "ok" and isinstance(version, str) and version:
+              sys.exit(0)
+
+          sys.exit(1)
+          PY
+          }
+
+          retry_url() {
+            url="$1"
+            expected_body="${2:-}"
+            follow_redirects="${3:-false}"
+
+            for delay in 2 4 8 16 32; do
+              response_file="$(mktemp)"
+              curl_args=(-sS --max-time 20)
+              if [ "$follow_redirects" = "true" ]; then
+                curl_args+=(-L)
+              fi
+              if [ -n "$SMOKE_HOST" ]; then
+                curl_args+=(-H "Host: $SMOKE_HOST")
+              fi
+              if [ "$SMOKE_INSECURE" = "true" ]; then
+                curl_args+=(-k)
+              fi
+
+              response_meta=$(curl "${curl_args[@]}" -o "$response_file" -w "%{http_code} %{content_type}" "$url" || true)
+              status="${response_meta%% *}"
+              content_type="${response_meta#* }"
+
+              if [ "$url" = "$health_url" ] && [ "$status" = "200" ] && health_response_ok "$response_file" "$content_type"; then
+                rm -f "$response_file"
+                echo "Verified $url"
+                return 0
+              fi
+
+              body="$(<"$response_file")"
+              if [ "$url" != "$health_url" ] && [ "$status" = "200" ] && { [ -z "$expected_body" ] || [ "$body" = "$expected_body" ]; }; then
+                rm -f "$response_file"
+                echo "Verified $url"
+                return 0
+              fi
+
+              rm -f "$response_file"
+
+              echo "Waiting for $url: status=$status"
+              if [ "$delay" != "32" ]; then
+                sleep "$delay"
+              fi
+            done
+
+            echo "Smoke check failed for $url" >&2
+            return 1
+          }
+
+          retry_url "$frontend_url" "" true
+          retry_url "$health_url"
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -rf ~/.ssh

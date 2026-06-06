@@ -1,0 +1,6 @@
+port = 8001
+data_dir = "/mnt/data/staging"
+database_url = "sqlite:///mnt/data/staging/moneymentum.db?mode=rwc"
+log_level = "debug"
+max_concurrent_requests = 3
+max_retries = 5

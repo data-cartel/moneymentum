@@ -1,0 +1,21 @@
+port = 8000
+data_dir = "data"
+
+# ?mode=rwc standa for read/write/create. by setting this flag,
+# we make sqlite create the .db file if it doesn't exist
+database_url = "sqlite:./moneymentum.db?mode=rwc"
+
+log_level = "debug"
+
+# Ingestion tuning - balance speed vs rate limiting
+max_concurrent_requests = 3
+max_retries = 5
+
+markets_refresh_token = "local-markets-refresh-token"
+
+# Derive (Lyra) options integration.
+# port and connects to the Derive REST and websocket APIs.
+[derive]
+port = 8100
+rest_base_url = "https://api.lyra.finance"
+ws_url = "wss://api.lyra.finance/ws"
