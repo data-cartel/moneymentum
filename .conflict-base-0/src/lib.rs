@@ -197,8 +197,10 @@ async fn post_screener(
 #[post("/portfolio/compare", data = "<body>")]
 fn post_portfolio_compare(
     body: Json<portfolio_comparison::PortfolioComparisonRequest>,
-) -> Json<Vec<portfolio_comparison::PositionComparison>> {
-    Json(portfolio_comparison::compare_portfolios(&body.into_inner()))
+) -> Result<Json<Vec<portfolio_comparison::PositionComparison>>, Status> {
+    portfolio_comparison::compare_portfolios(&body.into_inner())
+        .map(Json)
+        .map_err(|_| Status::BadRequest)
 }
 
 #[post("/ingest")]

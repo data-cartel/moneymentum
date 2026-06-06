@@ -12,6 +12,7 @@ mod portfolio;
 mod portfolio_comparison;
 mod readonly_portfolio;
 mod screener;
+mod simulation;
 mod timeframe;
 mod venue;
 
@@ -201,6 +202,21 @@ fn post_portfolio_compare(
     portfolio_comparison::compare_portfolios(&body.into_inner())
         .map(Json)
         .map_err(|_| Status::BadRequest)
+}
+
+#[post("/portfolio/simulate", data = "<body>")]
+async fn post_portfolio_simulate(
+    config: &State<Config>,
+    body: Json<simulation::SimulationRequest>,
+) -> Result<Json<simulation::SimulationResponse>, Status> {
+    match simulation::simulate(&config.data_dir, &body).await {
+        Ok(response) => Ok(Json(response)),
+        Err(factors::ReturnsError::NoData { .. }) => Err(Status::NotFound),
+        Err(err) => {
+            error!(error = %err, "failed to simulate portfolio");
+            Err(Status::InternalServerError)
+        }
+    }
 }
 
 #[post("/ingest")]
@@ -920,6 +936,7 @@ pub async fn rocket(
                 post_portfolio_archive,
                 post_screener,
                 post_portfolio_compare,
+                post_portfolio_simulate,
                 start_ingestion,
                 get_ingestion_status,
                 post_market_disable,
@@ -982,7 +999,8 @@ mod tests {
                 get_candles,
                 get_factors,
                 post_screener,
-                post_portfolio_compare
+                post_portfolio_compare,
+                post_portfolio_simulate
             ],
         )
     }
@@ -1580,6 +1598,44 @@ mod tests {
                 .abs()
                 < 1e-9
         );
+    }
+
+    #[test]
+    fn post_portfolio_simulate_returns_404_when_no_data() {
+        let data_dir = TempDir::new().unwrap();
+        let client = Client::tracked(test_rocket(data_dir.path())).unwrap();
+        let response = client
+            .post("/portfolio/simulate")
+            .header(rocket::http::ContentType::JSON)
+            .body(r#"{"current":{"BTC":1.0},"staged":{"BTC":1.0}}"#)
+            .dispatch();
+
+        assert_eq!(response.status(), Status::NotFound);
+    }
+
+    #[test]
+    fn post_portfolio_simulate_projects_current_and_staged_beta() {
+        let data_dir = TempDir::new().unwrap();
+        std::fs::copy(
+            std::path::Path::new("fixtures/ohlcv_1d_beta.csv"),
+            data_dir.path().join("ohlcv_1d.csv"),
+        )
+        .unwrap();
+
+        let client = Client::tracked(test_rocket(data_dir.path())).unwrap();
+        let response = client
+            .post("/portfolio/simulate")
+            .header(rocket::http::ContentType::JSON)
+            .body(r#"{"current":{"BTC":1.0},"staged":{"BTC":0.6,"ETH":-0.4}}"#)
+            .dispatch();
+
+        assert_eq!(response.status(), Status::Ok);
+        let body: serde_json::Value =
+            serde_json::from_str(&response.into_string().unwrap()).unwrap();
+        let current = body["current"]["beta"].as_f64().unwrap();
+        let staged = body["staged"]["beta"].as_f64().unwrap();
+        assert!((current - 1.0).abs() < 1e-10);
+        assert!((staged - 0.592_091_722_3).abs() < 1e-10);
     }
 
     #[test]

@@ -12,6 +12,7 @@ mod portfolio;
 mod portfolio_comparison;
 mod readonly_portfolio;
 mod screener;
+mod simulation;
 mod timeframe;
 mod venue;
 
