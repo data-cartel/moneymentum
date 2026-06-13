@@ -9,6 +9,7 @@ mod market_catalog;
 mod market_enablement;
 mod market_metadata;
 mod portfolio;
+mod portfolio_comparison;
 mod readonly_portfolio;
 mod screener;
 mod timeframe;

@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tracing::debug;
 
 /// A request to compare target vs current portfolio weights.
@@ -32,9 +33,42 @@ pub(crate) struct PositionComparison {
     tradable: bool,
 }
 
+/// Why a comparison request is rejected before any delta is computed.
+///
+/// JSON parses out-of-range floats (`1e309`) to infinity and serializes
+/// non-finite floats back as `null`, so an unvalidated request silently yields a
+/// corrupt response; a negative threshold marks every position tradable. Both are
+/// caller errors the endpoint must refuse rather than answer.
+#[derive(Debug, Error, PartialEq)]
+pub(crate) enum ComparisonError {
+    #[error("portfolio weights must be finite")]
+    NonFiniteWeight,
+
+    #[error("minimum tradable change must be finite and non-negative")]
+    InvalidThreshold,
+}
+
 /// Compares target vs current weights, one row per symbol present in either side
 /// (sorted by symbol). A position is tradable when `|delta| >= min_tradable_change`.
-pub(crate) fn compare_portfolios(request: &PortfolioComparisonRequest) -> Vec<PositionComparison> {
+///
+/// Rejects non-finite weights and a non-finite or negative threshold so the
+/// response never carries `null` deltas or a degenerate all-tradable result.
+pub(crate) fn compare_portfolios(
+    request: &PortfolioComparisonRequest,
+) -> Result<Vec<PositionComparison>, ComparisonError> {
+    let all_finite = request
+        .target
+        .values()
+        .chain(request.current.values())
+        .all(|weight| weight.is_finite());
+    if !all_finite {
+        return Err(ComparisonError::NonFiniteWeight);
+    }
+
+    if !request.min_tradable_change.is_finite() || request.min_tradable_change < 0.0 {
+        return Err(ComparisonError::InvalidThreshold);
+    }
+
     let mut symbols: Vec<&String> = request
         .target
         .keys()
@@ -65,7 +99,7 @@ pub(crate) fn compare_portfolios(request: &PortfolioComparisonRequest) -> Vec<Po
         positions = comparisons.len(),
         tradable, "portfolio compared"
     );
-    comparisons
+    Ok(comparisons)
 }
 
 #[cfg(test)]
@@ -108,7 +142,8 @@ mod tests {
             &[("BTC", 0.6), ("ETH", 0.4)],
             &[("BTC", 0.5), ("ETH", 0.3)],
             0.05,
-        ));
+        ))
+        .expect("finite weights and a valid threshold");
 
         let btc = row(&comparison, "BTC");
         assert!((btc.target_weight - 0.6).abs() < 1e-12);
@@ -121,7 +156,8 @@ mod tests {
 
     #[test]
     fn marks_sub_threshold_positions_not_tradable() {
-        let comparison = compare_portfolios(&request(&[("BTC", 0.55)], &[("BTC", 0.5)], 0.1));
+        let comparison = compare_portfolios(&request(&[("BTC", 0.55)], &[("BTC", 0.5)], 0.1))
+            .expect("finite weights and a valid threshold");
         assert!(
             !row(&comparison, "BTC").tradable,
             "a 0.05 delta is below the 0.1 threshold"
@@ -132,7 +168,8 @@ mod tests {
     fn includes_symbols_present_on_only_one_side() {
         // SOL is a current position with no target (a full exit); NEW is a target
         // with no current position (a fresh entry).
-        let comparison = compare_portfolios(&request(&[("NEW", 0.3)], &[("SOL", 0.2)], 0.05));
+        let comparison = compare_portfolios(&request(&[("NEW", 0.3)], &[("SOL", 0.2)], 0.05))
+            .expect("finite weights and a valid threshold");
 
         let sol = row(&comparison, "SOL");
         assert!((sol.target_weight - 0.0).abs() < 1e-12);
@@ -151,8 +188,30 @@ mod tests {
             &[("SOL", 0.3), ("BTC", 0.4), ("ETH", 0.3)],
             &[],
             0.0,
-        ));
+        ))
+        .expect("finite weights and a valid threshold");
         let symbols: Vec<&str> = comparison.iter().map(|row| row.symbol.as_str()).collect();
         assert_eq!(symbols, ["BTC", "ETH", "SOL"]);
+    }
+
+    #[test]
+    fn rejects_non_finite_weight() {
+        let infinite = compare_portfolios(&request(&[("BTC", f64::INFINITY)], &[], 0.05));
+        assert_eq!(infinite, Err(ComparisonError::NonFiniteWeight));
+
+        let not_a_number = compare_portfolios(&request(&[], &[("ETH", f64::NAN)], 0.05));
+        assert_eq!(not_a_number, Err(ComparisonError::NonFiniteWeight));
+    }
+
+    #[test]
+    fn rejects_negative_threshold() {
+        let comparison = compare_portfolios(&request(&[("BTC", 0.5)], &[("BTC", 0.5)], -0.05));
+        assert_eq!(comparison, Err(ComparisonError::InvalidThreshold));
+    }
+
+    #[test]
+    fn rejects_non_finite_threshold() {
+        let comparison = compare_portfolios(&request(&[("BTC", 0.5)], &[("BTC", 0.4)], f64::NAN));
+        assert_eq!(comparison, Err(ComparisonError::InvalidThreshold));
     }
 }

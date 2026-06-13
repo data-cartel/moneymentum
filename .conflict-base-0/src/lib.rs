@@ -9,6 +9,7 @@ mod market_catalog;
 mod market_enablement;
 mod market_metadata;
 mod portfolio;
+mod portfolio_comparison;
 mod readonly_portfolio;
 mod screener;
 mod timeframe;
@@ -191,6 +192,13 @@ async fn post_screener(
             Err(Status::InternalServerError)
         }
     }
+}
+
+#[post("/portfolio/compare", data = "<body>")]
+fn post_portfolio_compare(
+    body: Json<portfolio_comparison::PortfolioComparisonRequest>,
+) -> Json<Vec<portfolio_comparison::PositionComparison>> {
+    Json(portfolio_comparison::compare_portfolios(&body.into_inner()))
 }
 
 #[post("/ingest")]
@@ -909,6 +917,7 @@ pub async fn rocket(
                 post_portfolio_rename,
                 post_portfolio_archive,
                 post_screener,
+                post_portfolio_compare,
                 start_ingestion,
                 get_ingestion_status,
                 post_market_disable,
@@ -966,7 +975,13 @@ mod tests {
         };
         rocket::build().manage(config).mount(
             "/",
-            routes![health, get_candles, get_factors, post_screener],
+            routes![
+                health,
+                get_candles,
+                get_factors,
+                post_screener,
+                post_portfolio_compare
+            ],
         )
     }
 
@@ -1530,6 +1545,38 @@ mod tests {
         assert!(
             rows.iter().all(|row| row.get("missing").is_some()),
             "every ranked row carries a missing flag"
+        );
+    }
+
+    #[test]
+    fn post_portfolio_compare_returns_per_position_deltas() {
+        let data_dir = TempDir::new().unwrap();
+        let client = Client::tracked(test_rocket(data_dir.path())).unwrap();
+        let response = client
+            .post("/portfolio/compare")
+            .header(rocket::http::ContentType::JSON)
+            .body(r#"{"target":{"BTC":0.6},"current":{"BTC":0.5},"minTradableChange":0.05}"#)
+            .dispatch();
+
+        assert_eq!(response.status(), Status::Ok);
+        let body = response.into_string().unwrap();
+        let rows: Vec<serde_json::Value> =
+            serde_json::from_str(&body).expect("comparison body is a JSON array");
+        let btc = rows
+            .iter()
+            .find(|row| row.get("symbol").and_then(|s| s.as_str()) == Some("BTC"))
+            .expect("BTC row present");
+        assert_eq!(
+            btc.get("tradable").and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            (btc.get("delta")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap()
+                - 0.1)
+                .abs()
+                < 1e-9
         );
     }
 
