@@ -16,7 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// Serialization is transparent (the inner ticker string). Deserialization
 /// normalizes through [`Symbol::from_raw`], so a `Symbol` decoded at any boundary
 /// -- a wire request or a persisted event -- is canonical.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub(crate) struct Symbol(String);
 
 impl Symbol {
@@ -152,6 +152,14 @@ mod tests {
     fn deserialize_normalizes_wire_symbol() {
         let symbol: Symbol = serde_json::from_str("\"btc/usdc:usdc\"").unwrap();
         assert_eq!(symbol.as_str(), "BTC");
+    }
+
+    #[test]
+    fn deserialize_normalizes_symbol_map_keys() {
+        let weights: std::collections::HashMap<Symbol, f64> =
+            serde_json::from_str(r#"{"btc/usdc:usdc": 1.0}"#).unwrap();
+
+        assert_eq!(weights.get(&Symbol::from_raw("BTC")), Some(&1.0));
     }
 
     #[test]

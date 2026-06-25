@@ -394,7 +394,7 @@ struct PortfolioCreatedResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ReviseTargetRequest {
-    weights: HashMap<String, f64>,
+    weights: HashMap<Symbol, f64>,
     leverage: f64,
 }
 
@@ -435,7 +435,7 @@ async fn post_portfolio_target(
     for (symbol, weight) in &body.weights {
         let weight =
             finite_decimal(*weight).ok_or_else(|| bad_request("weights must be finite"))?;
-        weights.push((Symbol::from_raw(symbol), weight));
+        weights.push((symbol.clone(), weight));
     }
     let leverage =
         finite_decimal(body.leverage).ok_or_else(|| bad_request("leverage must be finite"))?;
