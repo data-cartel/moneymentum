@@ -1,0 +1,88 @@
+# Prototype visual regression with in-repo Playwright baselines.
+#
+# Baselines live in git under src/visual/prototype.spec.ts-snapshots/ (linux).
+# Intentional UI changes: run `bun run test:vrt:update` on linux, commit PNGs,
+# review the diff in the PR Files changed tab.
+#
+# reg-actions needs GITHUB_TOKEN write (PR comments + reg-actions branch). If org
+# policy blocks that (repo Settings -> Actions -> Workflow permissions), this
+# in-repo model works with read-only tokens. To restore reg-actions later, add a
+# fine-grained PAT with contents + pull-requests write as secret REG_VIZ_TOKEN.
+
+name: Visual regression
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/visual-regression.yaml"
+  push:
+    branches: [master]
+    paths:
+      - "frontend/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/visual-regression.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prototype-visual:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+        with:
+          nix_version: "2.31.2"
+          nix_conf: |
+            accept-flake-config = true
+            fallback = true
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            keep-env-derivations = true
+            keep-outputs = true
+
+      - uses: cachix/cachix-action@ad2ddac53f961de1989924296a1f236fcfbaa4fc # v15
+        continue-on-error: true
+        with:
+          name: data-cartel-public
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-frontend-visual-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-frontend-visual-
+          gc-max-store-size-linux: 5G
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.bun/install/cache
+            frontend/node_modules
+          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/bun.lock', 'frontend/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: nix develop --impure .#frontend --command bash -c 'cd frontend && bun install --frozen-lockfile'
+
+      - name: Compare prototype screenshots against committed baselines
+        if: github.event_name != 'workflow_dispatch'
+        run: nix develop --impure .#frontend --command bash -c 'cd frontend && bun run test:vrt'
+
+      - name: Refresh linux baselines (manual seed only)
+        if: github.event_name == 'workflow_dispatch'
+        run: nix develop --impure .#frontend --command bash -c 'cd frontend && bun run test:vrt:update'
+
+      - name: Upload refreshed baselines
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: prototype-visual-baselines-linux
+          path: frontend/src/visual/prototype.spec.ts-snapshots/
+          retention-days: 7
