@@ -188,6 +188,10 @@ result before sending trades.
       [#274](https://github.com/dataclique/moneymentum/pull/274)); frontend
       filter integration pending
 - [ ] [Simulate Staged Portfolio Metrics](./stories/0x01d.simulate-staged-portfolio-metrics.md)
+      -- backend simulate API shipped
+      ([#281](https://github.com/data-cartel/moneymentum/issues/281) /
+      [#282](https://github.com/data-cartel/moneymentum/pull/282)); frontend
+      staging view pending
 
 ---
 

@@ -814,6 +814,44 @@ fn spawn_ingestion_scheduler(
     });
 }
 
+struct EventSourcedStores {
+    portfolio_store: Arc<Store<Portfolio>>,
+    portfolio_projection: Arc<Projection<Portfolio>>,
+    ingestion_store: Arc<Store<IngestionRun>>,
+    ingestion_projection: Arc<Projection<IngestionRun>>,
+    market_catalog: Arc<Store<MarketCatalog>>,
+    market_catalog_projection: Arc<Projection<MarketCatalog>>,
+    market_enablement: Arc<Store<MarketEnablement>>,
+    market_enablement_projection: Arc<Projection<MarketEnablement>>,
+}
+
+async fn build_event_sourced_stores(
+    pool: SqlitePool,
+) -> Result<EventSourcedStores, Box<dyn std::error::Error + Send + Sync>> {
+    let (portfolio_store, portfolio_projection) =
+        StoreBuilder::<Portfolio>::new(pool.clone()).build().await?;
+    let (ingestion_store, ingestion_projection) = StoreBuilder::<IngestionRun>::new(pool.clone())
+        .build()
+        .await?;
+    let (market_catalog, market_catalog_projection) =
+        StoreBuilder::<MarketCatalog>::new(pool.clone())
+            .build()
+            .await?;
+    let (market_enablement, market_enablement_projection) =
+        StoreBuilder::<MarketEnablement>::new(pool).build().await?;
+    debug!("event-sourced stores ready");
+    Ok(EventSourcedStores {
+        portfolio_store,
+        portfolio_projection,
+        ingestion_store,
+        ingestion_projection,
+        market_catalog,
+        market_catalog_projection,
+        market_enablement,
+        market_enablement_projection,
+    })
+}
+
 /// Build and configure the Rocket HTTP server for the moneymentum backend.
 ///
 /// # Errors
@@ -848,23 +886,16 @@ pub async fn rocket(
     migrations.set_ignore_missing(true).run(&pool).await?;
     debug!(count = migrations.iter().count(), "migrations applied");
 
-    // One Store + Projection per event-sourced aggregate, built once here and
-    // shared via Rocket state. `build()` reconciles the schema registry (clearing
-    // stale snapshots on a SCHEMA_VERSION bump) and auto-wires the projection.
-    let (portfolio_store, portfolio_projection) =
-        StoreBuilder::<Portfolio>::new(pool.clone()).build().await?;
-    let (ingestion_store, ingestion_projection) = StoreBuilder::<IngestionRun>::new(pool.clone())
-        .build()
-        .await?;
-    let (market_catalog, market_catalog_projection) =
-        StoreBuilder::<MarketCatalog>::new(pool.clone())
-            .build()
-            .await?;
-    let (market_enablement, market_enablement_projection) =
-        StoreBuilder::<MarketEnablement>::new(pool.clone())
-            .build()
-            .await?;
-    debug!("event-sourced stores ready");
+    let EventSourcedStores {
+        portfolio_store,
+        portfolio_projection,
+        ingestion_store,
+        ingestion_projection,
+        market_catalog,
+        market_catalog_projection,
+        market_enablement,
+        market_enablement_projection,
+    } = build_event_sourced_stores(pool.clone()).await?;
 
     // Abandon any run left Running by a crash before we accept /ingest, so the
     // one-running slot can never stay wedged across a restart (issue #339).
