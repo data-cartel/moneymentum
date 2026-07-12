@@ -43,6 +43,11 @@ Design: [adrs/0001](./adrs/0001-event-sorcery-persistence-foundation.md).
 - [x] Schedule candle and funding ingestion on independent cadences --
       [#411](https://github.com/dataclique/moneymentum/issues/411) /
       [#412](https://github.com/dataclique/moneymentum/pull/412)
+- [x] Name the failing market in ingestion fetch errors --
+      [#431](https://github.com/dataclique/moneymentum/issues/431) /
+      [#435](https://github.com/dataclique/moneymentum/pull/435)
+- [ ] A single market's failed fetch aborts the whole ingestion run and discards
+      its data -- [#432](https://github.com/dataclique/moneymentum/issues/432)
 
 ---
 
