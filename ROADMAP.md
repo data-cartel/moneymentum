@@ -172,6 +172,8 @@ the next user-facing priority; it runs in parallel to the Dev track above.
       ([#434](https://github.com/dataclique/moneymentum/pull/434))
 - [x] [frontend UI regressions ship unnoticed without visual test coverage](https://github.com/dataclique/moneymentum/issues/439)
       ([#440](https://github.com/dataclique/moneymentum/pull/440))
+- [x] [no test spans the frontend and backend, so endpoint-contract drift reaches prod unnoticed](https://github.com/dataclique/moneymentum/issues/438)
+      ([#441](https://github.com/dataclique/moneymentum/pull/441))
 - [ ] [Remove the markets_refresh_token deploy bridge from service configs](https://github.com/dataclique/moneymentum/issues/425)
 - [ ] [Deploy the service binary, unit, and config atomically](https://github.com/dataclique/moneymentum/issues/422)
 - [x] [Address #377 review follow-ups](https://github.com/dataclique/moneymentum/issues/392)
