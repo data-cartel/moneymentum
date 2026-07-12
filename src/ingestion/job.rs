@@ -228,8 +228,8 @@ mod tests {
 
     use super::IngestionJob;
     use crate::ingestion::fixtures::{
-        FailingMockHyperliquid, MockHyperliquid, ingestion_store, instant, job_context,
-        test_services, test_services_with_hyperliquid,
+        FailingMockHyperliquid, MarketFailingMockHyperliquid, MockHyperliquid, ingestion_store,
+        instant, job_context, test_services, test_services_with_hyperliquid,
     };
     use crate::ingestion::orchestration::{create_run, latest_status, recover_abandoned_runs};
     use crate::ingestion::run::{IngestionRunCommand, IngestionRunStatus, running_runs};
@@ -333,6 +333,35 @@ mod tests {
             Level::ERROR,
             &["ingestion failed", run_id.as_str()]
         ));
+    }
+
+    /// When one market of the universe fails its fetch, the run's failure must
+    /// name it: the market is the first thing an operator needs from the logs.
+    #[traced_test]
+    #[tokio::test]
+    async fn failed_run_names_the_failing_market() {
+        let (store, projection, pool) = ingestion_store().await;
+        let work = IngestionWork::candles(Timeframe::OneHour);
+        let run_id = create_run(&store, &projection, work).await.unwrap();
+        let services = test_services_with_hyperliquid(Arc::new(MarketFailingMockHyperliquid {
+            failing_market: "ETH",
+        }))
+        .await;
+        let context = job_context(&store, &projection, services);
+
+        IngestionJob::new(run_id, work)
+            .perform(&context)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            latest_status(&pool).await.unwrap(),
+            Some(IngestionRunStatus::Failed)
+        );
+        assert!(
+            logs_contain_at(Level::ERROR, &["ingestion failed", "candle fetch", "ETH"]),
+            "the failure log must name the failing market"
+        );
     }
 
     #[traced_test]
