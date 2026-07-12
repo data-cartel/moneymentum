@@ -338,3 +338,6 @@ to DigitalOcean via NixOS + deploy-rs.
 - [x] Document and automate the issue-and-roadmap-per-PR rule --
       [#247](https://github.com/dataclique/moneymentum/issues/247) /
       [#248](https://github.com/dataclique/moneymentum/pull/248)
+- [x] Ship the pull request template and align AGENTS.md with it --
+      [#436](https://github.com/dataclique/moneymentum/issues/436) /
+      [#437](https://github.com/dataclique/moneymentum/pull/437)
