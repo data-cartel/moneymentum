@@ -14,6 +14,9 @@
     "test": "vitest",
     "test:vrt": "playwright test --config playwright.visual.config.ts",
     "test:vrt:update": "playwright test --config playwright.visual.config.ts --update-snapshots",
+    "test:contract": "playwright test --config playwright.contract.config.ts",
+    "contract:hyperliquid-mock": "bun contract/mock-hyperliquid.ts",
+    "contract:backend": "mkdir -p .contract-data && cargo run --manifest-path ../Cargo.toml --bin moneymentum -- --config contract/backend.toml",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "fmt": "prettier --write \"src/**/*.{ts,tsx}\""

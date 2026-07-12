@@ -125,7 +125,7 @@ export default defineConfig({
     environment: "happy-dom",
     setupFiles: "./src/test/setup.ts",
     css: true,
-    exclude: [...defaultExclude, "src/visual/**"],
+    exclude: [...defaultExclude, "src/visual/**", "src/contract/**"],
     server: {
       deps: {
         inline: [/solid-js/, /@solidjs/, /@kobalte/, /@tanstack/],

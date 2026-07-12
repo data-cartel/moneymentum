@@ -27,3 +27,4 @@ dist-ssr
 /result
 test-results
 playwright-report
+.contract-data

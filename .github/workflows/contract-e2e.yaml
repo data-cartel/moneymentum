@@ -1,0 +1,82 @@
+# Frontend/backend contract e2e: playwright drives the real frontend through
+# the dev-server proxy against the real backend binary, with Hyperliquid as the
+# only mocked system. Guards the endpoint contract so a backend route the
+# frontend consumes cannot vanish or change shape unnoticed.
+
+name: Contract e2e
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "src/**"
+      - "migrations/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/contract-e2e.yaml"
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+        with:
+          nix_version: "2.31.2"
+          nix_conf: |
+            accept-flake-config = true
+            fallback = true
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            keep-env-derivations = true
+            keep-outputs = true
+
+      - uses: cachix/cachix-action@ad2ddac53f961de1989924296a1f236fcfbaa4fc # v15
+        continue-on-error: true
+        with:
+          name: data-cartel-public
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-contract-e2e-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-contract-e2e-
+          gc-max-store-size-linux: 5G
+
+      - name: Cache cargo build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-contract-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-contract-
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.bun/install/cache
+            frontend/node_modules
+          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/bun.lock', 'frontend/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Build the backend binary
+        run: nix develop --impure --command bash -c 'cargo build'
+
+      - name: Install frontend dependencies
+        run: nix develop --impure --command bash -c 'cd frontend && bun install --frozen-lockfile'
+
+      - name: Run the contract e2e suite
+        run: nix develop --impure --command bash -c 'cd frontend && bun run test:contract'
