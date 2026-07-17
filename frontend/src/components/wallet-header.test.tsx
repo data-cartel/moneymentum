@@ -11,16 +11,17 @@ import { encryptWalletPrivateKey } from "@/services/walletCredentialCrypto"
 const mockSwitchNetworkMutate = vi.fn()
 const mockSwitchNetworkMutateAsync = vi.fn()
 const mockUseWalletSettings = vi.fn()
+const mockUseSwitchNetwork = vi.fn(() => ({
+  mutate: mockSwitchNetworkMutate,
+  mutateAsync: mockSwitchNetworkMutateAsync,
+  isPending: false,
+}))
 
 const TEST_PIN = "123456"
 
 vi.mock("@/hooks/useTrading", () => ({
   useWalletSettings: () => mockUseWalletSettings(),
-  useSwitchNetwork: vi.fn(() => ({
-    mutate: mockSwitchNetworkMutate,
-    mutateAsync: mockSwitchNetworkMutateAsync,
-    isPending: false,
-  })),
+  useSwitchNetwork: () => mockUseSwitchNetwork(),
 }))
 
 vi.mock("solid-sonner", () => ({
@@ -126,6 +127,11 @@ describe("WalletHeader", () => {
     mockUseWalletSettings.mockReturnValue({
       data: () => null,
       isConnected: () => false,
+    })
+    mockUseSwitchNetwork.mockReturnValue({
+      mutate: mockSwitchNetworkMutate,
+      mutateAsync: mockSwitchNetworkMutateAsync,
+      isPending: false,
     })
   })
 
@@ -508,6 +514,33 @@ describe("WalletHeader", () => {
           /Revokes Moneymentum's trading agent on Hyperliquid/,
         ),
       ).toBeInTheDocument()
+    })
+
+    it("disables Revoke Agent while a network switch is pending", async () => {
+      const user = userEvent.setup()
+      await seedEncryptedSession("0xConnectedAccountAddress")
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          accountAddress: "0xConnectedAccountAddress",
+          isTestnet: true,
+        }),
+        isConnected: () => true,
+      })
+      mockUseSwitchNetwork.mockReturnValue({
+        mutate: mockSwitchNetworkMutate,
+        mutateAsync: mockSwitchNetworkMutateAsync,
+        isPending: true,
+      })
+
+      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+        wrapper: createWrapper(),
+      })
+
+      await user.click(screen.getByText("0xConn...ress"))
+
+      expect(
+        screen.getByRole("button", { name: "Revoke Agent" }),
+      ).toBeDisabled()
     })
 
     it("clears the local agent session after a successful revoke", async () => {

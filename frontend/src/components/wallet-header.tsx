@@ -94,7 +94,11 @@ export const WalletHeader = (props: WalletHeaderProps) => {
   }
 
   const onRevokeAgentClick = () => {
-    if (isRevokingAgent()) {
+    if (
+      isRevokingAgent() ||
+      switchNetworkMutation.isPending ||
+      isNetworkSwitching()
+    ) {
       return
     }
 
@@ -126,7 +130,11 @@ export const WalletHeader = (props: WalletHeaderProps) => {
   const isDisabled = () =>
     !isConnected() || switchNetworkMutation.isPending || isNetworkSwitching()
   const canRevokeAgent = () =>
-    isConnected() && (hasStoredSession() || canTrade()) && !isRevokingAgent()
+    isConnected() &&
+    (hasStoredSession() || canTrade()) &&
+    !isRevokingAgent() &&
+    !switchNetworkMutation.isPending &&
+    !isNetworkSwitching()
 
   const onAddressClick = () => {
     void Effect.runPromise(
