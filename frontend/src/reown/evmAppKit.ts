@@ -77,23 +77,23 @@ export const readEvmAddressFromAccountState = (
     return null
   }
 
-  for (const entry of allAccounts) {
-    if (!isRecord(entry)) {
-      continue
-    }
+  const matchingAccount = allAccounts.find(
+    (account): account is Record<string, unknown> & { address: string } => {
+      if (!isRecord(account)) {
+        return false
+      }
 
-    const namespace = entry["namespace"]
-    if (namespace !== undefined && namespace !== "eip155") {
-      continue
-    }
+      const namespace = account["namespace"]
+      const accountAddress = account["address"]
+      return (
+        (namespace === undefined || namespace === "eip155") &&
+        typeof accountAddress === "string" &&
+        accountAddress.length > 0
+      )
+    },
+  )
 
-    const candidateAddress = entry["address"]
-    if (typeof candidateAddress === "string" && candidateAddress.length > 0) {
-      return candidateAddress
-    }
-  }
-
-  return null
+  return matchingAccount?.address ?? null
 }
 
 export const readEvmWalletConnectedFromAccountState = (
