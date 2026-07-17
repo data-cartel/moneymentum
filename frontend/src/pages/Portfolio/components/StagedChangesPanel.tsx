@@ -2,6 +2,7 @@ import { For, Show, createSignal } from "solid-js"
 import * as Effect from "effect/Effect"
 import * as Either from "effect/Either"
 import { cn } from "@/lib/cn"
+import { getErrorMessage } from "@/lib/error-message"
 import { Send } from "lucide-solid"
 import { toast } from "solid-sonner"
 import { Button } from "@/components/ui/button"
@@ -49,11 +50,13 @@ const NOTIONAL_EPSILON_USD = 0.1
 const LEVERAGE_EPSILON = 0.001
 
 const UNLOCK_PIN_PLACEHOLDER = "Enter 6-digit PIN to rebalance"
+const UNLOCK_PIN_ERROR_ID = "stagedChangesUnlockPinError"
 const PIN_SHAKE_CLASS = "animate-pin-shake"
 
 export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
   const { unlock } = useWallet()
   const [unlockPin, setUnlockPin] = createSignal("")
+  const [unlockError, setUnlockError] = createSignal<string | null>(null)
   const [isUnlocking, setIsUnlocking] = createSignal(false)
   let unlockPinInput: HTMLInputElement | undefined
 
@@ -127,6 +130,7 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
 
     if (Either.isLeft(unlockResult)) {
       console.error("Failed to unlock wallet:", unlockResult.left)
+      setUnlockError(getErrorMessage(unlockResult.left))
       setIsUnlocking(false)
       shakeUnlockPinField()
       return
@@ -134,6 +138,7 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
 
     toast.success("Wallet unlocked")
     setUnlockPin("")
+    setUnlockError(null)
     setIsUnlocking(false)
     props.onUnlocked?.()
   }
@@ -315,37 +320,55 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
             </Button>
           }
         >
-          <Input
-            id="stagedChangesUnlockPin"
-            ref={element => {
-              unlockPinInput = element
-            }}
-            type="password"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            placeholder={UNLOCK_PIN_PLACEHOLDER}
-            maxlength={WALLET_PIN_LENGTH}
-            value={unlockPin()}
-            disabled={isRebalancing()}
-            aria-label={UNLOCK_PIN_PLACEHOLDER}
-            class="h-8 font-mono text-[11px] tracking-[0.25em] placeholder:tracking-normal placeholder:font-sans"
-            onAnimationEnd={event => {
-              event.currentTarget.classList.remove(PIN_SHAKE_CLASS)
-            }}
-            onInput={event => {
-              const nextPin = normalizeWalletPinInput(event.currentTarget.value)
-              setUnlockPin(nextPin)
-              if (nextPin.length === WALLET_PIN_LENGTH) {
-                void submitUnlockPin(nextPin)
+          <div class="space-y-1">
+            <Input
+              id="stagedChangesUnlockPin"
+              ref={element => {
+                unlockPinInput = element
+              }}
+              type="password"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              placeholder={UNLOCK_PIN_PLACEHOLDER}
+              maxlength={WALLET_PIN_LENGTH}
+              value={unlockPin()}
+              disabled={isRebalancing()}
+              aria-label={UNLOCK_PIN_PLACEHOLDER}
+              aria-invalid={unlockError() !== null}
+              aria-describedby={
+                unlockError() !== null ? UNLOCK_PIN_ERROR_ID : undefined
               }
-            }}
-            onKeyDown={event => {
-              if (event.key === "Enter") {
-                event.preventDefault()
-                void submitUnlockPin()
-              }
-            }}
-          />
+              class="h-8 font-mono text-[11px] tracking-[0.25em] placeholder:tracking-normal placeholder:font-sans"
+              onAnimationEnd={event => {
+                event.currentTarget.classList.remove(PIN_SHAKE_CLASS)
+              }}
+              onInput={event => {
+                const nextPin = normalizeWalletPinInput(
+                  event.currentTarget.value,
+                )
+                setUnlockPin(nextPin)
+                setUnlockError(null)
+                if (nextPin.length === WALLET_PIN_LENGTH) {
+                  void submitUnlockPin(nextPin)
+                }
+              }}
+              onKeyDown={event => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  void submitUnlockPin()
+                }
+              }}
+            />
+            <Show when={unlockError()}>
+              <p
+                id={UNLOCK_PIN_ERROR_ID}
+                role="alert"
+                class="text-[10px] leading-snug text-destructive"
+              >
+                {unlockError()}
+              </p>
+            </Show>
+          </div>
         </Show>
       </div>
     </div>

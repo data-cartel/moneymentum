@@ -342,3 +342,9 @@
 .animate-pin-shake {
   animation: pin-shake 0.4s ease-in-out;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pin-shake {
+    animation: none;
+  }
+}
