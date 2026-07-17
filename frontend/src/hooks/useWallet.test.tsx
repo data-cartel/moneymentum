@@ -5,6 +5,7 @@ import { useWallet } from "./useWallet"
 import { WalletProvider } from "@/contexts/WalletProvider"
 import type { ParentProps } from "solid-js"
 import { getErrorMessage } from "@/lib/error-message"
+import { ApproveAgentFailed } from "@/services/hyperliquidAgent"
 
 vi.mock("@/services/hyperliquid-client", () => ({
   HyperliquidClient: class MockHyperliquidClient {
@@ -16,10 +17,36 @@ vi.mock("@/services/hyperliquid-client", () => ({
   },
 }))
 
+const mockGetOrCreateEvmAppKit = vi.fn(
+  () => null as null | { getAddress: () => null },
+)
+const mockReadConnectedEip1193Provider = vi.fn(
+  (): { request: ReturnType<typeof vi.fn> } | null => null,
+)
+
 vi.mock("@/reown/evmAppKit", () => ({
-  getOrCreateEvmAppKit: () => null,
-  readConnectedEip1193Provider: () => null,
+  getOrCreateEvmAppKit: () => mockGetOrCreateEvmAppKit(),
+  readConnectedEip1193Provider: () => mockReadConnectedEip1193Provider(),
+  readEvmAddressFromAccountState: () => null,
+  readEvmWalletConnectedFromAccountState: () => false,
 }))
+
+const mockApproveHyperliquidAgent = vi.fn(() => Effect.void)
+
+vi.mock("@/services/hyperliquidAgent", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("@/services/hyperliquidAgent")>()
+  return {
+    ...actual,
+    approveHyperliquidAgent: (...args: unknown[]) =>
+      mockApproveHyperliquidAgent(...args),
+    generateHyperliquidAgent: () => ({
+      agentAddress: "0xGeneratedAgentAddress",
+      agentPrivateKey:
+        "0x1111111111111111111111111111111111111111111111111111111111111111",
+    }),
+  }
+})
 
 const wrapper = (props: ParentProps) => (
   <WalletProvider>{props.children}</WalletProvider>
@@ -65,6 +92,9 @@ describe("useWallet", () => {
   beforeEach(() => {
     ensureLocalStorage()
     localStorage.clear()
+    mockGetOrCreateEvmAppKit.mockReturnValue(null)
+    mockReadConnectedEip1193Provider.mockReturnValue(null)
+    mockApproveHyperliquidAgent.mockReturnValue(Effect.void)
   })
 
   afterEach(() => {
@@ -278,6 +308,53 @@ describe("useWallet", () => {
     expect(result.credentials()).toEqual(accountA)
     expect(result.canTrade()).toBe(true)
     expect(result.hasStoredSession()).toBe(true)
+  })
+
+  it("does not persist an encrypted session when agent approval fails", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    mockGetOrCreateEvmAppKit.mockReturnValue({ getAddress: () => null })
+    mockReadConnectedEip1193Provider.mockReturnValue({ request: vi.fn() })
+    mockApproveHyperliquidAgent.mockReturnValue(
+      Effect.fail(new ApproveAgentFailed({ cause: new Error("rejected") })),
+    )
+
+    result.setMainAddress("0xMainFromReown")
+
+    let authorizeFailure: unknown
+    try {
+      await Effect.runPromise(result.authorizeAgent(TEST_PIN))
+    } catch (error) {
+      authorizeFailure = error
+    }
+
+    expect(authorizeFailure).toBeDefined()
+    expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
+    expect(result.hasStoredSession()).toBe(false)
+    expect(result.credentials()).toBeNull()
+    expect(result.canTrade()).toBe(false)
+  })
+
+  it("persists the encrypted session only after agent approval succeeds", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    mockGetOrCreateEvmAppKit.mockReturnValue({ getAddress: () => null })
+    mockReadConnectedEip1193Provider.mockReturnValue({ request: vi.fn() })
+    mockApproveHyperliquidAgent.mockReturnValue(Effect.void)
+
+    result.setMainAddress("0xMainFromReown")
+    await Effect.runPromise(result.authorizeAgent(TEST_PIN))
+
+    expect(result.canTrade()).toBe(true)
+    expect(result.hasStoredSession()).toBe(true)
+    expect(result.credentials()?.accountAddress).toBe("0xMainFromReown")
+    expect(result.credentials()?.apiWalletAddress).toBe(
+      "0xGeneratedAgentAddress",
+    )
+    const stored = JSON.parse(
+      localStorage.getItem("hyperliquid-wallet") ?? "{}",
+    )
+    expect(stored.accountAddress).toBe("0xMainFromReown")
+    expect(stored.apiWalletAddress).toBe("0xGeneratedAgentAddress")
+    expect(stored.encryptedPrivateKey).toBeTypeOf("string")
   })
 
   describe("errors", () => {

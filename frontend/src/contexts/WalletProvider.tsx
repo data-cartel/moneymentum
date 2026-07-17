@@ -165,8 +165,9 @@ export const WalletProvider = (props: ParentProps) => {
     )
 
   /**
-   * PIN -> generate agent -> encrypt/persist -> approveAgent via Reown.
-   * On approve failure the encrypted session is cleared.
+   * PIN -> generate agent -> encrypt in memory -> approveAgent via Reown.
+   * Persists the encrypted session only after approval succeeds.
+   * On approve failure any leftover encrypted session is cleared.
    */
   const authorizeAgent = (
     pin: string,
@@ -206,9 +207,6 @@ export const WalletProvider = (props: ParentProps) => {
         catch: cause => new WalletConnectError({ cause }),
       })
 
-      persistEncryptedSession(pendingCredentials, encrypted)
-      syncStoredSessionState()
-
       const approveResult = yield* Effect.either(
         approveHyperliquidAgent(provider, address, agent.agentAddress, mode),
       )
@@ -222,6 +220,8 @@ export const WalletProvider = (props: ParentProps) => {
         )
       }
 
+      persistEncryptedSession(pendingCredentials, encrypted)
+      syncStoredSessionState()
       setCredentials(pendingCredentials)
     })
   }
