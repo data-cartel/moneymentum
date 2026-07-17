@@ -5,7 +5,12 @@ import { getErrorMessage, getExchangeErrorDetail } from "./error-message"
 import { HttpStatusError, NetworkError } from "./http"
 import { ApiMessageError, MissingTickerError } from "@/hooks/useApi"
 import { ExchangeRequestError } from "@/services/hyperliquid"
-import { ClipboardWriteFailed, WalletAddressMissing } from "@/services/wallet"
+import {
+  ClipboardWriteFailed,
+  WalletAddressMissing,
+  WalletConnectError,
+} from "@/services/wallet"
+import { RevokeAgentFailed } from "@/services/hyperliquidAgent"
 
 const asFiberFailure = async (error: unknown): Promise<unknown> => {
   try {
@@ -104,6 +109,26 @@ describe("getErrorMessage", () => {
     )
     expect(getErrorMessage(failure)).toBe(
       "Failed to copy address. Check clipboard permissions.",
+    )
+  })
+
+  it("unwraps RevokeAgentFailed from WalletConnectError", async () => {
+    const failure = await asFiberFailure(
+      new WalletConnectError({
+        cause: new RevokeAgentFailed({ cause: new Error("revoke rejected") }),
+      }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Failed to revoke Hyperliquid agent. Please try again.",
+    )
+  })
+
+  it("keeps the generic WalletConnectError message for other causes", async () => {
+    const failure = await asFiberFailure(
+      new WalletConnectError({ cause: new Error("encrypt failed") }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Failed to connect Hyperliquid agent. Please try again.",
     )
   })
 

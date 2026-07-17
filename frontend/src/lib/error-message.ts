@@ -107,8 +107,13 @@ const messageForTag = (error: TaggedError): string | null => {
       const cause = "cause" in error ? error.cause : undefined
       return messageFromExchangeCause(cause) ?? EXCHANGE_REJECTED_MESSAGE
     }
-    case "WalletConnectError":
+    case "WalletConnectError": {
+      const cause = "cause" in error ? error.cause : undefined
+      if (hasTag(cause) && cause._tag === "RevokeAgentFailed") {
+        return messageForTag(cause)
+      }
       return "Failed to connect Hyperliquid agent. Please try again."
+    }
     case "WalletUnlockError":
       return "Failed to unlock wallet. Please try again."
     case "WalletIncorrectPin":
