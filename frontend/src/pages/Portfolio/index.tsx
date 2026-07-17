@@ -19,7 +19,10 @@ import {
 } from "@/hooks/useTrading"
 import { PositionsPanel } from "@/pages/Portfolio/components/PositionsPanel/PositionsPanel"
 import { PerformancePanel } from "@/pages/Portfolio/components/PerformancePanel"
-import { StagedChangesPanel } from "@/pages/Portfolio/components/StagedChangesPanel"
+import {
+  StagedChangesPanel,
+  type StagedConnectionState,
+} from "@/pages/Portfolio/components/StagedChangesPanel"
 import { FactorsPanel } from "@/pages/Portfolio/components/FactorsPanel"
 import { RiskPanel } from "@/pages/Portfolio/components/RiskPanel"
 import { WalletPinDialog } from "@/pages/Portfolio/components/WalletPinDialog"
@@ -42,21 +45,33 @@ const PortfolioPage = () => {
 
   const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
 
-  const handlePrimaryStagedAction = () => {
+  const stagedConnectionState = (): StagedConnectionState => {
     if (!isConnected()) {
-      return
+      return "walletDisconnected"
     }
-
     if (!hasStoredSession()) {
-      setPinDialogOpen(true)
-      return
+      return "agentMissing"
     }
-
-    if (isLocked() || !canTrade()) {
-      return
+    if (isLocked()) {
+      return "agentLocked"
     }
+    return "ready"
+  }
 
-    portfolio.handleRebalancePositions()
+  const handlePrimaryStagedAction = () => {
+    switch (stagedConnectionState()) {
+      case "walletDisconnected":
+      case "agentLocked":
+        return
+      case "agentMissing":
+        setPinDialogOpen(true)
+        return
+      case "ready":
+        if (!canTrade()) {
+          return
+        }
+        portfolio.handleRebalancePositions()
+    }
   }
 
   const handleAgentUnlocked = () => {
@@ -289,9 +304,7 @@ const PortfolioPage = () => {
                   onUnlocked={handleAgentUnlocked}
                   isRebalancing={portfolio.isRebalancing}
                   canSubmit={portfolio.canSubmit}
-                  isWalletConnected={isConnected()}
-                  hasHyperliquidAgent={hasStoredSession()}
-                  isAgentLocked={isLocked()}
+                  connectionState={stagedConnectionState()}
                   onClearAll={portfolio.handleResetToCurrent}
                 />
               </div>

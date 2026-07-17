@@ -13,6 +13,13 @@ import {
   WALLET_PIN_LENGTH,
 } from "@/services/walletCredentialCrypto"
 
+/** Mutually exclusive wallet/agent readiness for the staged-changes primary action. */
+export type StagedConnectionState =
+  | "walletDisconnected"
+  | "agentMissing"
+  | "agentLocked"
+  | "ready"
+
 interface StagedChangesPanelProps {
   stagedTrades: StagedTradeItem[]
   currentTotalNotional: number
@@ -24,12 +31,7 @@ interface StagedChangesPanelProps {
   onUnlocked?: () => void
   isRebalancing?: boolean
   canSubmit: boolean
-  /** Main EVM wallet connected via Reown. Required to authorize an agent. */
-  isWalletConnected: boolean
-  /** When false, the primary button reads "Connect to Hyperliquid". */
-  hasHyperliquidAgent: boolean
-  /** When true and an agent exists, show inline PIN instead of the primary button. */
-  isAgentLocked: boolean
+  connectionState: StagedConnectionState
   onClearAll?: () => void
 }
 
@@ -60,16 +62,18 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
 
   const isRebalancing = () => props.isRebalancing ?? false
 
-  const showUnlockPinField = () =>
-    props.hasHyperliquidAgent && props.isAgentLocked
+  const connectionState = () => props.connectionState
 
-  const needsAgentAuthorize = () => !props.hasHyperliquidAgent
+  const showUnlockPinField = () => connectionState() === "agentLocked"
 
   const primaryLabel = () => {
     if (isRebalancing()) {
       return "Sending..."
     }
-    if (needsAgentAuthorize()) {
+    if (
+      connectionState() === "walletDisconnected" ||
+      connectionState() === "agentMissing"
+    ) {
       return "Connect to Hyperliquid"
     }
     return "Rebalance"
@@ -79,10 +83,16 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
     if (isRebalancing()) {
       return true
     }
-    if (needsAgentAuthorize()) {
-      return !props.isWalletConnected
+    switch (connectionState()) {
+      case "walletDisconnected":
+        return true
+      case "agentMissing":
+        return false
+      case "agentLocked":
+        return true
+      case "ready":
+        return !props.canSubmit || !hasStaged()
     }
-    return !props.canSubmit || !hasStaged()
   }
 
   const shakeUnlockPinField = () => {
