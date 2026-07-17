@@ -57,6 +57,9 @@ export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
   }
 
   const handleOpenChange = (open: boolean) => {
+    if (!open && isSubmitting()) {
+      return
+    }
     if (!open) {
       resetForm()
     }
