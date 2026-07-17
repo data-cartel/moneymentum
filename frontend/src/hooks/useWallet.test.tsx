@@ -241,6 +241,45 @@ describe("useWallet", () => {
     expect(result.client()).not.toBeNull()
   })
 
+  it("clears unlocked account A credentials when switching main address to account B", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    const accountA = {
+      accountAddress: "0xAccountAAAA",
+      apiWalletAddress: "0xAgentAAAA",
+      privateKey: "TEST_PRIVATE_KEY_ACCOUNT_A",
+    }
+
+    await Effect.runPromise(result.connect(accountA, TEST_PIN))
+    expect(result.canTrade()).toBe(true)
+    expect(result.credentials()).toEqual(accountA)
+    expect(localStorage.getItem("hyperliquid-wallet")).not.toBeNull()
+
+    result.setMainAddress("0xAccountBBBB")
+
+    expect(result.mainAddress()).toBe("0xAccountBBBB")
+    expect(result.credentials()).toBeNull()
+    expect(result.canTrade()).toBe(false)
+    expect(result.hasStoredSession()).toBe(false)
+    expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
+    expect(result.client()).not.toBeNull()
+  })
+
+  it("keeps the unlocked session when setMainAddress receives the same account", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    const accountA = {
+      accountAddress: "0xAccountAAAA",
+      apiWalletAddress: "0xAgentAAAA",
+      privateKey: "TEST_PRIVATE_KEY_ACCOUNT_A",
+    }
+
+    await Effect.runPromise(result.connect(accountA, TEST_PIN))
+    result.setMainAddress("0xaccountaaaa")
+
+    expect(result.credentials()).toEqual(accountA)
+    expect(result.canTrade()).toBe(true)
+    expect(result.hasStoredSession()).toBe(true)
+  })
+
   describe("errors", () => {
     it("throws error when used outside WalletProvider", () => {
       const { result } = renderHook(() => useWallet(), { wrapper })

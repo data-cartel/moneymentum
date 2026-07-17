@@ -3,6 +3,7 @@ import {
   createMemo,
   onMount,
   onCleanup,
+  untrack,
   type ParentProps,
 } from "solid-js"
 import {
@@ -69,6 +70,22 @@ const clearEncryptedSession = () => {
   localStorage.removeItem(WALLET_STORAGE_KEY)
 }
 
+const sameWalletAddress = (
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean => {
+  if (
+    left === null ||
+    left === undefined ||
+    right === null ||
+    right === undefined
+  ) {
+    return false
+  }
+
+  return left.toLowerCase() === right.toLowerCase()
+}
+
 export const WalletProvider = (props: ParentProps) => {
   const storedSession = getStoredEncryptedSession()
   const [mainAddress, setMainAddressState] = createSignal<string | null>(
@@ -109,6 +126,22 @@ export const WalletProvider = (props: ParentProps) => {
   })
 
   const setMainAddress = (address: string | null) => {
+    // Reown account callbacks are not Solid tracked scopes; read unlocked
+    // credentials without subscribing so mismatch invalidation still runs.
+    const unlocked = untrack(() => credentials())
+    if (
+      unlocked !== null &&
+      !sameWalletAddress(unlocked.accountAddress, address)
+    ) {
+      setCredentials(null)
+    }
+
+    const stored = getStoredEncryptedSession()
+    if (stored !== null && !sameWalletAddress(stored.accountAddress, address)) {
+      clearEncryptedSession()
+      syncStoredSessionState()
+    }
+
     setMainAddressState(address)
   }
 
@@ -299,7 +332,7 @@ export const WalletProvider = (props: ParentProps) => {
     if (modal) {
       const existingAddress = modal.getAddress("eip155")
       if (existingAddress) {
-        setMainAddressState(existingAddress)
+        setMainAddress(existingAddress)
       }
 
       unsubscribeAccount = modal.subscribeAccount(accountState => {
@@ -309,12 +342,12 @@ export const WalletProvider = (props: ParentProps) => {
           nextAddress !== null
 
         if (connected && nextAddress) {
-          setMainAddressState(nextAddress)
+          setMainAddress(nextAddress)
           return
         }
 
         const stored = getStoredEncryptedSession()
-        setMainAddressState(stored?.accountAddress ?? null)
+        setMainAddress(stored?.accountAddress ?? null)
       }, "eip155")
     }
 
