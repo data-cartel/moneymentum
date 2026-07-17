@@ -122,7 +122,7 @@ export const WalletHeader = (props: WalletHeaderProps) => {
             toast.success("Hyperliquid agent revoked")
           }),
         ),
-        Effect.tapError(error =>
+        Effect.catchAll(error =>
           Effect.sync(() => {
             toast.error(getErrorMessage(error))
           }),

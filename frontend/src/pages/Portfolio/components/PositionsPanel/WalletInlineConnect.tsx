@@ -76,7 +76,7 @@ export const WalletInlineConnect = (): JSX.Element => {
         try: () => modal.open({ view: "Connect", namespace: "eip155" }),
         catch: cause => new ReownModalOpenFailed({ cause }),
       }).pipe(
-        Effect.tapError(error =>
+        Effect.catchAll(error =>
           Effect.sync(() => {
             console.error("Failed to open Reown AppKit:", error)
             toast.error(getErrorMessage(error))
