@@ -17,6 +17,8 @@
     "fmt": "prettier --write \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {
+    "@fontsource/manrope": "^5.2.8",
+    "@fontsource/syne": "^5.2.7",
     "@kobalte/core": "^0.13.9",
     "@nktkas/hyperliquid": "^0.33.2",
     "@reown/appkit": "^1.8.22",
