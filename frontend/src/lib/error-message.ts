@@ -117,6 +117,10 @@ const messageForTag = (error: TaggedError): string | null => {
       return "Failed to unlock wallet. Please try again."
     case "WalletSessionMissing":
       return "No saved wallet session found."
+    case "WalletAddressMissing":
+      return "No wallet address to copy."
+    case "ClipboardWriteFailed":
+      return "Failed to copy address. Check clipboard permissions."
     case "ReownWalletUnavailable":
       return "Connect a wallet with Reown first."
     case "ReownWalletRejected":

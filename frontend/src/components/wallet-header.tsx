@@ -1,4 +1,4 @@
-import { Show, createSignal } from "solid-js"
+import { Show, createSignal, onCleanup } from "solid-js"
 import * as Effect from "effect/Effect"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
@@ -17,6 +17,7 @@ import { useWalletSettings, useSwitchNetwork } from "@/hooks/useTrading"
 import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
+import { copyWalletAddressToClipboard } from "@/services/wallet"
 import { toast } from "solid-sonner"
 
 const formatPublicKey = (key: string): string => {
@@ -53,6 +54,14 @@ export const WalletHeader = (props: WalletHeaderProps) => {
   } = useWallet()
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [isRevokingAgent, setIsRevokingAgent] = createSignal(false)
+  const [showCopied, setShowCopied] = createSignal(false)
+  let copiedTimeoutId: ReturnType<typeof setTimeout> | undefined
+
+  onCleanup(() => {
+    if (copiedTimeoutId !== undefined) {
+      clearTimeout(copiedTimeoutId)
+    }
+  })
 
   const handleTestnetToggle = async (checked: boolean) => {
     if (!isConnected()) {
@@ -119,20 +128,27 @@ export const WalletHeader = (props: WalletHeaderProps) => {
   const canRevokeAgent = () =>
     isConnected() && (hasStoredSession() || canTrade()) && !isRevokingAgent()
 
-  const handleCopyAddress = async () => {
-    const address = currentAccountAddress()
-    if (!address) {
-      toast.error("No wallet address to copy")
-      return
-    }
-
-    try {
-      await navigator.clipboard.writeText(address)
-      toast.success("Address copied")
-    } catch (error) {
-      console.error("Failed to copy address to clipboard:", error)
-      toast.error("Failed to copy address. Check clipboard permissions.")
-    }
+  const onAddressClick = () => {
+    void Effect.runPromise(
+      copyWalletAddressToClipboard(currentAccountAddress()).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            setShowCopied(true)
+            if (copiedTimeoutId !== undefined) {
+              clearTimeout(copiedTimeoutId)
+            }
+            copiedTimeoutId = setTimeout(() => {
+              setShowCopied(false)
+            }, 1500)
+          }),
+        ),
+        Effect.catchAll(error =>
+          Effect.sync(() => {
+            toast.error(getErrorMessage(error))
+          }),
+        ),
+      ),
+    )
   }
 
   return (
@@ -159,27 +175,29 @@ export const WalletHeader = (props: WalletHeaderProps) => {
           </DropdownMenuTrigger>
           <DropdownMenuContent class="w-[260px] p-3 text-[11px] leading-snug">
             <div class="flex flex-col gap-3">
-              <div class="flex items-start justify-between gap-2">
-                <div class="min-w-0 flex-1">
-                  <p class="text-[10px] text-muted-foreground">Account</p>
-                  <p class="break-all font-mono text-[11px]">
-                    {currentAccountAddress()}
-                  </p>
-                  <Show when={isLocked() && !canTrade()}>
-                    <p class="mt-1 text-[10px] text-muted-foreground">
-                      Agent locked — enter PIN to trade
-                    </p>
-                  </Show>
-                </div>
-                <Button
+              <div class="min-w-0">
+                <p class="text-[10px] text-muted-foreground">Account</p>
+                <button
                   type="button"
-                  variant="ghost"
-                  size="sm"
-                  class="h-6 px-2 text-[10px]"
-                  onClick={handleCopyAddress}
+                  class="relative -mx-1 w-[calc(100%+0.5rem)] cursor-pointer break-all rounded px-1 py-0.5 text-left font-mono text-[11px] transition-colors hover:bg-muted"
+                  aria-label="Copy address"
+                  onClick={onAddressClick}
                 >
-                  Copy
-                </Button>
+                  {currentAccountAddress()}
+                  <Show when={showCopied()}>
+                    <span
+                      class="absolute inset-0 flex items-center justify-center rounded bg-emerald-600 text-[10px] font-medium text-white"
+                      aria-live="polite"
+                    >
+                      Copied
+                    </span>
+                  </Show>
+                </button>
+                <Show when={isLocked() && !canTrade()}>
+                  <p class="mt-1 text-[10px] text-muted-foreground">
+                    Agent locked — enter PIN to trade
+                  </p>
+                </Show>
               </div>
 
               <div class="h-px bg-border" />

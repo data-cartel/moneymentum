@@ -130,6 +130,7 @@ describe("WalletHeader", () => {
   })
 
   afterEach(() => {
+    vi.unstubAllGlobals()
     const globalAny = globalThis as any
     if (
       globalAny.localStorage &&
@@ -321,6 +322,64 @@ describe("WalletHeader", () => {
       await user.click(screen.getByText("0xConn...ress"))
 
       expect(screen.getByText("0xConnectedAccountAddress")).toBeInTheDocument()
+    })
+
+    it("copies address and shows Copied overlay when address is clicked", async () => {
+      const user = userEvent.setup()
+      const writeText = vi.fn().mockResolvedValue(undefined)
+      vi.stubGlobal("navigator", {
+        clipboard: { writeText },
+      })
+
+      await seedEncryptedSession("0xConnectedAccountAddress")
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          accountAddress: "0xConnectedAccountAddress",
+          isTestnet: true,
+        }),
+        isConnected: () => true,
+      })
+
+      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+        wrapper: createWrapper(),
+      })
+
+      await user.click(screen.getByText("0xConn...ress"))
+      await user.click(screen.getByRole("button", { name: "Copy address" }))
+
+      expect(writeText).toHaveBeenCalledWith("0xConnectedAccountAddress")
+      expect(screen.getByText("Copied")).toBeInTheDocument()
+    })
+
+    it("shows error toast when clipboard write fails", async () => {
+      const user = userEvent.setup()
+      const { toast } = await import("solid-sonner")
+      const writeText = vi.fn().mockRejectedValue(new Error("clipboard denied"))
+      vi.stubGlobal("navigator", {
+        clipboard: { writeText },
+      })
+
+      await seedEncryptedSession("0xConnectedAccountAddress")
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          accountAddress: "0xConnectedAccountAddress",
+          isTestnet: true,
+        }),
+        isConnected: () => true,
+      })
+
+      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+        wrapper: createWrapper(),
+      })
+
+      await user.click(screen.getByText("0xConn...ress"))
+      await user.click(screen.getByRole("button", { name: "Copy address" }))
+
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith(
+          "Failed to copy address. Check clipboard permissions.",
+        )
+      })
     })
 
     it("shows disconnect button when connected", async () => {

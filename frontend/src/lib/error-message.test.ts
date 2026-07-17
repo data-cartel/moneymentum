@@ -5,6 +5,7 @@ import { getErrorMessage, getExchangeErrorDetail } from "./error-message"
 import { HttpStatusError, NetworkError } from "./http"
 import { ApiMessageError, MissingTickerError } from "@/hooks/useApi"
 import { ExchangeRequestError } from "@/services/hyperliquid"
+import { ClipboardWriteFailed, WalletAddressMissing } from "@/services/wallet"
 
 const asFiberFailure = async (error: unknown): Promise<unknown> => {
   try {
@@ -89,6 +90,20 @@ describe("getErrorMessage", () => {
     )
     expect(getExchangeErrorDetail(failure)).toBe(
       "The exchange rejected the request. Please try again.",
+    )
+  })
+
+  it("maps WalletAddressMissing to a copy prompt", async () => {
+    const failure = await asFiberFailure(new WalletAddressMissing())
+    expect(getErrorMessage(failure)).toBe("No wallet address to copy.")
+  })
+
+  it("maps ClipboardWriteFailed to a permissions message", async () => {
+    const failure = await asFiberFailure(
+      new ClipboardWriteFailed({ cause: new Error("denied") }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Failed to copy address. Check clipboard permissions.",
     )
   })
 
