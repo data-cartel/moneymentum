@@ -12,19 +12,39 @@ export interface WalletCredentials {
 }
 
 export interface WalletContextType {
+  /** Public main wallet address from Reown (or restored agent session). */
+  mainAddress: Accessor<string | null>
   credentials: Accessor<WalletCredentials | null>
   networkMode: Accessor<NetworkMode>
+  /** True when a main address is available for read-only Hyperliquid queries. */
   isConnected: Accessor<boolean>
+  /** True when an encrypted agent session exists but the private key is not in memory. */
   isLocked: Accessor<boolean>
+  /** True when an encrypted Hyperliquid agent session is stored. */
   hasStoredSession: Accessor<boolean>
+  /** True when the agent private key is unlocked in memory (can submit trades). */
+  canTrade: Accessor<boolean>
   client: Accessor<HyperliquidClient | null>
+  /** Persist agent credentials encrypted with the local PIN (legacy + agent flows). */
   connect: (
     credentials: WalletCredentials,
     pin: string,
   ) => Effect.Effect<void, WalletConnectError>
+  /**
+   * Generate a Hyperliquid API agent, encrypt it with the PIN, then ask the
+   * connected Reown wallet to approveAgent.
+   */
+  authorizeAgent: (pin: string) => Effect.Effect<void, WalletConnectError>
+  /**
+   * Ask the connected Reown wallet to revoke Moneymentum's Hyperliquid agent
+   * on-chain, then clear the local encrypted agent session.
+   */
+  revokeAgent: () => Effect.Effect<void, WalletConnectError>
   unlock: (pin: string) => Effect.Effect<void, WalletUnlockFailure>
   disconnect: () => void
   setNetworkMode: (mode: NetworkMode) => void
+  /** Sync the Reown-connected main address into wallet state (read-only). */
+  setMainAddress: (address: string | null) => void
 }
 
 export const WalletContext = createContext<WalletContextType | undefined>(

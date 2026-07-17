@@ -40,6 +40,27 @@ vi.mock("@/services/hyperliquid-client", () => ({
   },
 }))
 
+vi.mock("@/reown/evmAppKit", () => ({
+  getOrCreateEvmAppKit: () => ({
+    disconnect: vi.fn(),
+    getAddress: () => null,
+    subscribeAccount: () => () => {},
+  }),
+  readConnectedEip1193Provider: () => ({ request: vi.fn() }),
+  readEvmAddressFromAccountState: () => null,
+  readEvmWalletConnectedFromAccountState: () => false,
+}))
+
+vi.mock("@/services/hyperliquidAgent", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("@/services/hyperliquidAgent")>()
+  const Effect = await import("effect/Effect")
+  return {
+    ...actual,
+    revokeHyperliquidAgent: vi.fn(() => Effect.void),
+  }
+})
+
 const createWrapper = () => {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -54,6 +75,18 @@ const createWrapper = () => {
         <NetworkProvider>{props.children}</NetworkProvider>
       </WalletProvider>
     </QueryClientProvider>
+  )
+}
+
+const seedEncryptedSession = async (accountAddress: string) => {
+  const encrypted = await encryptWalletPrivateKey("0xTestPrivateKey", TEST_PIN)
+  localStorage.setItem(
+    "hyperliquid-wallet",
+    JSON.stringify({
+      accountAddress,
+      apiWalletAddress: "0xConnectedApiWallet",
+      ...encrypted,
+    }),
   )
 }
 
@@ -116,6 +149,7 @@ describe("WalletHeader", () => {
     })
 
     it("shows formatted account address when connected", async () => {
+      await seedEncryptedSession("0x1234567890abcdef1234567890abcdef12345678")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
           accountAddress: "0x1234567890abcdef1234567890abcdef12345678",
@@ -133,6 +167,7 @@ describe("WalletHeader", () => {
 
     it("shows testnet toggle label in dropdown when connected", async () => {
       const user = userEvent.setup()
+      await seedEncryptedSession("0xTestAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
           accountAddress: "0xTestAccountAddress",
@@ -163,6 +198,7 @@ describe("WalletHeader", () => {
 
     it("is enabled when wallet is connected", async () => {
       const user = userEvent.setup()
+      await seedEncryptedSession("0xTestAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
           accountAddress: "0xTestAccountAddress",
@@ -213,10 +249,11 @@ describe("WalletHeader", () => {
         wrapper: createWrapper(),
       })
 
-      expect(screen.getByText("0xLock...ress")).toBeInTheDocument()
+      expect(screen.getByText(/0xLock\.\.\.ress/)).toBeInTheDocument()
+      expect(screen.getByText("(locked)")).toBeInTheDocument()
     })
 
-    it("does not open unlock dialog when clicking locked address", async () => {
+    it("opens account menu when clicking locked address", async () => {
       const user = userEvent.setup()
       const encrypted = await encryptWalletPrivateKey(
         "0xMyPrivateKey",
@@ -235,16 +272,19 @@ describe("WalletHeader", () => {
         wrapper: createWrapper(),
       })
 
-      await user.click(screen.getByText("0xLock...ress"))
+      await user.click(screen.getByText(/0xLock\.\.\.ress/))
 
+      expect(
+        screen.getByText("Agent locked — enter PIN to trade"),
+      ).toBeInTheDocument()
       expect(screen.queryByText("Unlock Wallet")).not.toBeInTheDocument()
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     })
   })
 
   describe("wallet disconnect", () => {
     it("shows account summary dropdown when connected", async () => {
       const user = userEvent.setup()
+      await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
           accountAddress: "0xConnectedAccountAddress",
@@ -265,6 +305,7 @@ describe("WalletHeader", () => {
 
     it("shows full account address in dialog when connected", async () => {
       const user = userEvent.setup()
+      await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
           accountAddress: "0xConnectedAccountAddress",
@@ -284,6 +325,7 @@ describe("WalletHeader", () => {
 
     it("shows disconnect button when connected", async () => {
       const user = userEvent.setup()
+      await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
           accountAddress: "0xConnectedAccountAddress",
@@ -307,14 +349,7 @@ describe("WalletHeader", () => {
       const user = userEvent.setup()
       const { toast } = await import("solid-sonner")
 
-      localStorage.setItem(
-        "hyperliquid-wallet",
-        JSON.stringify({
-          accountAddress: "0xConnectedAccountAddress",
-          apiWalletAddress: "0xConnectedApiWallet",
-          privateKey: "0xConnectedSecret",
-        }),
-      )
+      await seedEncryptedSession("0xConnectedAccountAddress")
 
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
@@ -337,14 +372,7 @@ describe("WalletHeader", () => {
 
     it("closes dialog after disconnect", async () => {
       const user = userEvent.setup()
-      localStorage.setItem(
-        "hyperliquid-wallet",
-        JSON.stringify({
-          accountAddress: "0xConnectedAccountAddress",
-          apiWalletAddress: "0xConnectedApiWallet",
-          privateKey: "0xConnectedSecret",
-        }),
-      )
+      await seedEncryptedSession("0xConnectedAccountAddress")
 
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
@@ -368,6 +396,84 @@ describe("WalletHeader", () => {
         if (fullAddress) {
           expect(fullAddress.closest("[data-closed]")).not.toBeNull()
         }
+      })
+    })
+  })
+
+  describe("revoke agent", () => {
+    it("shows Revoke Agent above Disconnect when connected with a session", async () => {
+      const user = userEvent.setup()
+      await seedEncryptedSession("0xConnectedAccountAddress")
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          accountAddress: "0xConnectedAccountAddress",
+          isTestnet: true,
+        }),
+        isConnected: () => true,
+      })
+
+      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+        wrapper: createWrapper(),
+      })
+
+      await user.click(screen.getByText("0xConn...ress"))
+
+      const revokeButton = screen.getByRole("button", { name: "Revoke Agent" })
+      const disconnectButton = screen.getByRole("button", {
+        name: "Disconnect",
+      })
+      expect(revokeButton.compareDocumentPosition(disconnectButton)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      )
+    })
+
+    it("exposes revoke explanation for screen readers and tooltip", async () => {
+      const user = userEvent.setup()
+      await seedEncryptedSession("0xConnectedAccountAddress")
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          accountAddress: "0xConnectedAccountAddress",
+          isTestnet: true,
+        }),
+        isConnected: () => true,
+      })
+
+      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+        wrapper: createWrapper(),
+      })
+
+      await user.click(screen.getByText("0xConn...ress"))
+
+      expect(
+        screen.getByLabelText(
+          /Revokes Moneymentum's trading agent on Hyperliquid/,
+        ),
+      ).toBeInTheDocument()
+    })
+
+    it("clears the local agent session after a successful revoke", async () => {
+      const user = userEvent.setup()
+      const { toast } = await import("solid-sonner")
+
+      await seedEncryptedSession("0xConnectedAccountAddress")
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          accountAddress: "0xConnectedAccountAddress",
+          isTestnet: true,
+        }),
+        isConnected: () => true,
+      })
+
+      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+        wrapper: createWrapper(),
+      })
+
+      await user.click(screen.getByText("0xConn...ress"))
+      await user.click(screen.getByRole("button", { name: "Revoke Agent" }))
+
+      await waitFor(() => {
+        expect(toast.success).toHaveBeenCalledWith("Hyperliquid agent revoked")
+        expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
       })
     })
   })

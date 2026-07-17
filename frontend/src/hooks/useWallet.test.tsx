@@ -16,6 +16,11 @@ vi.mock("@/services/hyperliquid-client", () => ({
   },
 }))
 
+vi.mock("@/reown/evmAppKit", () => ({
+  getOrCreateEvmAppKit: () => null,
+  readConnectedEip1193Provider: () => null,
+}))
+
 const wrapper = (props: ParentProps) => (
   <WalletProvider>{props.children}</WalletProvider>
 )
@@ -71,8 +76,10 @@ describe("useWallet", () => {
     const { result } = renderHook(() => useWallet(), { wrapper })
 
     expect(result.credentials()).toBeNull()
+    expect(result.mainAddress()).toBeNull()
     expect(result.isConnected()).toBe(false)
     expect(result.isLocked()).toBe(false)
+    expect(result.canTrade()).toBe(false)
     expect(result.networkMode()).toBe("testnet")
   })
 
@@ -103,7 +110,10 @@ describe("useWallet", () => {
 
     expect(result.isLocked()).toBe(true)
     expect(result.hasStoredSession()).toBe(true)
-    expect(result.isConnected()).toBe(false)
+    expect(result.canTrade()).toBe(false)
+    expect(result.mainAddress()).toBe("0xStoredAccountAddress")
+    expect(result.isConnected()).toBe(true)
+    expect(result.credentials()).toBeNull()
   })
 
   it("ignores malformed encrypted session payloads on disk", () => {
@@ -142,6 +152,7 @@ describe("useWallet", () => {
     await Effect.runPromise(result.connect(credentials, TEST_PIN))
 
     expect(result.isConnected()).toBe(true)
+    expect(result.canTrade()).toBe(true)
     expect(result.credentials()).toEqual(credentials)
     const stored = JSON.parse(
       localStorage.getItem("hyperliquid-wallet") ?? "{}",
@@ -174,10 +185,12 @@ describe("useWallet", () => {
 
     const { result: reloaded } = renderHook(() => useWallet(), { wrapper })
     expect(reloaded.isLocked()).toBe(true)
+    expect(reloaded.isConnected()).toBe(true)
+    expect(reloaded.canTrade()).toBe(false)
 
     await Effect.runPromise(reloaded.unlock(TEST_PIN))
 
-    expect(reloaded.isConnected()).toBe(true)
+    expect(reloaded.canTrade()).toBe(true)
     expect(reloaded.credentials()?.privateKey).toBe(credentials.privateKey)
   })
 
@@ -205,7 +218,7 @@ describe("useWallet", () => {
 
     expect(unlockFailure).toBeDefined()
     expect(getErrorMessage(unlockFailure)).toBe("Incorrect PIN")
-    expect(reloaded.isConnected()).toBe(false)
+    expect(reloaded.canTrade()).toBe(false)
     expect(reloaded.isLocked()).toBe(true)
     expect(reloaded.hasStoredSession()).toBe(true)
   })
@@ -216,6 +229,16 @@ describe("useWallet", () => {
     result.setNetworkMode("mainnet")
     expect(result.networkMode()).toBe("mainnet")
     expect(localStorage.getItem("hyperliquid-network")).toBe("mainnet")
+  })
+
+  it("setMainAddress marks the wallet connected for read-only loads", () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+
+    result.setMainAddress("0xMainFromReown")
+    expect(result.mainAddress()).toBe("0xMainFromReown")
+    expect(result.isConnected()).toBe(true)
+    expect(result.canTrade()).toBe(false)
+    expect(result.client()).not.toBeNull()
   })
 
   describe("errors", () => {

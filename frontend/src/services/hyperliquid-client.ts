@@ -493,22 +493,36 @@ interface HyperliquidExchange {
   ) => Promise<Order[]>
 }
 
+/** Read-only clients omit the agent private key; trading requires it. */
+export type HyperliquidClientCredentials = Pick<
+  WalletCredentials,
+  "accountAddress"
+> &
+  Partial<Pick<WalletCredentials, "privateKey" | "apiWalletAddress">>
+
 export class HyperliquidClient {
   private exchange: HyperliquidExchange
   private networkMode: NetworkMode
 
-  constructor(credentials: WalletCredentials, networkMode: NetworkMode) {
+  constructor(
+    credentials: HyperliquidClientCredentials,
+    networkMode: NetworkMode,
+  ) {
     this.networkMode = networkMode
 
     const HyperliquidClass = pro.hyperliquid as unknown as new (
       config: Record<string, unknown>,
     ) => HyperliquidExchange
 
-    this.exchange = new HyperliquidClass({
+    const exchangeConfig: Record<string, unknown> = {
       walletAddress: credentials.accountAddress,
-      privateKey: credentials.privateKey,
       enableRateLimit: true,
-    })
+    }
+    if (credentials.privateKey !== undefined && credentials.privateKey !== "") {
+      exchangeConfig["privateKey"] = credentials.privateKey
+    }
+
+    this.exchange = new HyperliquidClass(exchangeConfig)
 
     if (networkMode === "testnet") {
       this.exchange.setSandboxMode(true)

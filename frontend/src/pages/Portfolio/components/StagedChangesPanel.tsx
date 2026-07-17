@@ -1,8 +1,17 @@
-import { For, Show } from "solid-js"
+import { For, Show, createSignal } from "solid-js"
+import * as Effect from "effect/Effect"
+import * as Either from "effect/Either"
 import { cn } from "@/lib/cn"
 import { Send } from "lucide-solid"
+import { toast } from "solid-sonner"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { useWallet } from "@/hooks/useWallet"
 import type { StagedTradeItem } from "@/pages/Portfolio/hooks/usePortfolioState"
+import {
+  normalizeWalletPinInput,
+  WALLET_PIN_LENGTH,
+} from "@/services/walletCredentialCrypto"
 
 interface StagedChangesPanelProps {
   stagedTrades: StagedTradeItem[]
@@ -10,9 +19,17 @@ interface StagedChangesPanelProps {
   targetTotalNotional: number
   currentCrossAccountLeverage: number
   targetCrossAccountLeverage: number
-  onRebalance?: () => void
+  onPrimaryAction?: () => void
+  /** Called after a successful inline PIN unlock (locked agent session). */
+  onUnlocked?: () => void
   isRebalancing?: boolean
   canSubmit: boolean
+  /** Main EVM wallet connected via Reown. Required to authorize an agent. */
+  isWalletConnected: boolean
+  /** When false, the primary button reads "Connect to Hyperliquid". */
+  hasHyperliquidAgent: boolean
+  /** When true and an agent exists, show inline PIN instead of the primary button. */
+  isAgentLocked: boolean
   onClearAll?: () => void
 }
 
@@ -29,16 +46,87 @@ const formatUsdPrecise = (value: number): string => `$${value.toFixed(2)}`
 const NOTIONAL_EPSILON_USD = 0.1
 const LEVERAGE_EPSILON = 0.001
 
+const UNLOCK_PIN_PLACEHOLDER = "Enter 6-digit PIN to rebalance"
+const PIN_SHAKE_CLASS = "animate-pin-shake"
+
 export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
+  const { unlock } = useWallet()
+  const [unlockPin, setUnlockPin] = createSignal("")
+  const [isUnlocking, setIsUnlocking] = createSignal(false)
+  let unlockPinInput: HTMLInputElement | undefined
+
   const stagedTrades = () => props.stagedTrades
   const hasStaged = () => stagedTrades().length > 0
 
-  const isRebalanceButtonDisabled = () =>
-    !props.canSubmit || // outside reasons (validation errors)
-    !hasStaged() || // no trades - nothing to rebalance
-    props.isRebalancing
-
   const isRebalancing = () => props.isRebalancing ?? false
+
+  const showUnlockPinField = () =>
+    props.hasHyperliquidAgent && props.isAgentLocked
+
+  const needsAgentAuthorize = () => !props.hasHyperliquidAgent
+
+  const primaryLabel = () => {
+    if (isRebalancing()) {
+      return "Sending..."
+    }
+    if (needsAgentAuthorize()) {
+      return "Connect to Hyperliquid"
+    }
+    return "Rebalance"
+  }
+
+  const isPrimaryDisabled = () => {
+    if (isRebalancing()) {
+      return true
+    }
+    if (needsAgentAuthorize()) {
+      return !props.isWalletConnected
+    }
+    return !props.canSubmit || !hasStaged()
+  }
+
+  const shakeUnlockPinField = () => {
+    const inputElement = unlockPinInput
+    if (!inputElement) {
+      return
+    }
+
+    inputElement.classList.remove(PIN_SHAKE_CLASS)
+    // Force a reflow so the same animation can restart on repeated failures.
+    void inputElement.offsetWidth
+    inputElement.classList.add(PIN_SHAKE_CLASS)
+    inputElement.focus()
+    inputElement.select()
+  }
+
+  const submitUnlockPin = async (pinOverride?: string) => {
+    const enteredPin = pinOverride ?? unlockPin()
+    if (
+      enteredPin.length !== WALLET_PIN_LENGTH ||
+      isUnlocking() ||
+      isRebalancing()
+    ) {
+      return
+    }
+
+    setIsUnlocking(true)
+
+    const unlockResult = await Effect.runPromise(
+      Effect.either(unlock(enteredPin)),
+    )
+
+    if (Either.isLeft(unlockResult)) {
+      console.error("Failed to unlock wallet:", unlockResult.left)
+      setIsUnlocking(false)
+      shakeUnlockPinField()
+      return
+    }
+
+    toast.success("Wallet unlocked")
+    setUnlockPin("")
+    setIsUnlocking(false)
+    props.onUnlocked?.()
+  }
 
   const currentTotalNotional = () => props.currentTotalNotional
   const targetTotalNotional = () => props.targetTotalNotional
@@ -155,7 +243,7 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
         </div>
       </Show>
 
-      {/* Impact preview + primary rebalance action pinned to bottom */}
+      {/* Impact preview + primary rebalance / connect / unlock PIN */}
       <div class="px-2 py-1.5 border-t border-border/30 bg-muted/20 space-y-2">
         <div>
           <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px]">
@@ -197,38 +285,58 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
             </div>
           </div>
         </div>
-        <Button
-          size="sm"
-          class="w-full h-8 text-[11px] gap-1"
-          onClick={() => {
-            if (
-              !props.onRebalance ||
-              !hasStaged() ||
-              isRebalanceButtonDisabled() ||
-              isRebalancing()
-            ) {
-              return
-            }
-            props.onRebalance()
-          }}
-          disabled={
-            // !props.onRebalance ||
-            isRebalanceButtonDisabled()
-            // ||
-            // isRebalancing() ||
-            // !hasStaged()
-          }
-          aria-disabled={
-            // !props.onRebalance ||
-            isRebalanceButtonDisabled()
-            // ||
-            // isRebalancing() ||
-            // !hasStaged()
+        <Show
+          when={showUnlockPinField()}
+          fallback={
+            <Button
+              size="sm"
+              class="w-full h-8 text-[11px] gap-1"
+              onClick={() => {
+                if (isPrimaryDisabled() || !props.onPrimaryAction) {
+                  return
+                }
+                props.onPrimaryAction()
+              }}
+              disabled={isPrimaryDisabled()}
+              aria-disabled={isPrimaryDisabled()}
+            >
+              <Send class="h-3 w-3" />
+              {primaryLabel()}
+            </Button>
           }
         >
-          <Send class="h-3 w-3" />
-          {isRebalancing() ? "Sending..." : "Rebalance"}
-        </Button>
+          <Input
+            id="stagedChangesUnlockPin"
+            ref={element => {
+              unlockPinInput = element
+            }}
+            type="password"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            placeholder={UNLOCK_PIN_PLACEHOLDER}
+            maxlength={WALLET_PIN_LENGTH}
+            value={unlockPin()}
+            disabled={isRebalancing()}
+            aria-label={UNLOCK_PIN_PLACEHOLDER}
+            class="h-8 font-mono text-[11px] tracking-[0.25em] placeholder:tracking-normal placeholder:font-sans"
+            onAnimationEnd={event => {
+              event.currentTarget.classList.remove(PIN_SHAKE_CLASS)
+            }}
+            onInput={event => {
+              const nextPin = normalizeWalletPinInput(event.currentTarget.value)
+              setUnlockPin(nextPin)
+              if (nextPin.length === WALLET_PIN_LENGTH) {
+                void submitUnlockPin(nextPin)
+              }
+            }}
+            onKeyDown={event => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                void submitUnlockPin()
+              }
+            }}
+          />
+        </Show>
       </div>
     </div>
   )
