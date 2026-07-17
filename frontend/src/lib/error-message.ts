@@ -126,6 +126,8 @@ const messageForTag = (error: TaggedError): string | null => {
       return "No wallet address to copy."
     case "ClipboardWriteFailed":
       return "Failed to copy address. Check clipboard permissions."
+    case "WalletDisconnectFailed":
+      return "Failed to disconnect wallet. Please try again."
     case "ReownWalletUnavailable":
       return "Connect a wallet with Reown first."
     case "ReownWalletRejected":

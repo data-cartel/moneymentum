@@ -43,7 +43,7 @@ vi.mock("@/services/hyperliquid-client", () => ({
 
 vi.mock("@/reown/evmAppKit", () => ({
   getOrCreateEvmAppKit: () => ({
-    disconnect: vi.fn(),
+    disconnect: vi.fn(() => Promise.resolve()),
     getAddress: () => null,
     subscribeAccount: () => () => {},
   }),
@@ -431,7 +431,9 @@ describe("WalletHeader", () => {
       await user.click(screen.getByText("0xConn...ress"))
       await user.click(screen.getByRole("button", { name: "Disconnect" }))
 
-      expect(toast.success).toHaveBeenCalledWith("Wallet disconnected")
+      await waitFor(() => {
+        expect(toast.success).toHaveBeenCalledWith("Wallet disconnected")
+      })
       expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
     })
 

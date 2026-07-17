@@ -1,7 +1,11 @@
 import { createContext, type Accessor } from "solid-js"
 import type * as Effect from "effect/Effect"
 import type { HyperliquidClient } from "@/services/hyperliquid-client"
-import type { WalletConnectError, WalletUnlockFailure } from "@/services/wallet"
+import type {
+  WalletConnectError,
+  WalletDisconnectFailed,
+  WalletUnlockFailure,
+} from "@/services/wallet"
 
 export type NetworkMode = "testnet" | "mainnet"
 
@@ -41,7 +45,7 @@ export interface WalletContextType {
    */
   revokeAgent: () => Effect.Effect<void, WalletConnectError>
   unlock: (pin: string) => Effect.Effect<void, WalletUnlockFailure>
-  disconnect: () => void
+  disconnect: () => Effect.Effect<void, WalletDisconnectFailed>
   setNetworkMode: (mode: NetworkMode) => void
   /** Sync the Reown-connected main address into wallet state (read-only). */
   setMainAddress: (address: string | null) => void

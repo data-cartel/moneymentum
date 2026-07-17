@@ -195,7 +195,7 @@ describe("useWallet", () => {
     expect(stored.privateKey).toBeUndefined()
     expect(stored.encryptedPrivateKey).not.toBe(credentials.privateKey)
 
-    result.disconnect()
+    await Effect.runPromise(result.disconnect())
     expect(result.isConnected()).toBe(false)
     expect(result.isLocked()).toBe(false)
     expect(result.hasStoredSession()).toBe(false)

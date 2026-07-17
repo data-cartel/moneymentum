@@ -9,6 +9,7 @@ import {
   ClipboardWriteFailed,
   WalletAddressMissing,
   WalletConnectError,
+  WalletDisconnectFailed,
 } from "@/services/wallet"
 import { RevokeAgentFailed } from "@/services/hyperliquidAgent"
 
@@ -109,6 +110,15 @@ describe("getErrorMessage", () => {
     )
     expect(getErrorMessage(failure)).toBe(
       "Failed to copy address. Check clipboard permissions.",
+    )
+  })
+
+  it("maps WalletDisconnectFailed to a disconnect message", async () => {
+    const failure = await asFiberFailure(
+      new WalletDisconnectFailed({ cause: new Error("reown failed") }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Failed to disconnect wallet. Please try again.",
     )
   })
 

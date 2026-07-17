@@ -33,6 +33,12 @@ export class ClipboardWriteFailed extends Data.TaggedError(
   readonly cause: unknown
 }> {}
 
+export class WalletDisconnectFailed extends Data.TaggedError(
+  "WalletDisconnectFailed",
+)<{
+  readonly cause: unknown
+}> {}
+
 export const copyWalletAddressToClipboard = (
   address: string,
 ): Effect.Effect<void, WalletAddressMissing | ClipboardWriteFailed> =>

@@ -88,9 +88,21 @@ export const WalletHeader = (props: WalletHeaderProps) => {
 
   const onDisconnectClick = () => {
     props.handleDisconnect?.()
-    disconnect()
-    setMenuOpen(false)
-    toast.success("Wallet disconnected")
+    void Effect.runPromise(
+      disconnect().pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            setMenuOpen(false)
+            toast.success("Wallet disconnected")
+          }),
+        ),
+        Effect.catchAll(error =>
+          Effect.sync(() => {
+            toast.error(getErrorMessage(error))
+          }),
+        ),
+      ),
+    )
   }
 
   const onRevokeAgentClick = () => {

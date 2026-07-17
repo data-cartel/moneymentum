@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect"
 import * as Either from "effect/Either"
 import {
   WalletConnectError,
+  WalletDisconnectFailed,
   WalletSessionMissing,
   type WalletUnlockFailure,
 } from "@/services/wallet"
@@ -292,17 +293,23 @@ export const WalletProvider = (props: ParentProps) => {
     )
   }
 
-  const disconnect = () => {
-    setCredentials(null)
-    setMainAddressState(null)
-    clearEncryptedSession()
-    syncStoredSessionState()
+  const disconnect = (): Effect.Effect<void, WalletDisconnectFailed> =>
+    Effect.gen(function* () {
+      setCredentials(null)
+      setMainAddressState(null)
+      clearEncryptedSession()
+      syncStoredSessionState()
 
-    const modal = getOrCreateEvmAppKit()
-    if (modal) {
-      void modal.disconnect("eip155")
-    }
-  }
+      const modal = getOrCreateEvmAppKit()
+      if (!modal) {
+        return
+      }
+
+      yield* Effect.tryPromise({
+        try: () => modal.disconnect("eip155"),
+        catch: cause => new WalletDisconnectFailed({ cause }),
+      })
+    })
 
   const setNetworkMode = (mode: NetworkMode) => {
     setNetworkModeState(mode)
