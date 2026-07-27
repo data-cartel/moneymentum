@@ -252,6 +252,8 @@ result before sending trades.
       [#274](https://github.com/dataclique/moneymentum/pull/274)); frontend
       filter integration pending
 - [ ] [Simulate Staged Portfolio Metrics](./stories/0x01d.simulate-staged-portfolio-metrics.md)
+- [ ] [Navigate Portfolio With Keyboard](./stories/0x025.navigate-portfolio-with-keyboard.md)
+      -- [#457](https://github.com/dataclique/moneymentum/issues/457)
 
 ---
 

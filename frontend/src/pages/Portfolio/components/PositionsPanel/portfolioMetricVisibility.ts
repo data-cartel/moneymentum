@@ -112,5 +112,5 @@ export const visiblePortfolioMetricColumns = (
   PORTFOLIO_METRIC_COLUMN_ORDER.filter(columnId => visibility[columnId])
 
 export const leverageEditorColumnSpan = (
-  visibleMetricColumns: PortfolioMetricColumnId[],
-): number => 3 + visibleMetricColumns.length
+  _visibleMetricColumns: PortfolioMetricColumnId[],
+): number => 3

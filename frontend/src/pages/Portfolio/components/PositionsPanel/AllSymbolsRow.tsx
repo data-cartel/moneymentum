@@ -27,6 +27,8 @@ export const AllSymbolsRow = (props: {
   fundingIsLoading: boolean
   factorsIsLoading: boolean
   onSymbolClick: (symbol: string) => void
+  isSelected?: boolean
+  onSelect?: () => void
 }): JSX.Element => {
   const metricSkeleton = () => (
     <Skeleton class="inline-block h-3 w-10 align-middle" />
@@ -134,6 +136,7 @@ export const AllSymbolsRow = (props: {
   }
 
   const handleActivate = () => {
+    props.onSelect?.()
     props.onSymbolClick(props.row.symbol)
   }
 
@@ -164,8 +167,11 @@ export const AllSymbolsRow = (props: {
       class={cn(
         "group border-b border-border/20 cursor-pointer transition-colors",
         rowClassName(),
+        props.isSelected && "bg-primary/15",
       )}
       onClick={handleActivate}
+      aria-selected={props.isSelected === true}
+      data-all-symbols-row={props.row.symbol}
     >
       <td class={allSymbolBodyCellClass("asset")}>
         <button

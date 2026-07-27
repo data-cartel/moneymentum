@@ -22,7 +22,7 @@ const defaultRowMetrics = {
 }
 
 describe("PositionsPanelRow", () => {
-  it("replaces side through visible metric columns with a compact leverage editor", async () => {
+  it("replaces side, weight, and notional with a compact leverage editor", async () => {
     const user = userEvent.setup()
 
     render(() => (
@@ -75,7 +75,7 @@ describe("PositionsPanelRow", () => {
     if (sliderCell === null) {
       throw new Error("slider cell not found")
     }
-    expect(sliderCell).toHaveAttribute("colspan", "4")
+    expect(sliderCell).toHaveAttribute("colspan", "3")
 
     await user.click(document.body)
 
@@ -211,7 +211,7 @@ describe("PositionsPanelRow", () => {
     if (sliderCell === null) {
       throw new Error("slider cell not found")
     }
-    expect(sliderCell).toHaveAttribute("colspan", "4")
+    expect(sliderCell).toHaveAttribute("colspan", "3")
 
     await user.keyboard("{Escape}")
 

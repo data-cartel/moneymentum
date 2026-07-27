@@ -60,7 +60,11 @@ export const AllSymbolsPanel = (props: AllSymbolsPanelProps): JSX.Element => {
   }
 
   return (
-    <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
+    <div
+      class="flex h-full min-h-0 w-full min-w-0 flex-col outline-none"
+      tabIndex={0}
+      data-portfolio-panel="allSymbols"
+    >
       <div class="min-h-0 flex-1">
         <AllSymbolsDataTable
           data={allSymbolRows}

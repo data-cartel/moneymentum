@@ -59,6 +59,21 @@ import {
   readPortfolioDockviewLayout,
   writePortfolioDockviewLayout,
 } from "./portfolioLayoutStorage"
+import {
+  PANEL_DIGIT_BY_ID,
+  PortfolioHotkeyBar,
+  PortfolioKeyboardContext,
+  PortfolioKeyboardProvider,
+  tryUsePortfolioKeyboardContext,
+  type KeyboardPanelId,
+  type PortfolioKeyboardActions,
+  usePortfolioKeyboardContext,
+} from "./keyboard"
+import { positionStatus } from "./components/PositionsPanel/positionRowModel"
+import {
+  allSymbolPortfolioState,
+  resolveAllSymbolClick,
+} from "./components/PositionsPanel/allSymbolRowModel"
 import "./portfolio-dockview.css"
 
 type PortfolioPanelId =
@@ -99,7 +114,7 @@ const panelCatalog: PanelCatalogEntry[] = [
     id: "allSymbols",
     title: "ALL SYMBOLS",
     component: "allSymbols",
-    tabComponent: "lockedTab",
+    tabComponent: "allSymbolsTab",
     closable: false,
   },
   {
@@ -113,7 +128,7 @@ const panelCatalog: PanelCatalogEntry[] = [
     id: "staged",
     title: "STAGED CHANGES",
     component: "staged",
-    tabComponent: "lockedTab",
+    tabComponent: "stagedTab",
     closable: false,
   },
   {
@@ -177,9 +192,47 @@ const useDockviewPanelTitle = (props: IDockviewPanelHeaderProps) => {
   return title
 }
 
-const LockedTab = (props: IDockviewPanelHeaderProps) => (
-  <DockviewDefaultTab {...props} hideClose />
-)
+const LockedTab = (props: IDockviewPanelHeaderProps) => {
+  const digit = () => {
+    const panelId = props.api.id
+    if (
+      panelId === "portfolio" ||
+      panelId === "allSymbols" ||
+      panelId === "staged"
+    ) {
+      return PANEL_DIGIT_BY_ID[panelId]
+    }
+    return undefined
+  }
+
+  return (
+    <Show when={digit()} fallback={<DockviewDefaultTab {...props} hideClose />}>
+      {resolvedDigit => (
+        <LockedTabWithDigit {...props} digit={resolvedDigit()} />
+      )}
+    </Show>
+  )
+}
+
+const LockedTabWithDigit = (
+  props: IDockviewPanelHeaderProps & { digit: string },
+) => {
+  const title = useDockviewPanelTitle(props)
+
+  return (
+    <div
+      data-testid="dockview-dv-default-tab"
+      class="dv-default-tab portfolio-dockview-tab"
+    >
+      <span class="dv-default-tab-content portfolio-dockview-tab-title">
+        {title()}
+      </span>
+      <kbd class="ml-1 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+        {props.digit}
+      </kbd>
+    </div>
+  )
+}
 
 const ClosableTab = (props: IDockviewPanelHeaderProps) => (
   <DockviewDefaultTab {...props} />
@@ -280,12 +333,6 @@ const AddPanelMenu = (props: IDockviewHeaderActionsProps) => {
 }
 
 const PortfolioPage = () => {
-  const portfolioOwner = getOwner()
-  bindDockviewSolidOwner(portfolioOwner)
-  onCleanup(() => {
-    bindDockviewSolidOwner(null)
-  })
-
   const { isNetworkSwitching } = useNetwork()
   const { hasStoredSession, isLocked, canTrade, isConnected } = useWallet()
   const DockviewProviders = useDockviewPanelProviders()
@@ -407,15 +454,38 @@ const PortfolioPage = () => {
     })
   })
 
+  const KeyboardAwareDockviewProviders = (props: {
+    children: import("solid-js").JSX.Element
+  }) => {
+    const keyboard = tryUsePortfolioKeyboardContext()
+    return (
+      <DockviewProviders>
+        {keyboard ? (
+          <PortfolioKeyboardContext.Provider value={keyboard}>
+            {props.children}
+          </PortfolioKeyboardContext.Provider>
+        ) : (
+          props.children
+        )}
+      </DockviewProviders>
+    )
+  }
+
   const PortfolioTab = (props: IDockviewPanelHeaderProps) => {
     const title = useDockviewPanelTitle(props)
 
     return (
-      <DockviewProviders>
-        <div class="dv-default-tab portfolio-dockview-tab">
+      <KeyboardAwareDockviewProviders>
+        <div
+          data-testid="dockview-dv-default-tab"
+          class="dv-default-tab portfolio-dockview-tab"
+        >
           <span class="dv-default-tab-content portfolio-dockview-tab-title">
             {title()}
           </span>
+          <kbd class="ml-1 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+            {PANEL_DIGIT_BY_ID.portfolio}
+          </kbd>
           <PortfolioSettingsMenu
             isPrecise={portfolio.isPrecise}
             onPreciseChange={value => {
@@ -429,13 +499,25 @@ const PortfolioPage = () => {
             onMetricVisibilityChange={setMetricColumnVisible}
           />
         </div>
-      </DockviewProviders>
+      </KeyboardAwareDockviewProviders>
     )
   }
 
+  const AllSymbolsTab = (props: IDockviewPanelHeaderProps) => (
+    <KeyboardAwareDockviewProviders>
+      <LockedTabWithDigit {...props} digit={PANEL_DIGIT_BY_ID.allSymbols} />
+    </KeyboardAwareDockviewProviders>
+  )
+
+  const StagedTab = (props: IDockviewPanelHeaderProps) => (
+    <KeyboardAwareDockviewProviders>
+      <LockedTabWithDigit {...props} digit={PANEL_DIGIT_BY_ID.staged} />
+    </KeyboardAwareDockviewProviders>
+  )
+
   const panelComponents = {
     portfolio: (_props: IDockviewPanelProps) => (
-      <DockviewProviders>
+      <KeyboardAwareDockviewProviders>
         <div class="portfolio-dockview-panel-body">
           <PositionsPanel
             currentPortfolio={portfolio.currentPortfolio}
@@ -477,10 +559,10 @@ const PortfolioPage = () => {
             }
           />
         </div>
-      </DockviewProviders>
+      </KeyboardAwareDockviewProviders>
     ),
     allSymbols: (_props: IDockviewPanelProps) => (
-      <DockviewProviders>
+      <KeyboardAwareDockviewProviders>
         <div class="portfolio-dockview-panel-body">
           <AllSymbolsPanel
             screenerSymbols={screenerSymbols}
@@ -494,17 +576,17 @@ const PortfolioPage = () => {
             onAddSymbol={portfolio.handleAddToken}
           />
         </div>
-      </DockviewProviders>
+      </KeyboardAwareDockviewProviders>
     ),
     performance: (_props: IDockviewPanelProps) => (
-      <DockviewProviders>
+      <KeyboardAwareDockviewProviders>
         <div class="portfolio-dockview-panel-body">
           <PerformancePanel />
         </div>
-      </DockviewProviders>
+      </KeyboardAwareDockviewProviders>
     ),
     staged: (_props: IDockviewPanelProps) => (
-      <DockviewProviders>
+      <KeyboardAwareDockviewProviders>
         <div class="portfolio-dockview-panel-body">
           <StagedChangesPanel
             stagedTrades={portfolio.stagedTrades}
@@ -520,10 +602,10 @@ const PortfolioPage = () => {
             onClearAll={portfolio.handleResetToCurrent}
           />
         </div>
-      </DockviewProviders>
+      </KeyboardAwareDockviewProviders>
     ),
     factors: (_props: IDockviewPanelProps) => (
-      <DockviewProviders>
+      <KeyboardAwareDockviewProviders>
         <div class="portfolio-dockview-panel-body">
           <FactorsPanel
             beta={betaResult.beta}
@@ -535,14 +617,14 @@ const PortfolioPage = () => {
             betaMethodology={betaResult.methodology}
           />
         </div>
-      </DockviewProviders>
+      </KeyboardAwareDockviewProviders>
     ),
     risk: (_props: IDockviewPanelProps) => (
-      <DockviewProviders>
+      <KeyboardAwareDockviewProviders>
         <div class="portfolio-dockview-panel-body">
           <RiskPanel />
         </div>
-      </DockviewProviders>
+      </KeyboardAwareDockviewProviders>
     ),
   }
 
@@ -560,7 +642,7 @@ const PortfolioPage = () => {
     api.addPanel({
       id: "allSymbols",
       component: "allSymbols",
-      tabComponent: "lockedTab",
+      tabComponent: "allSymbolsTab",
       title: "ALL SYMBOLS",
       position: { referencePanel: "portfolio", direction: "within" },
     })
@@ -576,7 +658,7 @@ const PortfolioPage = () => {
     const stagedPanel = api.addPanel({
       id: "staged",
       component: "staged",
-      tabComponent: "lockedTab",
+      tabComponent: "stagedTab",
       title: "STAGED CHANGES",
       position: { referencePanel: "performance", direction: "below" },
     })
@@ -648,83 +730,193 @@ const PortfolioPage = () => {
       writePortfolioDockviewLayout(event.api.toJSON())
     })
     layoutChangeDisposable = layoutChange
+
+    const activeChange = event.api.onDidActivePanelChange(panel => {
+      const panelId = panel?.id
+      if (
+        panelId === "portfolio" ||
+        panelId === "allSymbols" ||
+        panelId === "staged"
+      ) {
+        keyboardBridge?.onPanelActivated(panelId)
+      }
+    })
+    activePanelChangeDisposable = activeChange
   }
 
   onCleanup(() => {
     layoutChangeDisposable?.dispose()
+    activePanelChangeDisposable?.dispose()
   })
 
-  return (
-    <>
-      <header class="flex shrink-0 items-center justify-between border-b border-border bg-muted/30 px-3 py-1.5">
-        <div class="flex items-center gap-5">
-          <span class="font-semibold">Moneymentum</span>
-          <div class="h-4 border-l border-border" />
-          <WalletHeader
-            handleDisconnect={portfolio.handleDisconnect}
-            handleNetworkSwitch={portfolio.resetPortfolioStateForNetworkChange}
-          />
-          <div class="h-4 border-l border-border" />
-          <div class="flex gap-1.5">
-            <span class="text-muted-foreground">NAV</span>
-            <span class="font-mono">${portfolio.accountValue.toFixed(2)}</span>
-          </div>
-          <div class="flex gap-1.5">
-            <span class="text-muted-foreground">Notional</span>
-            <span class="font-mono">
-              ${portfolio.targetTotalNotional.toFixed(2)}
-            </span>
-          </div>
-          <span class="text-muted-foreground">coming soon...</span>
-        </div>
-        <div class="flex items-center gap-4">
-          <span class="text-muted-foreground">Δ</span>
-          <span class="font-mono">coming soon...</span>
-          <span class="text-muted-foreground">Γ</span>
-          <span class="font-mono">coming soon...</span>
-          <span class="text-muted-foreground">Θ</span>
-          <span class="font-mono">coming soon...</span>
-          <div class="h-4 border-l border-border" />
-          <span class="text-muted-foreground">VaR</span>
-          <span class="font-mono text-red-400">coming soon...</span>
-          <ModeToggle />
-          <kbd
-            class="cursor-pointer rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] hover:bg-muted/80"
-            onClick={() => {
-              alert("coming soon...")
-            }}
-          >
-            ?
-          </kbd>
-        </div>
-      </header>
+  const keyboardActions = (): PortfolioKeyboardActions => ({
+    activatePanel: (panelId: KeyboardPanelId) => {
+      dockviewApi?.getPanel(panelId)?.api.setActive()
+    },
+    getPortfolioSymbols: () =>
+      Object.keys({
+        ...portfolio.currentPortfolio,
+        ...portfolio.targetPortfolio,
+      }),
+    getAllSymbolSymbols: () => screenerSymbols(),
+    isPinDialogOpen: () => pinDialogOpen(),
+    connectionState: () => stagedConnectionState(),
+    onRemove: portfolio.handleRemoveToken,
+    onUndoRemove: portfolio.handleUndoRemoveToken,
+    onSideChange: portfolio.handleSideChange,
+    onLeverageChange: portfolio.handleLeverageChange,
+    getPositionSide: symbol =>
+      (
+        portfolio.targetPortfolio[symbol] ??
+        portfolio.deletedArchive[symbol] ??
+        portfolio.currentPortfolio[symbol]
+      )?.side,
+    getPositionLeverage: symbol =>
+      (
+        portfolio.targetPortfolio[symbol] ??
+        portfolio.deletedArchive[symbol] ??
+        portfolio.currentPortfolio[symbol]
+      )?.leverage,
+    getMaxLeverage: symbol => portfolio.leverageLimitsMap[symbol],
+    getCrossAccountLeverage: () => portfolio.targetCrossAccountLeverage,
+    onCrossAccountLeverageChange: portfolio.handleCrossAccountLeverageChange,
+    isPositionClosing: symbol =>
+      positionStatus(
+        symbol,
+        portfolio.currentPortfolio,
+        portfolio.targetPortfolio,
+      ) === "closing",
+    onAllSymbolEnter: symbol => {
+      const action = resolveAllSymbolClick(
+        allSymbolPortfolioState(
+          symbol,
+          portfolio.targetPortfolio,
+          portfolio.deletedArchive,
+        ),
+      )
+      if (action === "remove") {
+        portfolio.handleRemoveToken(symbol)
+        return
+      }
+      if (action === "undoRemove") {
+        portfolio.handleUndoRemoveToken(symbol)
+        return
+      }
+      portfolio.handleAddToken(symbol)
+    },
+    onStagedSubmit: handlePrimaryStagedAction,
+    onStagedClearAll: portfolio.handleResetToCurrent,
+    onOpenWalletPinDialog: () => {
+      setPinDialogOpen(true)
+    },
+  })
 
-      <div
-        ref={dockviewContainer}
-        class={cn(
-          "portfolio-dockview-shell min-h-0 flex-1 p-1",
-          isNetworkSwitching() && "pointer-events-none opacity-50",
-        )}
-      >
-        <DockviewSolid
-          theme={portfolioDockviewTheme}
-          components={panelComponents}
-          tabComponents={{
-            portfolioTab: PortfolioTab,
-            lockedTab: LockedTab,
-            closableTab: ClosableTab,
-          }}
-          rightHeaderActionsComponent={AddPanelMenu}
-          onReady={handleReady}
+  let keyboardBridge: ReturnType<typeof usePortfolioKeyboardContext> | undefined
+  let activePanelChangeDisposable: { dispose: () => void } | undefined
+
+  const KeyboardBridge = () => {
+    keyboardBridge = usePortfolioKeyboardContext()
+    return null
+  }
+
+  const HotkeyBarHost = () => {
+    const keyboard = usePortfolioKeyboardContext()
+    return <PortfolioHotkeyBar focusedPanel={keyboard.focusedPanel()} />
+  }
+
+  /** Bind dockview portals under the keyboard provider owner so panels see hotkeys. */
+  const DockviewOwnerBinder = () => {
+    const owner = getOwner()
+    bindDockviewSolidOwner(owner)
+    onCleanup(() => {
+      bindDockviewSolidOwner(null)
+    })
+    return null
+  }
+
+  return (
+    <PortfolioKeyboardProvider actions={keyboardActions()}>
+      <DockviewOwnerBinder />
+      <KeyboardBridge />
+      <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <header class="flex shrink-0 items-center justify-between border-b border-border bg-muted/30 px-3 py-1.5">
+          <div class="flex items-center gap-5">
+            <span class="font-semibold">Moneymentum</span>
+            <div class="h-4 border-l border-border" />
+            <WalletHeader
+              handleDisconnect={portfolio.handleDisconnect}
+              handleNetworkSwitch={
+                portfolio.resetPortfolioStateForNetworkChange
+              }
+            />
+            <div class="h-4 border-l border-border" />
+            <div class="flex gap-1.5">
+              <span class="text-muted-foreground">NAV</span>
+              <span class="font-mono">
+                ${portfolio.accountValue.toFixed(2)}
+              </span>
+            </div>
+            <div class="flex gap-1.5">
+              <span class="text-muted-foreground">Notional</span>
+              <span class="font-mono">
+                ${portfolio.targetTotalNotional.toFixed(2)}
+              </span>
+            </div>
+            <span class="text-muted-foreground">coming soon...</span>
+          </div>
+          <div class="flex items-center gap-4">
+            <span class="text-muted-foreground">Δ</span>
+            <span class="font-mono">coming soon...</span>
+            <span class="text-muted-foreground">Γ</span>
+            <span class="font-mono">coming soon...</span>
+            <span class="text-muted-foreground">Θ</span>
+            <span class="font-mono">coming soon...</span>
+            <div class="h-4 border-l border-border" />
+            <span class="text-muted-foreground">VaR</span>
+            <span class="font-mono text-red-400">coming soon...</span>
+            <ModeToggle />
+            <kbd
+              class="cursor-pointer rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] hover:bg-muted/80"
+              onClick={() => {
+                alert("coming soon...")
+              }}
+            >
+              ?
+            </kbd>
+          </div>
+        </header>
+
+        <div
+          ref={dockviewContainer}
+          class={cn(
+            "portfolio-dockview-shell min-h-0 flex-1 p-1",
+            isNetworkSwitching() && "pointer-events-none opacity-50",
+          )}
+        >
+          <DockviewSolid
+            theme={portfolioDockviewTheme}
+            components={panelComponents}
+            tabComponents={{
+              portfolioTab: PortfolioTab,
+              lockedTab: LockedTab,
+              allSymbolsTab: AllSymbolsTab,
+              stagedTab: StagedTab,
+              closableTab: ClosableTab,
+            }}
+            rightHeaderActionsComponent={AddPanelMenu}
+            onReady={handleReady}
+          />
+        </div>
+
+        <HotkeyBarHost />
+
+        <WalletPinDialog
+          open={pinDialogOpen()}
+          mode="authorize"
+          onOpenChange={setPinDialogOpen}
         />
       </div>
-
-      <WalletPinDialog
-        open={pinDialogOpen()}
-        mode="authorize"
-        onOpenChange={setPinDialogOpen}
-      />
-    </>
+    </PortfolioKeyboardProvider>
   )
 }
 

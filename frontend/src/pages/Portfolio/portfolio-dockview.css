@@ -25,7 +25,7 @@
   --dv-tabs-and-actions-container-font-size: 11px;
   --dv-activegroup-visiblepanel-tab-background-color: var(--background);
   --dv-activegroup-hiddenpanel-tab-background-color: transparent;
-  --dv-inactivegroup-visiblepanel-tab-background-color: var(--background);
+  --dv-inactivegroup-visiblepanel-tab-background-color: transparent;
   --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
   --dv-activegroup-visiblepanel-tab-color: var(--foreground);
   --dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
@@ -56,10 +56,25 @@
   border-radius: 0.25rem;
   overflow: hidden;
   background-color: var(--background);
+  transition: border-color 120ms ease;
+}
+
+.portfolio-dockview-theme .dv-groupview.dv-active-group {
+  border-color: color-mix(in oklch, var(--primary) 65%, var(--border));
 }
 
 .portfolio-dockview-theme .dv-tabs-and-actions-container {
   border-bottom: 1px solid var(--border);
+}
+
+/* Tabs stay transparent until the tab is selected in the focused group.
+   A separate window alone must not paint its selected tab black. */
+.portfolio-dockview-theme .dv-tab {
+  background-color: transparent !important;
+}
+
+.portfolio-dockview-theme .dv-groupview.dv-active-group .dv-tab.dv-active-tab {
+  background-color: var(--background) !important;
 }
 
 .portfolio-dockview-theme .dv-default-tab,

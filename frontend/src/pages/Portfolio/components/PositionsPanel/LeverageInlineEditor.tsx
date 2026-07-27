@@ -42,18 +42,19 @@ export const LeverageEditorTrigger = (
     props.leverageLimitsIsLoading || props.maxLeverage === undefined
 
   // Intentional imperative keyboard listener:
-  // the inline editor needs to close on `Escape`, so we subscribe while it is
-  // open and remove the handler via `onCleanup`.
+  // the inline editor needs to close on Escape/Enter, so we subscribe while it
+  // is open and remove the handler via onCleanup.
   createEffect(() => {
     if (props.isOpen) {
-      const handleEsc = (event: KeyboardEvent) => {
-        if (event.key === "Escape") {
+      const handleCloseKey = (event: KeyboardEvent) => {
+        if (event.key === "Escape" || event.key === "Enter") {
+          event.preventDefault()
           props.onClose()
         }
       }
-      window.addEventListener("keydown", handleEsc)
+      window.addEventListener("keydown", handleCloseKey)
       onCleanup(() => {
-        window.removeEventListener("keydown", handleEsc)
+        window.removeEventListener("keydown", handleCloseKey)
       })
     }
   })

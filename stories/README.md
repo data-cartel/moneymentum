@@ -44,6 +44,7 @@ from Hyperliquid-only positions to read-only wallets and protective hedges.
 - [Show Risk Analytics For Active Portfolio](./0x01b.show-risk-analytics-for-active-portfolio.md)
 - [Screen Perps By Factor](./0x01c.screen-perps-by-factor.md)
 - [Simulate Staged Portfolio Metrics](./0x01d.simulate-staged-portfolio-metrics.md)
+- [Navigate Portfolio With Keyboard](./0x025.navigate-portfolio-with-keyboard.md)
 - [Trade Hyperliquid Spot Positions](./0x01e.trade-hyperliquid-spot-positions.md)
 - [Protocol Revenue Buybacks](./0x01f.protocol-revenue-buybacks.md)
 - [Transparent Fee Calculations](./0x020.transparent-fee-calculations.md)
