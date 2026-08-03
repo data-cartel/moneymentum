@@ -6,5 +6,29 @@
         "command": ["nixfmt"]
       }
     }
-  }
+  },
+  "files.watcherExclude": {
+    "**/target/**": true,
+    "**/data/**": true,
+    "**/.devenv/**": true,
+    "**/frontend/node_modules/**": true,
+    "**/frontend/dist/**": true,
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true
+  },
+  "search.exclude": {
+    "**/target": true,
+    "**/data": true,
+    "**/.devenv": true,
+    "**/frontend/node_modules": true,
+    "**/frontend/dist": true
+  },
+  "rust-analyzer.check.command": "check",
+  "rust-analyzer.files.excludeDirs": [
+    "target",
+    "data",
+    "frontend",
+    ".devenv",
+    "infra"
+  ]
 }

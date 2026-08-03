@@ -99,8 +99,26 @@ describe("filterAllSymbolRows", () => {
 
 describe("allSymbolPortfolioState", () => {
   it("matches trash semantics for target, closing, and absent symbols", () => {
-    const targetPortfolio = { "BTC/USDC:USDC": { symbol: "BTC/USDC:USDC" } }
-    const deletedArchive = { "ETH/USDC:USDC": { symbol: "ETH/USDC:USDC" } }
+    const targetPortfolio = {
+      "BTC/USDC:USDC": {
+        kind: "perp" as const,
+        venue: "hyperliquid" as const,
+        symbol: "BTC/USDC:USDC",
+        side: "buy" as const,
+        leverage: 1,
+        notional: 100,
+      },
+    }
+    const deletedArchive = {
+      "ETH/USDC:USDC": {
+        kind: "perp" as const,
+        venue: "hyperliquid" as const,
+        symbol: "ETH/USDC:USDC",
+        side: "buy" as const,
+        leverage: 1,
+        notional: 100,
+      },
+    }
 
     expect(
       allSymbolPortfolioState("BTC/USDC:USDC", targetPortfolio, deletedArchive),

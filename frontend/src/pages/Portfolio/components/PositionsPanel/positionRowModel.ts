@@ -1,6 +1,10 @@
 import type { OrderSide } from "@/hooks/useTrading"
 
-import type { PortfolioInterface } from "../../hooks/usePortfolioState"
+import {
+  isOptionPosition,
+  isPerpPosition,
+  type PortfolioInterface,
+} from "../../hooks/usePortfolioState"
 
 export type PositionRowStatus = "new" | "unchanged" | "changed" | "closing"
 
@@ -32,11 +36,13 @@ export const positionStatus = (
   if (!current && target) return "new"
   if (current && !target) return "closing"
   if (current && target) {
-    const isChanged =
-      current.notional !== target.notional ||
-      current.side !== target.side ||
+    const notionalOrSideChanged =
+      current.notional !== target.notional || current.side !== target.side
+    const leverageChanged =
+      isPerpPosition(current) &&
+      isPerpPosition(target) &&
       current.leverage !== target.leverage
-    return isChanged ? "changed" : "unchanged"
+    return notionalOrSideChanged || leverageChanged ? "changed" : "unchanged"
   }
   return "unchanged"
 }
@@ -86,6 +92,10 @@ export const signedFundingRateForPosition = (
   position: PortfolioInterface,
   fundingRatesByBaseSymbol?: Record<string, number>,
 ): number | null => {
+  if (isOptionPosition(position)) {
+    return null
+  }
+
   const baseSymbol = position.symbol.split("/")[0] ?? position.symbol
   const hourlyRate = fundingRatesByBaseSymbol?.[baseSymbol]
   if (hourlyRate === undefined) return null

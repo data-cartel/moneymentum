@@ -9,6 +9,8 @@ import {
 import { MIN_USD, type PortfolioInterface } from "./usePortfolioState"
 
 const buy = (notional: number, leverage = 2): PortfolioInterface => ({
+  kind: "perp",
+  venue: "hyperliquid",
   symbol: "BTC/USDC:USDC",
   side: "buy",
   leverage,
@@ -16,9 +18,23 @@ const buy = (notional: number, leverage = 2): PortfolioInterface => ({
 })
 
 const sell = (notional: number, leverage = 2): PortfolioInterface => ({
+  kind: "perp",
+  venue: "hyperliquid",
   symbol: "BTC/USDC:USDC",
   side: "sell",
   leverage,
+  notional,
+})
+
+const option = (
+  symbol: string,
+  notional: number,
+  side: "buy" | "sell" = "buy",
+): PortfolioInterface => ({
+  kind: "option",
+  venue: "derive",
+  symbol,
+  side,
   notional,
 })
 
@@ -84,6 +100,8 @@ describe("diffPortfolios precise mode", () => {
       side: "buy",
       closeNotional: MIN_USD,
       openNotional: MIN_USD + 2,
+      positionKind: "perp",
+      venue: "hyperliquid",
     })
   })
 
@@ -100,6 +118,8 @@ describe("diffPortfolios precise mode", () => {
     expect(actions[0]).toMatchObject({
       kind: "rebalance",
       signedNotionalDelta: MIN_USD,
+      positionKind: "perp",
+      venue: "hyperliquid",
     })
   })
 
@@ -115,6 +135,8 @@ describe("diffPortfolios precise mode", () => {
     expect(actions[0]).toMatchObject({
       kind: "rebalance",
       signedNotionalDelta: 2,
+      positionKind: "perp",
+      venue: "hyperliquid",
     })
   })
 
@@ -146,6 +168,8 @@ describe("diffPortfolios precise mode", () => {
       side: "sell",
       closeNotional: MIN_USD,
       openNotional: MIN_USD + 2,
+      positionKind: "perp",
+      venue: "hyperliquid",
     })
   })
 
@@ -175,6 +199,8 @@ describe("diffPortfolios precise mode", () => {
       signedNotionalDelta: 0,
       leverage: 5,
       leverageChanged: true,
+      positionKind: "perp",
+      venue: "hyperliquid",
     })
   })
 
@@ -190,13 +216,36 @@ describe("diffPortfolios precise mode", () => {
         kind: "close",
         symbol: sym,
         side: "buy",
+        positionKind: "perp",
+        venue: "hyperliquid",
       }),
     ])
+  })
+
+  it("emits derive rebalance for option notional delta without precise legs", () => {
+    const instrument = "ETH-20260925-2000-C"
+    const current: Record<string, PortfolioInterface | undefined> = {
+      [instrument]: option(instrument, 100),
+    }
+    const target: Record<string, PortfolioInterface | undefined> = {
+      [instrument]: option(instrument, 102),
+    }
+
+    const actions = diffPortfolios(current, target, true)
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toMatchObject({
+      kind: "rebalance",
+      signedNotionalDelta: 2,
+      positionKind: "option",
+      venue: "derive",
+      leverage: 1,
+      leverageChanged: false,
+    })
   })
 })
 
 describe("portfolioMapFromExchangePositions", () => {
-  it("builds portfolio map and total notional from exchange rows", () => {
+  it("builds hyperliquid perp portfolio map and total notional from exchange rows", () => {
     const snapshot = portfolioMapFromExchangePositions([
       {
         symbol: "BTC/USDC:USDC",
@@ -214,6 +263,8 @@ describe("portfolioMapFromExchangePositions", () => {
 
     expect(snapshot.totalNotional).toBe(1000)
     expect(snapshot.map["BTC/USDC:USDC"]).toMatchObject({
+      kind: "perp",
+      venue: "hyperliquid",
       symbol: "BTC/USDC:USDC",
       side: "buy",
       leverage: 2,
@@ -229,6 +280,8 @@ describe("targetAndArchiveAfterRebalance", () => {
   const symAxs = "AXS/USDC:USDC"
 
   const btcTarget: PortfolioInterface = {
+    kind: "perp",
+    venue: "hyperliquid",
     symbol: symBtc,
     side: "buy",
     leverage: 2,
@@ -236,6 +289,8 @@ describe("targetAndArchiveAfterRebalance", () => {
   }
 
   const ethCurrent: PortfolioInterface = {
+    kind: "perp",
+    venue: "hyperliquid",
     symbol: symEth,
     side: "buy",
     leverage: 2,
@@ -251,6 +306,8 @@ describe("targetAndArchiveAfterRebalance", () => {
       { [symBtc]: btcTarget },
       {
         [symEth]: {
+          kind: "perp",
+          venue: "hyperliquid",
           symbol: symEth,
           side: "buy",
           leverage: 2,
@@ -259,13 +316,21 @@ describe("targetAndArchiveAfterRebalance", () => {
       },
       current,
       [
-        { kind: "close", symbol: symEth, side: "buy" },
+        {
+          kind: "close",
+          symbol: symEth,
+          side: "buy",
+          positionKind: "perp",
+          venue: "hyperliquid",
+        },
         {
           kind: "rebalance",
           symbol: symBtc,
           signedNotionalDelta: 100,
           leverage: 2,
           leverageChanged: false,
+          positionKind: "perp",
+          venue: "hyperliquid",
         },
       ],
       [
@@ -281,12 +346,16 @@ describe("targetAndArchiveAfterRebalance", () => {
 
   it("uses current as base, overlays failed rebalance target, drops filled closes from archive", () => {
     const axsCurrent: PortfolioInterface = {
+      kind: "perp",
+      venue: "hyperliquid",
       symbol: symAxs,
       side: "buy",
       leverage: 5,
       notional: 15.7,
     }
     const atomTarget: PortfolioInterface = {
+      kind: "perp",
+      venue: "hyperliquid",
       symbol: "ATOM/USDC:USDC",
       side: "buy",
       leverage: 10,
@@ -296,8 +365,10 @@ describe("targetAndArchiveAfterRebalance", () => {
       [symAxs]: axsCurrent,
       [symEth]: ethCurrent,
       "ATOM/USDC:USDC": {
+        kind: "perp" as const,
+        venue: "hyperliquid" as const,
         symbol: "ATOM/USDC:USDC",
-        side: "buy",
+        side: "buy" as const,
         leverage: 5,
         notional: 15,
       },
@@ -306,12 +377,16 @@ describe("targetAndArchiveAfterRebalance", () => {
     const result = targetAndArchiveAfterRebalance(
       {
         [symAxs]: {
+          kind: "perp",
+          venue: "hyperliquid",
           symbol: symAxs,
           side: "buy",
           leverage: 5,
           notional: 0.7,
         },
         [symEth]: {
+          kind: "perp",
+          venue: "hyperliquid",
           symbol: symEth,
           side: "buy",
           leverage: 2,
@@ -321,6 +396,8 @@ describe("targetAndArchiveAfterRebalance", () => {
       },
       {
         [symApt]: {
+          kind: "perp",
+          venue: "hyperliquid",
           symbol: symApt,
           side: "buy",
           leverage: 2,
@@ -329,13 +406,21 @@ describe("targetAndArchiveAfterRebalance", () => {
       },
       current,
       [
-        { kind: "close", symbol: symApt, side: "buy" },
+        {
+          kind: "close",
+          symbol: symApt,
+          side: "buy",
+          positionKind: "perp",
+          venue: "hyperliquid",
+        },
         {
           kind: "rebalance",
           symbol: symAxs,
           signedNotionalDelta: 15,
           leverage: 5,
           leverageChanged: true,
+          positionKind: "perp",
+          venue: "hyperliquid",
         },
         {
           kind: "rebalance",
@@ -343,6 +428,8 @@ describe("targetAndArchiveAfterRebalance", () => {
           signedNotionalDelta: 5,
           leverage: 10,
           leverageChanged: true,
+          positionKind: "perp",
+          venue: "hyperliquid",
         },
       ],
       [
@@ -370,8 +457,10 @@ describe("targetAndArchiveAfterRebalance", () => {
   it("keeps pending close in archive when close order failed", () => {
     const current = {
       [symApt]: {
+        kind: "perp" as const,
+        venue: "hyperliquid" as const,
         symbol: symApt,
-        side: "buy",
+        side: "buy" as const,
         leverage: 2,
         notional: 14,
       },
@@ -381,6 +470,8 @@ describe("targetAndArchiveAfterRebalance", () => {
       {},
       {
         [symApt]: {
+          kind: "perp",
+          venue: "hyperliquid",
           symbol: symApt,
           side: "buy",
           leverage: 2,
@@ -388,7 +479,15 @@ describe("targetAndArchiveAfterRebalance", () => {
         },
       },
       current,
-      [{ kind: "close", symbol: symApt, side: "buy" }],
+      [
+        {
+          kind: "close",
+          symbol: symApt,
+          side: "buy",
+          positionKind: "perp",
+          venue: "hyperliquid",
+        },
+      ],
       [
         {
           symbol: symApt,
@@ -404,5 +503,37 @@ describe("targetAndArchiveAfterRebalance", () => {
     expect(result.errorsBySymbol).toEqual({
       [symApt]: "close rejected",
     })
+  })
+
+  it("preserves untouched derive option rows after hyperliquid settle", () => {
+    const instrument = "ETH-20260925-2000-C"
+    const optionTarget = option(instrument, 250)
+    const current = {
+      [symBtc]: { ...btcTarget, notional: 700 },
+    }
+
+    const result = targetAndArchiveAfterRebalance(
+      {
+        [symBtc]: btcTarget,
+        [instrument]: optionTarget,
+      },
+      {},
+      current,
+      [
+        {
+          kind: "rebalance",
+          symbol: symBtc,
+          signedNotionalDelta: -100,
+          leverage: 2,
+          leverageChanged: false,
+          positionKind: "perp",
+          venue: "hyperliquid",
+        },
+      ],
+      [{ symbol: symBtc, side: "sell", status: "filled" }],
+    )
+
+    expect(result.nextTarget[symBtc]).toEqual(current[symBtc])
+    expect(result.nextTarget[instrument]).toEqual(optionTarget)
   })
 })

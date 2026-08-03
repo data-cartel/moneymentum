@@ -131,6 +131,9 @@ export default defineConfig({
     }),
   ],
   optimizeDeps: {
+    // Prebundle Effect so lazy routes (e.g. /test) do not trigger a
+    // mid-navigation dep re-optimize that surfaces as
+    // "Failed to fetch dynamically imported module".
     include: [
       "@reown/appkit",
       "@reown/appkit-adapter-ethers",
@@ -144,6 +147,12 @@ export default defineConfig({
       "viem/chains",
       "@nktkas/hyperliquid",
       "multicoin-address-validator",
+      "effect/Cause",
+      "effect/Data",
+      "effect/Effect",
+      "effect/Either",
+      "effect/Option",
+      "effect/Runtime",
     ],
     exclude: [
       "@arminmajerie/dockview-solid",
@@ -160,13 +169,21 @@ export default defineConfig({
         find: "@",
         replacement: path.resolve(__dirname, "./src"),
       },
-      // Import only the Hyperliquid exchange instead of the ccxt barrel, which
-      // statically pulls in all 100+ exchanges and defeats tree-shaking.
+      // Import only one exchange instead of the ccxt barrel, which statically
+      // pulls in all 100+ exchanges and defeats tree-shaking.
       {
         find: "ccxt/hyperliquid",
         replacement: path.resolve(
           __dirname,
           "node_modules/ccxt/js/src/pro/hyperliquid.js",
+        ),
+      },
+      {
+        find: "ccxt/derive",
+        // Pro build adds watchOrders / authenticate for fill monitoring.
+        replacement: path.resolve(
+          __dirname,
+          "node_modules/ccxt/js/src/pro/derive.js",
         ),
       },
       {
@@ -213,8 +230,53 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
+    // Vite may open the monorepo root (workspace discovery). Without this,
+    // FSEvents floods from target/, data/ CSV rewrites, and .devenv/.
+    watch: {
+      ignored: [
+        "**/node_modules/**",
+        "**/.git/**",
+        path.resolve(__dirname, "../target"),
+        path.resolve(__dirname, "../data"),
+        path.resolve(__dirname, "../.devenv"),
+        path.resolve(__dirname, "../crates"),
+        path.resolve(__dirname, "../src"),
+        path.resolve(__dirname, "../tests"),
+      ],
+    },
     proxy: {
+      "/derive-api-demo": {
+        target: "https://api-demo.lyra.finance",
+        changeOrigin: true,
+        rewrite: (proxyPath: string) =>
+          proxyPath.replace(/^\/derive-api-demo/, ""),
+        secure: true,
+      },
+      "/derive-api": {
+        target: "https://api.lyra.finance",
+        changeOrigin: true,
+        rewrite: (proxyPath: string) => proxyPath.replace(/^\/derive-api/, ""),
+        secure: true,
+      },
+      "/derive-rpc-demo": {
+        target: "https://testnet-rpc.derive.xyz",
+        changeOrigin: true,
+        rewrite: (proxyPath: string) =>
+          proxyPath.replace(/^\/derive-rpc-demo/, ""),
+        secure: true,
+      },
+      "/derive-rpc": {
+        target: "https://rpc.derive.xyz",
+        changeOrigin: true,
+        rewrite: (proxyPath: string) => proxyPath.replace(/^\/derive-rpc/, ""),
+        secure: true,
+      },
       "/api/hyperliquid": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+        rewrite: stripApiPrefix,
+      },
+      "/api/derive": {
         target: "http://127.0.0.1:8000",
         changeOrigin: true,
         rewrite: stripApiPrefix,

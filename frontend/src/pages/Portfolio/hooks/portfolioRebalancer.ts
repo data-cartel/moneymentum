@@ -1,9 +1,13 @@
 import { type OrderSide, type RebalanceParams } from "@/hooks/useTrading"
 import type { OrderResult } from "@/services/hyperliquid-client"
 
-import type { PortfolioInterface } from "@/pages/Portfolio/hooks/usePortfolioState"
-
-import { MIN_USD } from "@/pages/Portfolio/hooks/usePortfolioState"
+import {
+  isPerpPosition,
+  MIN_USD,
+  type PortfolioInterface,
+  type PortfolioPositionKind,
+  type PortfolioVenue,
+} from "@/pages/Portfolio/hooks/usePortfolioState"
 
 const rebalanceOrderUserMessage = (order: OrderResult): string => {
   if (order.message) {
@@ -36,6 +40,8 @@ export const portfolioMapFromExchangePositions = (
     positions.map(position => [
       position.symbol,
       {
+        kind: "perp" as const,
+        venue: "hyperliquid" as const,
         symbol: position.symbol,
         side: position.side,
         leverage: position.leverage || 1,
@@ -61,6 +67,9 @@ export const targetAndArchiveAfterRebalance = (
   const actionBySymbol = new Map(actions.map(action => [action.symbol, action]))
   const orderBySymbol = new Map(orders.map(order => [order.symbol, order]))
 
+  // Start from exchange current (HL refresh), then keep staged options (and any
+  // other non-touched venues) from the prior target so a HL settle does not
+  // wipe Derive rows.
   const nextTarget = Object.fromEntries(
     Object.entries(current)
       .filter(
@@ -69,6 +78,16 @@ export const targetAndArchiveAfterRebalance = (
       )
       .map(([symbol, position]) => [symbol, { ...position }]),
   ) as Record<string, PortfolioInterface | undefined>
+
+  for (const [symbol, priorTarget] of Object.entries(target)) {
+    if (priorTarget === undefined) {
+      continue
+    }
+    if (actionBySymbol.has(symbol)) {
+      continue
+    }
+    nextTarget[symbol] ??= { ...priorTarget }
+  }
 
   const symbolsToDropFromTarget = new Set<string>()
 
@@ -132,6 +151,8 @@ export type RebalanceAction =
       kind: "close"
       symbol: string
       side: OrderSide
+      positionKind: PortfolioPositionKind
+      venue: PortfolioVenue
     }
   | {
       kind: "rebalance"
@@ -139,6 +160,8 @@ export type RebalanceAction =
       signedNotionalDelta: number
       leverage: number
       leverageChanged: boolean
+      positionKind: PortfolioPositionKind
+      venue: PortfolioVenue
     }
   | {
       kind: "preciseRebalance"
@@ -149,6 +172,8 @@ export type RebalanceAction =
       leverageChanged: boolean
       closeNotional: number
       openNotional: number
+      positionKind: PortfolioPositionKind
+      venue: PortfolioVenue
     }
 
 export const buildApiPayload = (
@@ -156,7 +181,9 @@ export const buildApiPayload = (
   target: Record<string, PortfolioInterface | undefined>,
   precise: boolean,
 ): RebalanceParams => {
-  const actions = diffPortfolios(current, target, precise)
+  const actions = diffPortfolios(current, target, precise).filter(
+    action => action.venue === "hyperliquid",
+  )
   return { actions }
 }
 
@@ -189,13 +216,9 @@ export const preciseRebalanceLegs = (
   }
 }
 
-const getSignedNotional = (side: OrderSide, notional: number) =>
+const getSignedNotional = (side: OrderSide, notional: number): number =>
   side === "buy" ? notional : -notional
 
-/**
- * Compute minimal set of actions needed to transform current portfolio into target.
- * Pure function: does not know about UI status flags or external APIs.
- */
 export const diffPortfolios = (
   current: Record<string, PortfolioInterface | undefined>,
   target: Record<string, PortfolioInterface | undefined>,
@@ -223,6 +246,8 @@ export const diffPortfolios = (
         kind: "close",
         symbol,
         side: currentPosition.side,
+        positionKind: currentPosition.kind,
+        venue: currentPosition.venue,
       })
       continue
     }
@@ -236,20 +261,33 @@ export const diffPortfolios = (
         kind: "close",
         symbol,
         side: currentPosition.side,
+        positionKind: currentPosition.kind,
+        venue: currentPosition.venue,
       })
       continue
     }
 
     const leverageChanged =
-      currentPosition?.leverage !== targetPosition.leverage
+      isPerpPosition(targetPosition) &&
+      currentPosition !== undefined &&
+      isPerpPosition(currentPosition)
+        ? currentPosition.leverage !== targetPosition.leverage
+        : false
+
     const hasSignificantDelta = deltaAbs > NOTIONAL_EPSILON
 
     if (!hasSignificantDelta && !leverageChanged) {
       continue
     }
 
+    const targetLeverage = isPerpPosition(targetPosition)
+      ? targetPosition.leverage
+      : 1
+
+    // Precise path is HL min-order workaround; options use simple notional delta.
     if (
       precise &&
+      isPerpPosition(targetPosition) &&
       hasSignificantDelta &&
       deltaAbs < MIN_USD &&
       currentPosition?.side === targetPosition.side
@@ -263,10 +301,12 @@ export const diffPortfolios = (
         kind: "preciseRebalance",
         symbol,
         side: targetPosition.side,
-        leverage: targetPosition.leverage,
+        leverage: targetLeverage,
         leverageChanged,
         closeNotional,
         openNotional,
+        positionKind: targetPosition.kind,
+        venue: targetPosition.venue,
       })
       continue
     }
@@ -275,8 +315,10 @@ export const diffPortfolios = (
       kind: "rebalance",
       symbol,
       signedNotionalDelta: delta,
-      leverage: targetPosition.leverage,
+      leverage: targetLeverage,
       leverageChanged,
+      positionKind: targetPosition.kind,
+      venue: targetPosition.venue,
     })
   }
 

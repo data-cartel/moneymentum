@@ -15,7 +15,6 @@ import {
   type OrderResult,
 } from "@/hooks/useTrading"
 import {
-  buildApiPayload,
   diffPortfolios,
   portfolioMapFromExchangePositions,
   targetAndArchiveAfterRebalance,
@@ -77,20 +76,55 @@ const MAX_CROSS_ACCOUNT_LEVERAGE = 5
 const DEFAULT_CROSS_ACCOUNT_LEVERAGE = 1
 const POSITION_CLOSE_EPSILON = 0.01
 
-export interface PortfolioInterface {
+export type PortfolioPositionKind = "perp" | "option"
+export type PortfolioVenue = "hyperliquid" | "derive"
+
+/** Hyperliquid perp row in the unified portfolio model. */
+export interface PerpPortfolioPosition {
+  kind: "perp"
+  venue: "hyperliquid"
   symbol: string
   side: OrderSide
   leverage: number
   notional: number
 }
 
+/**
+ * Derive option row. Notional is premium USD (`contracts * mark` at fetch /
+ * `contracts * limit` when staging); contracts are derived at order time as
+ * `notional / price`.
+ */
+export interface OptionPortfolioPosition {
+  kind: "option"
+  venue: "derive"
+  symbol: string
+  side: OrderSide
+  notional: number
+}
+
+export type PortfolioInterface = PerpPortfolioPosition | OptionPortfolioPosition
+
+export const isPerpPosition = (
+  position: PortfolioInterface,
+): position is PerpPortfolioPosition => position.kind === "perp"
+
+export const isOptionPosition = (
+  position: PortfolioInterface,
+): position is OptionPortfolioPosition => position.kind === "option"
+
 export interface StagedTradeItem {
   underlying: string
   side: OrderSide
   notional: number
+  kind: PortfolioPositionKind
+  venue: PortfolioVenue
   previousWeight?: number
   newWeight?: number
   orderError?: string
+  /** Filled at Derive execution: live premium used for `amount = notional / price`. */
+  markPrice?: number
+  /** Filled at Derive execution: contract size sent to createOrder. */
+  amount?: number
 }
 
 const calcLeverage = (totalNotional: number, accountValue: number): number => {
@@ -249,12 +283,13 @@ export const usePortfolioState = () => {
   const symbolsBelowMinimum = createMemo(() => {
     if (isClosingAllPositions()) return []
 
+    // HL perp minimum-notional gate only; Derive option rules come later.
     return Object.keys(targetPortfolio).filter(symbol => {
       const targetPosition = targetPortfolio[symbol]
+      if (!targetPosition || !isPerpPosition(targetPosition)) return false
+      if (targetPosition.notional >= MIN_USD) return false
+
       const currentNotional = currentPortfolio[symbol]?.notional ?? 0
-
-      if (!targetPosition || targetPosition.notional >= MIN_USD) return false
-
       const unchanged =
         currentNotional < MIN_USD &&
         Math.abs(targetPosition.notional - currentNotional) < 0.01
@@ -268,7 +303,7 @@ export const usePortfolioState = () => {
 
     return Object.keys(targetPortfolio).filter(symbol => {
       const target = targetPortfolio[symbol]
-      if (!target) return false
+      if (!target || !isPerpPosition(target)) return false
 
       const targetSignedNotional =
         target.side === "sell" ? -target.notional : target.notional
@@ -476,8 +511,10 @@ export const usePortfolioState = () => {
 
       return {
         underlying: symbol,
-        side: delta > 0 ? "buy" : "sell",
+        side: (delta > 0 ? "buy" : "sell") as OrderSide,
         notional: Math.abs(delta),
+        kind: action.positionKind,
+        venue: action.venue,
         previousWeight: totalCurrent
           ? (currentPosition?.notional ?? 0) / totalCurrent
           : 0,
@@ -513,16 +550,45 @@ export const usePortfolioState = () => {
   const hasSymbolsDeltaBelowMinimum = () =>
     symbolsDeltaBelowMinimum().length > 0
 
-  const handleAddToken = (symbol: string) => {
+  const handleAddToken = (
+    symbol: string,
+    kind: PortfolioPositionKind,
+    venue: PortfolioVenue,
+  ) => {
     if (!isConnected()) return
     if (symbol in targetPortfolio) return
     if (deletedArchive[symbol] !== undefined) return
 
+    if (kind === "perp") {
+      if (venue !== "hyperliquid") {
+        return
+      }
+
+      batch(() => {
+        setTargetPortfolio(symbol, {
+          kind: "perp",
+          venue: "hyperliquid",
+          symbol,
+          side: "buy",
+          leverage: leverageLimitsMap()[symbol] || 1,
+          notional: MIN_USD,
+        })
+
+        setTargetTotalNotional(prev => prev + MIN_USD)
+      })
+      return
+    }
+
+    if (venue !== "derive") {
+      return
+    }
+
     batch(() => {
       setTargetPortfolio(symbol, {
+        kind: "option",
+        venue: "derive",
         symbol,
         side: "buy",
-        leverage: leverageLimitsMap()[symbol] || 1,
         notional: MIN_USD,
       })
 
@@ -573,6 +639,11 @@ export const usePortfolioState = () => {
 
   const handleLeverageChange = (symbol: string, leverage: number) => {
     clearRebalanceErrorForSymbol(symbol)
+    const target = targetPortfolio[symbol]
+    if (target === undefined || !isPerpPosition(target)) {
+      return
+    }
+
     const maxLeverage = leverageLimitsMap()[symbol] || 1
     const newLeverage = Math.max(1, Math.min(leverage, maxLeverage))
 
@@ -655,11 +726,27 @@ export const usePortfolioState = () => {
       return
     }
 
-    const apiPayload = buildApiPayload(
+    const allActions = diffPortfolios(
       currentPortfolio,
       targetPortfolio,
       isPrecise(),
     )
+    const hyperliquidActions = allActions.filter(
+      action => action.venue === "hyperliquid",
+    )
+    const deriveActions = allActions.filter(action => action.venue === "derive")
+
+    if (deriveActions.length > 0) {
+      toast.message(
+        `${String(deriveActions.length)} Derive action(s) staged — execution not wired yet`,
+      )
+    }
+
+    if (hyperliquidActions.length === 0) {
+      return
+    }
+
+    const apiPayload = { actions: hyperliquidActions }
 
     setIsRebalancingUi(true)
     rebalancePositionsMutation.mutate(apiPayload, {

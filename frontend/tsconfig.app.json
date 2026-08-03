@@ -27,7 +27,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "ccxt/hyperliquid": ["./node_modules/ccxt/js/src/pro/hyperliquid.d.ts"]
+      "ccxt/hyperliquid": ["./node_modules/ccxt/js/src/pro/hyperliquid.d.ts"],
+      "ccxt/derive": ["./node_modules/ccxt/js/src/pro/derive.d.ts"]
     }
   },
   "include": ["src"]

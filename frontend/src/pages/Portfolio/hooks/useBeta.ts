@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect"
 import { useQuery } from "@tanstack/solid-query"
 import { createMemo } from "solid-js"
 import { postJson } from "@/lib/http"
-import type { PortfolioInterface } from "./usePortfolioState"
+import { isPerpPosition, type PortfolioInterface } from "./usePortfolioState"
 import type { ReadonlyBetaPosition } from "./useReadonlyPortfolioState"
 
 export interface BetaBenchmark {
@@ -18,11 +18,13 @@ const symbolToTicker = (symbol: string): string =>
 
 const weightsFromPortfolio = (
   portfolio: Record<string, PortfolioInterface | undefined>,
-  portfolioTotalNotional: number,
+  _portfolioTotalNotional: number,
   readonlyPositions: ReadonlyBetaPosition[],
 ): Record<string, number> => {
+  // Options are excluded from beta until we map them to an underlying ticker.
   const exchangePositions = Object.values(portfolio).filter(
-    (position): position is PortfolioInterface => position !== undefined,
+    (position): position is PortfolioInterface =>
+      position !== undefined && isPerpPosition(position),
   )
   const includedReadonlyPositions = readonlyPositions.filter(
     position =>
@@ -35,7 +37,11 @@ const weightsFromPortfolio = (
     (notionalSum, position) => notionalSum + position.notionalUsd,
     0,
   )
-  const totalNotional = portfolioTotalNotional + readonlyTotalNotional
+  const perpTotalNotional = exchangePositions.reduce(
+    (sum, position) => sum + position.notional,
+    0,
+  )
+  const totalNotional = perpTotalNotional + readonlyTotalNotional
 
   if (totalNotional <= 0) return {}
 

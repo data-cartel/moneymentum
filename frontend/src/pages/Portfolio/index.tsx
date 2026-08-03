@@ -573,7 +573,9 @@ const PortfolioPage = () => {
             metricVisibility={metricVisibility()}
             onRemove={portfolio.handleRemoveToken}
             onUndoRemove={portfolio.handleUndoRemoveToken}
-            onAddSymbol={portfolio.handleAddToken}
+            onAddSymbol={symbol => {
+              portfolio.handleAddToken(symbol, "perp", "hyperliquid")
+            }}
           />
         </div>
       </KeyboardAwareDockviewProviders>
@@ -771,12 +773,13 @@ const PortfolioPage = () => {
         portfolio.deletedArchive[symbol] ??
         portfolio.currentPortfolio[symbol]
       )?.side,
-    getPositionLeverage: symbol =>
-      (
+    getPositionLeverage: symbol => {
+      const position =
         portfolio.targetPortfolio[symbol] ??
         portfolio.deletedArchive[symbol] ??
         portfolio.currentPortfolio[symbol]
-      )?.leverage,
+      return position?.kind === "perp" ? position.leverage : undefined
+    },
     getMaxLeverage: symbol => portfolio.leverageLimitsMap[symbol],
     getCrossAccountLeverage: () => portfolio.targetCrossAccountLeverage,
     onCrossAccountLeverageChange: portfolio.handleCrossAccountLeverageChange,
@@ -802,7 +805,7 @@ const PortfolioPage = () => {
         portfolio.handleUndoRemoveToken(symbol)
         return
       }
-      portfolio.handleAddToken(symbol)
+      portfolio.handleAddToken(symbol, "perp", "hyperliquid")
     },
     onStagedSubmit: handlePrimaryStagedAction,
     onStagedClearAll: portfolio.handleResetToCurrent,

@@ -83,6 +83,9 @@ const messageForTag = (error: TaggedError): string | null => {
     case "NetworkError":
       return "Network request failed. Check your connection and try again."
     case "HttpStatusError":
+      if (error.status === 403) {
+        return "Derive auth gateway rejected the request (403). Retry Sign and load once; if it persists, the account wallet may need a registered session key."
+      }
       return (
         error.detail ??
         (error.status
@@ -138,6 +141,29 @@ const messageForTag = (error: TaggedError): string | null => {
       return "Failed to revoke Hyperliquid agent. Please try again."
     case "ReownModalOpenFailed":
       return "Could not open wallet connect."
+    case "ReownAppKitUnavailable":
+      return "Could not open wallet connect."
+    case "ReownProviderUnavailable":
+      return "Connect a wallet with Reown first."
+    case "DeriveWalletInvalid":
+      return "Invalid Derive wallet address."
+    case "DeriveSessionMissing":
+      return "No Derive credentials. Paste Derive Wallet and Session Key from Developers."
+    case "DeriveSessionSignFailed":
+      return "Failed to sign with the Derive session key."
+    case "DeriveSessionKeyInvalid":
+      return "Invalid session private key. Paste a 0x-prefixed 32-byte hex key from derive.xyz Developers."
+    case "DeriveSubaccountIdInvalid":
+      return "Subaccount ID must be a non-negative integer, or leave empty."
+    case "DeriveRpcError": {
+      const message =
+        "message" in error && typeof error.message === "string"
+          ? error.message.trim()
+          : ""
+      return message.length > 0
+        ? `Derive rejected the request: ${message}`
+        : "Derive rejected the request."
+    }
     case "BitcoinAddressValidatorLoadFailed":
       return "Could not load Bitcoin address validation. Please try again."
     default:

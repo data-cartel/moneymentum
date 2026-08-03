@@ -11,6 +11,7 @@ import {
   WalletConnectError,
   WalletDisconnectFailed,
 } from "@/services/wallet"
+import { DeriveRpcError, DeriveSessionMissing } from "@/services/deriveAccount"
 import { RevokeAgentFailed } from "@/services/hyperliquidAgent"
 
 const asFiberFailure = async (error: unknown): Promise<unknown> => {
@@ -148,5 +149,19 @@ describe("getErrorMessage", () => {
 
   it("stringifies unknown non-error values", () => {
     expect(getErrorMessage("weird")).toBe("weird")
+  })
+
+  it("maps DeriveRpcError to a provider message", async () => {
+    const failure = await asFiberFailure(
+      new DeriveRpcError({ code: 14021, message: "missing wallet header" }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Derive rejected the request: missing wallet header",
+    )
+  })
+
+  it("maps DeriveSessionMissing to a setup message", async () => {
+    const failure = await asFiberFailure(new DeriveSessionMissing())
+    expect(getErrorMessage(failure)).toContain("No Derive credentials")
   })
 })

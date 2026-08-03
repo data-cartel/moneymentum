@@ -172,7 +172,7 @@ describe("usePortfolioState", () => {
       expect(Object.keys(result.targetPortfolio)).toHaveLength(2)
     })
 
-    result.handleAddToken("SOL/USDC:USDC")
+    result.handleAddToken("SOL/USDC:USDC", "perp", "hyperliquid")
     expect(result.targetPortfolio["SOL/USDC:USDC"]?.notional).toBe(MIN_USD)
 
     result.handleRemoveToken("SOL/USDC:USDC")
@@ -269,8 +269,20 @@ describe("usePortfolioState", () => {
     expect(mutate).toHaveBeenCalledWith(
       {
         actions: [
-          { kind: "close", symbol: "BTC/USDC:USDC", side: "buy" },
-          { kind: "close", symbol: "ETH/USDC:USDC", side: "buy" },
+          {
+            kind: "close",
+            symbol: "BTC/USDC:USDC",
+            side: "buy",
+            positionKind: "perp",
+            venue: "hyperliquid",
+          },
+          {
+            kind: "close",
+            symbol: "ETH/USDC:USDC",
+            side: "buy",
+            positionKind: "perp",
+            venue: "hyperliquid",
+          },
         ],
       },
       expect.objectContaining({
@@ -373,6 +385,8 @@ describe("usePortfolioState", () => {
             signedNotionalDelta: 100,
             leverage: 2,
             leverageChanged: false,
+            positionKind: "perp",
+            venue: "hyperliquid",
           }),
         ],
       },
