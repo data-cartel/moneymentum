@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { hasSharedWalletPin } from "@/contexts/wallet-context"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
 import { prefetchEvmAppKit } from "@/reown/evmAppKit"
@@ -32,8 +33,8 @@ interface WalletPinDialogProps {
 }
 
 /**
- * Standard PIN confirmation popup used before authorizing a Hyperliquid agent
- * or unlocking an encrypted agent session after reload.
+ * PIN confirmation before authorizing a Hyperliquid agent or unlocking an
+ * encrypted agent session after reload.
  */
 export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
   const { authorizeAgent, unlock } = useWallet()
@@ -41,15 +42,30 @@ export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const [isSubmitting, setIsSubmitting] = createSignal(false)
 
-  const title = () =>
-    props.mode === "authorize"
-      ? "Connect to Hyperliquid"
-      : "Unlock trading agent"
+  const pinAlreadyExists = () => hasSharedWalletPin()
 
-  const description = () =>
-    props.mode === "authorize"
-      ? "Enter a 6-digit local PIN to encrypt the new API agent key, then approve the agent in your wallet."
-      : "Enter your 6-digit local PIN to decrypt the stored API agent key."
+  const title = () => {
+    if (props.mode === "unlock") {
+      return "Unlock trading agent"
+    }
+    return pinAlreadyExists() ? "Enter local PIN" : "Create local PIN"
+  }
+
+  const description = () => {
+    if (props.mode === "unlock") {
+      return "Enter your 6-digit local PIN to decrypt the stored API agent key."
+    }
+    return pinAlreadyExists()
+      ? "Enter the same 6-digit PIN already set for this browser, then approve the API agent in your wallet."
+      : "Choose a 6-digit local PIN to encrypt the new API agent key, then approve the agent in your wallet."
+  }
+
+  const pinFieldLabel = () => {
+    if (props.mode === "unlock" || pinAlreadyExists()) {
+      return "PIN"
+    }
+    return `Local PIN (${String(WALLET_PIN_LENGTH)} digits)`
+  }
 
   const resetForm = () => {
     setPin("")
@@ -133,7 +149,7 @@ export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
         </DialogHeader>
         <div class="space-y-2">
           <label for="walletPinDialogInput" class="text-sm font-medium">
-            Local PIN ({String(WALLET_PIN_LENGTH)} digits)
+            {pinFieldLabel()}
           </label>
           <Input
             id="walletPinDialogInput"

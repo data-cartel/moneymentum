@@ -8,17 +8,23 @@ import {
   onMount,
   Show,
 } from "solid-js"
+import * as Effect from "effect/Effect"
+import { toast } from "solid-sonner"
+import hyperliquidIconUrl from "@/assets/venues/hyperliquid.png"
+import deriveIconUrl from "@/assets/venues/derive.png"
 import { ModeToggle } from "@/components/ui/mode-toggle"
 import { WalletHeader } from "@/components/wallet-header"
 import { WalletProvider } from "@/contexts/WalletProvider"
 import { cn } from "@/lib/cn"
 import { useDockviewPanelProviders } from "@/lib/dockviewPanelProviders"
 import { bindDockviewSolidOwner } from "@/lib/dockviewSolidOwner"
+import { getErrorMessage } from "@/lib/error-message"
 import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import {
   useHyperliquidFundingRates,
   useHyperliquidTickers,
+  useWalletSettings,
 } from "@/hooks/useTrading"
 import "@arminmajerie/dockview-solid/styles/dockview.css"
 import {
@@ -32,8 +38,9 @@ import {
   type IDockviewPanelProps,
 } from "@arminmajerie/dockview-solid"
 
-import { AllSymbolsPanel } from "./components/AllSymbolsPanel"
+import { DerivePanel } from "./components/DerivePanel"
 import { FactorsPanel } from "./components/FactorsPanel"
+import { HyperliquidPanel } from "./components/HyperliquidPanel"
 import { PerformancePanel } from "./components/PerformancePanel"
 import { PortfolioSettingsMenu } from "./components/PortfolioSettingsMenu"
 import { PositionsPanel } from "./components/PositionsPanel/PositionsPanel"
@@ -60,6 +67,10 @@ import {
   writePortfolioDockviewLayout,
 } from "./portfolioLayoutStorage"
 import {
+  PortfolioShellProvider,
+  usePortfolioShell,
+} from "./portfolioShellContext"
+import {
   PANEL_DIGIT_BY_ID,
   PortfolioHotkeyBar,
   PortfolioKeyboardContext,
@@ -78,7 +89,8 @@ import "./portfolio-dockview.css"
 
 type PortfolioPanelId =
   | "portfolio"
-  | "allSymbols"
+  | "hyperliquid"
+  | "derive"
   | "performance"
   | "staged"
   | "factors"
@@ -111,10 +123,17 @@ const panelCatalog: PanelCatalogEntry[] = [
     closable: false,
   },
   {
-    id: "allSymbols",
-    title: "ALL SYMBOLS",
-    component: "allSymbols",
-    tabComponent: "allSymbolsTab",
+    id: "hyperliquid",
+    title: "HYPERLIQUID",
+    component: "hyperliquid",
+    tabComponent: "hyperliquidTab",
+    closable: false,
+  },
+  {
+    id: "derive",
+    title: "DERIVE",
+    component: "derive",
+    tabComponent: "deriveTab",
     closable: false,
   },
   {
@@ -166,6 +185,43 @@ const bitcoinBetaBenchmark: BetaBenchmark = {
   lookback: "365 calendar days",
 }
 
+const formatUsdBalance = (value: number): string =>
+  value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+
+const VenueBalancesHeader = () => {
+  const { data: walletSettings } = useWalletSettings()
+
+  const connectedVenues = () =>
+    walletSettings().venues.filter(
+      venue => venue.connected && venue.balanceUsd !== null,
+    )
+
+  return (
+    <div class="flex items-center gap-3">
+      <For each={connectedVenues()}>
+        {venue => (
+          <div class="flex items-center gap-1.5">
+            <img
+              src={
+                venue.id === "hyperliquid" ? hyperliquidIconUrl : deriveIconUrl
+              }
+              alt=""
+              class="size-4"
+              aria-hidden="true"
+            />
+            <span class="font-mono text-[12px]">
+              ${formatUsdBalance(venue.balanceUsd ?? 0)}
+            </span>
+          </div>
+        )}
+      </For>
+    </div>
+  )
+}
+
 /** App-token theme; avoids dockview-theme-dark (#1e1e1e) fighting --background. */
 const portfolioDockviewTheme: DockviewTheme = {
   name: "portfolio",
@@ -197,7 +253,8 @@ const LockedTab = (props: IDockviewPanelHeaderProps) => {
     const panelId = props.api.id
     if (
       panelId === "portfolio" ||
-      panelId === "allSymbols" ||
+      panelId === "hyperliquid" ||
+      panelId === "derive" ||
       panelId === "staged"
     ) {
       return PANEL_DIGIT_BY_ID[panelId]
@@ -334,7 +391,15 @@ const AddPanelMenu = (props: IDockviewHeaderActionsProps) => {
 
 const PortfolioPage = () => {
   const { isNetworkSwitching } = useNetwork()
-  const { hasStoredSession, isLocked, canTrade, isConnected } = useWallet()
+  const {
+    hasStoredSession,
+    isLocked,
+    canTrade,
+    isHyperliquidConnected,
+    hasVerifiedSessionPin,
+    authorizeAgent,
+  } = useWallet()
+  const shell = usePortfolioShell()
   const DockviewProviders = useDockviewPanelProviders()
   const portfolio = usePortfolioState()
 
@@ -349,7 +414,7 @@ const PortfolioPage = () => {
   const [containerHeight, setContainerHeight] = createSignal(0)
 
   const stagedConnectionState = (): StagedConnectionState => {
-    if (!isConnected()) {
+    if (!isHyperliquidConnected()) {
       return "walletDisconnected"
     }
     if (!hasStoredSession()) {
@@ -361,13 +426,58 @@ const PortfolioPage = () => {
     return "ready"
   }
 
+  const openHyperliquidWalletConnect = () => {
+    shell.focusVenue({ venue: "hyperliquid", openConnect: true })
+  }
+
+  const authorizeAgentWithSessionPin = () => {
+    void Effect.runPromise(
+      authorizeAgent().pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            toast.success("Hyperliquid agent connected")
+          }),
+        ),
+        Effect.catchAll(error =>
+          Effect.sync(() => {
+            console.error("Failed to authorize Hyperliquid agent:", error)
+            toast.error(getErrorMessage(error))
+          }),
+        ),
+      ),
+    )
+  }
+
+  /**
+   * Staged "Connect to Hyperliquid":
+   * - wallet not connected -> Reown only (never a create-PIN modal)
+   * - PIN already entered this browser session -> authorize agent, then wallet sign
+   * - local PIN exists but not yet entered -> enter-PIN dialog (not create)
+   * - no PIN yet -> create-PIN dialog, then authorize
+   */
+  const beginHyperliquidTradingConnect = () => {
+    if (!isHyperliquidConnected()) {
+      openHyperliquidWalletConnect()
+      return
+    }
+
+    if (hasVerifiedSessionPin()) {
+      authorizeAgentWithSessionPin()
+      return
+    }
+
+    setPinDialogOpen(true)
+  }
+
   const handlePrimaryStagedAction = () => {
     switch (stagedConnectionState()) {
       case "walletDisconnected":
+        openHyperliquidWalletConnect()
+        return
       case "agentLocked":
         return
       case "agentMissing":
-        setPinDialogOpen(true)
+        beginHyperliquidTradingConnect()
         return
       case "ready":
         if (!canTrade()) {
@@ -503,9 +613,15 @@ const PortfolioPage = () => {
     )
   }
 
-  const AllSymbolsTab = (props: IDockviewPanelHeaderProps) => (
+  const HyperliquidTab = (props: IDockviewPanelHeaderProps) => (
     <KeyboardAwareDockviewProviders>
-      <LockedTabWithDigit {...props} digit={PANEL_DIGIT_BY_ID.allSymbols} />
+      <LockedTabWithDigit {...props} digit={PANEL_DIGIT_BY_ID.hyperliquid} />
+    </KeyboardAwareDockviewProviders>
+  )
+
+  const DeriveTab = (props: IDockviewPanelHeaderProps) => (
+    <KeyboardAwareDockviewProviders>
+      <LockedTabWithDigit {...props} digit={PANEL_DIGIT_BY_ID.derive} />
     </KeyboardAwareDockviewProviders>
   )
 
@@ -561,10 +677,10 @@ const PortfolioPage = () => {
         </div>
       </KeyboardAwareDockviewProviders>
     ),
-    allSymbols: (_props: IDockviewPanelProps) => (
+    hyperliquid: (_props: IDockviewPanelProps) => (
       <KeyboardAwareDockviewProviders>
         <div class="portfolio-dockview-panel-body">
-          <AllSymbolsPanel
+          <HyperliquidPanel
             screenerSymbols={screenerSymbols}
             targetPortfolio={portfolio.targetPortfolio}
             deletedArchive={portfolio.deletedArchive}
@@ -577,6 +693,13 @@ const PortfolioPage = () => {
               portfolio.handleAddToken(symbol, "perp", "hyperliquid")
             }}
           />
+        </div>
+      </KeyboardAwareDockviewProviders>
+    ),
+    derive: (_props: IDockviewPanelProps) => (
+      <KeyboardAwareDockviewProviders>
+        <div class="portfolio-dockview-panel-body">
+          <DerivePanel />
         </div>
       </KeyboardAwareDockviewProviders>
     ),
@@ -642,10 +765,18 @@ const PortfolioPage = () => {
     })
 
     api.addPanel({
-      id: "allSymbols",
-      component: "allSymbols",
-      tabComponent: "allSymbolsTab",
-      title: "ALL SYMBOLS",
+      id: "hyperliquid",
+      component: "hyperliquid",
+      tabComponent: "hyperliquidTab",
+      title: "HYPERLIQUID",
+      position: { referencePanel: "portfolio", direction: "within" },
+    })
+
+    api.addPanel({
+      id: "derive",
+      component: "derive",
+      tabComponent: "deriveTab",
+      title: "DERIVE",
       position: { referencePanel: "portfolio", direction: "within" },
     })
 
@@ -708,7 +839,7 @@ const PortfolioPage = () => {
     dockviewApi = event.api
 
     const hasRequiredPanels = (): boolean =>
-      (["portfolio", "allSymbols", "staged"] as const).every(
+      (["portfolio", "hyperliquid", "derive", "staged"] as const).every(
         panelId => event.api.getPanel(panelId) !== undefined,
       )
 
@@ -737,7 +868,8 @@ const PortfolioPage = () => {
       const panelId = panel?.id
       if (
         panelId === "portfolio" ||
-        panelId === "allSymbols" ||
+        panelId === "hyperliquid" ||
+        panelId === "derive" ||
         panelId === "staged"
       ) {
         keyboardBridge?.onPanelActivated(panelId)
@@ -810,7 +942,7 @@ const PortfolioPage = () => {
     onStagedSubmit: handlePrimaryStagedAction,
     onStagedClearAll: portfolio.handleResetToCurrent,
     onOpenWalletPinDialog: () => {
-      setPinDialogOpen(true)
+      beginHyperliquidTradingConnect()
     },
   })
 
@@ -819,6 +951,23 @@ const PortfolioPage = () => {
 
   const KeyboardBridge = () => {
     keyboardBridge = usePortfolioKeyboardContext()
+    return null
+  }
+
+  const ShellFocusBridge = () => {
+    const shell = usePortfolioShell()
+
+    // createEffect: activate the dockview panel when header/portfolio requests a venue.
+    createEffect(() => {
+      const request = shell.focusVenueRequest()
+      if (request === null) {
+        return
+      }
+      const panelId = request.venue === "hyperliquid" ? "hyperliquid" : "derive"
+      dockviewApi?.getPanel(panelId)?.api.setActive()
+      keyboardBridge?.onPanelActivated(panelId)
+    })
+
     return null
   }
 
@@ -841,24 +990,19 @@ const PortfolioPage = () => {
     <PortfolioKeyboardProvider actions={keyboardActions()}>
       <DockviewOwnerBinder />
       <KeyboardBridge />
+      <ShellFocusBridge />
       <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
         <header class="flex shrink-0 items-center justify-between border-b border-border bg-muted/30 px-3 py-1.5">
           <div class="flex items-center gap-5">
             <span class="font-semibold">Moneymentum</span>
             <div class="h-4 border-l border-border" />
             <WalletHeader
-              handleDisconnect={portfolio.handleDisconnect}
               handleNetworkSwitch={
                 portfolio.resetPortfolioStateForNetworkChange
               }
             />
             <div class="h-4 border-l border-border" />
-            <div class="flex gap-1.5">
-              <span class="text-muted-foreground">NAV</span>
-              <span class="font-mono">
-                ${portfolio.accountValue.toFixed(2)}
-              </span>
-            </div>
+            <VenueBalancesHeader />
             <div class="flex gap-1.5">
               <span class="text-muted-foreground">Notional</span>
               <span class="font-mono">
@@ -902,7 +1046,8 @@ const PortfolioPage = () => {
             tabComponents={{
               portfolioTab: PortfolioTab,
               lockedTab: LockedTab,
-              allSymbolsTab: AllSymbolsTab,
+              hyperliquidTab: HyperliquidTab,
+              deriveTab: DeriveTab,
               stagedTab: StagedTab,
               closableTab: ClosableTab,
             }}
@@ -925,7 +1070,9 @@ const PortfolioPage = () => {
 
 const PortfolioRoute = () => (
   <WalletProvider>
-    <PortfolioPage />
+    <PortfolioShellProvider>
+      <PortfolioPage />
+    </PortfolioShellProvider>
   </WalletProvider>
 )
 

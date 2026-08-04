@@ -202,9 +202,14 @@ export const PortfolioKeyboardProvider = (props: {
       return
     }
 
-    if (panelId === "allSymbols") {
+    if (panelId === "hyperliquid") {
       ensureAllSymbolsSelection()
-      focusPanelContainer("allSymbols")
+      focusPanelContainer("hyperliquid")
+      return
+    }
+
+    if (panelId === "derive") {
+      focusPanelContainer("derive")
       return
     }
 
@@ -532,7 +537,7 @@ export const PortfolioKeyboardProvider = (props: {
       case "portfolio":
         handlePortfolioKeys(event)
         break
-      case "allSymbols":
+      case "hyperliquid":
         handleAllSymbolsKeys(event)
         break
       case "staged":

@@ -11,6 +11,7 @@ import {
   useHyperliquidPositions,
   useHyperliquidLeverageLimits,
   useRebalanceHyperliquidPositions,
+  useDeriveBalance,
   type OrderSide,
   type OrderResult,
 } from "@/hooks/useTrading"
@@ -137,7 +138,7 @@ const calcLeverage = (totalNotional: number, accountValue: number): number => {
 }
 
 export const usePortfolioState = () => {
-  const { isConnected } = useWallet()
+  const { isConnected, isHyperliquidConnected } = useWallet()
 
   const [isPrecise, setPreciseSignal] = createSignal(
     initialPreciseFromStorage(),
@@ -148,6 +149,7 @@ export const usePortfolioState = () => {
 
   // Exchange data queries
   const accountSummaryQuery = useHyperliquidAccountSummary()
+  const deriveBalanceQuery = useDeriveBalance()
   const positionsQuery = useHyperliquidPositions()
   const leverageLimitsQuery = useHyperliquidLeverageLimits()
   // Mutations
@@ -347,18 +349,15 @@ export const usePortfolioState = () => {
     handleDisconnect()
   })
 
-  // Derive accountValue from account summary
-  const accountValue = createMemo(
-    () => accountSummaryQuery.data?.accountValue ?? 0,
-  )
-
-  // Compute targetNotional = accountValue * targetCrossAccountLeverage (used for percentage calculations)
-  const targetNotional = createMemo(() =>
-    new Decimal(accountValue())
-      .mul(targetCrossAccountLeverage())
-      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
-      .toNumber(),
-  )
+  // Combined equity for cross-account leverage sizing. HL + selected Derive
+  // subaccount; split per-venue sizing later if staged math diverges.
+  const accountValue = createMemo(() => {
+    const hyperliquidValue = isHyperliquidConnected()
+      ? (accountSummaryQuery.data?.accountValue ?? 0)
+      : 0
+    const deriveValue = deriveBalanceQuery.data?.accountValue ?? 0
+    return hyperliquidValue + deriveValue
+  })
 
   const readonlyPortfolio = useReadonlyPortfolioState()
 
@@ -560,7 +559,7 @@ export const usePortfolioState = () => {
     if (deletedArchive[symbol] !== undefined) return
 
     if (kind === "perp") {
-      if (venue !== "hyperliquid") {
+      if (venue !== "hyperliquid" || !isHyperliquidConnected()) {
         return
       }
 
@@ -803,9 +802,6 @@ export const usePortfolioState = () => {
     },
     get currentCrossAccountLeverage() {
       return currentCrossAccountLeverage()
-    },
-    get targetNotional() {
-      return targetNotional()
     },
     get currentTotalNotional() {
       return currentTotalNotional()

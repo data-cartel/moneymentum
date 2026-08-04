@@ -43,7 +43,7 @@ const [portfolioSymbols, setPortfolioSymbols] = createSignal([
   "ETH",
   "SOL",
 ])
-const [allSymbols, setAllSymbols] = createSignal(["BTC", "ETH", "SOL", "DOGE"])
+const [hyperliquid, setAllSymbols] = createSignal(["BTC", "ETH", "SOL", "DOGE"])
 const [sides, setSides] = createSignal<Record<string, OrderSide>>({
   BTC: "buy",
   ETH: "buy",
@@ -62,7 +62,7 @@ const buildActions = (): PortfolioKeyboardActions => ({
     activatePanel(panelId)
   },
   getPortfolioSymbols: () => portfolioSymbols(),
-  getAllSymbolSymbols: () => allSymbols(),
+  getAllSymbolSymbols: () => hyperliquid(),
   isPinDialogOpen: () => pinDialogOpen(),
   connectionState: () => connectionState(),
   onRemove,
@@ -135,7 +135,7 @@ const Harness = (props: { children?: JSX.Element }) => (
     </div>
     <div
       tabIndex={0}
-      {...{ [PORTFOLIO_PANEL_ATTR]: "allSymbols" }}
+      {...{ [PORTFOLIO_PANEL_ATTR]: "hyperliquid" }}
       data-testid="all-symbols-panel"
     >
       <input
@@ -146,9 +146,10 @@ const Harness = (props: { children?: JSX.Element }) => (
     </div>
     <div
       tabIndex={0}
-      {...{ [PORTFOLIO_PANEL_ATTR]: "staged" }}
-      data-testid="staged-panel"
-    >
+      {...{ [PORTFOLIO_PANEL_ATTR]: "derive" }}
+      data-testid="derive-panel"
+    />
+    <div {...{ [PORTFOLIO_PANEL_ATTR]: "staged" }} data-testid="staged-panel">
       <input
         {...{ [STAGED_PIN_ATTR]: "" }}
         aria-label="Enter PIN"
@@ -181,14 +182,18 @@ describe("portfolio keyboard workflow", () => {
     render(() => <Harness />)
 
     fireEvent.keyDown(window, { key: "2" })
-    expect(activatePanel).toHaveBeenCalledWith("allSymbols")
-    expect(screen.getByTestId("focused-panel").textContent).toBe("allSymbols")
+    expect(activatePanel).toHaveBeenCalledWith("hyperliquid")
+    expect(screen.getByTestId("focused-panel").textContent).toBe("hyperliquid")
 
     activatePanel.mockClear()
     fireEvent.keyDown(window, { key: "2" })
     expect(activatePanel).not.toHaveBeenCalled()
 
     fireEvent.keyDown(window, { key: "3" })
+    expect(activatePanel).toHaveBeenCalledWith("derive")
+    expect(screen.getByTestId("focused-panel").textContent).toBe("derive")
+
+    fireEvent.keyDown(window, { key: "4" })
     expect(activatePanel).toHaveBeenCalledWith("staged")
     expect(screen.getByTestId("focused-panel").textContent).toBe("staged")
 
@@ -321,8 +326,9 @@ describe("portfolio keyboard workflow", () => {
   })
 
   it("submits staged with mod+Enter and clears with mod+shift+backspace", () => {
+    // key 4 focuses staged
     render(() => <Harness />)
-    fireEvent.keyDown(window, { key: "3" })
+    fireEvent.keyDown(window, { key: "4" })
 
     fireEvent.keyDown(window, { key: "Enter", metaKey: true })
     expect(onStagedSubmit).toHaveBeenCalled()
@@ -338,7 +344,7 @@ describe("portfolio keyboard workflow", () => {
   it("opens wallet pin dialog on mod+Enter when agent missing", () => {
     setConnectionState("agentMissing")
     render(() => <Harness />)
-    fireEvent.keyDown(window, { key: "3" })
+    fireEvent.keyDown(window, { key: "4" })
     fireEvent.keyDown(window, { key: "Enter", ctrlKey: true })
     expect(onOpenWalletPinDialog).toHaveBeenCalled()
     expect(onStagedSubmit).not.toHaveBeenCalled()
@@ -366,7 +372,7 @@ describe("portfolio keyboard workflow", () => {
     render(() => <Harness />)
 
     fireEvent.keyDown(window, { key: "2" })
-    expect(activatePanel).toHaveBeenCalledWith("allSymbols")
+    expect(activatePanel).toHaveBeenCalledWith("hyperliquid")
 
     fireEvent.keyDown(window, { key: "1" })
     expect(screen.getByTestId("selected-symbol").textContent).toBe("BTC")
@@ -406,7 +412,7 @@ describe("portfolio keyboard workflow", () => {
     expect(bar.textContent).toContain("search")
     expect(bar.textContent).not.toContain("weight")
 
-    fireEvent.keyDown(window, { key: "3" })
+    fireEvent.keyDown(window, { key: "4" })
     expect(bar.textContent).toContain("rebalance")
   })
 })

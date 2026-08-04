@@ -122,7 +122,7 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
     }
     switch (connectionState()) {
       case "walletDisconnected":
-        return true
+        return false
       case "agentMissing":
         return false
       case "agentLocked":

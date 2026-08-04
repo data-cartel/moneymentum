@@ -140,7 +140,25 @@ describe("WalletHeader", () => {
       globalAny.localStorage.clear()
     }
     mockUseWalletSettings.mockReturnValue({
-      data: () => null,
+      data: () => ({
+        isTestnet: true,
+        venues: [
+          {
+            id: "hyperliquid" as const,
+            connected: false,
+            address: null,
+            balanceUsd: null,
+            canRevoke: false,
+          },
+          {
+            id: "derive" as const,
+            connected: false,
+            address: null,
+            balanceUsd: null,
+            canRevoke: false,
+          },
+        ],
+      }),
       isConnected: () => false,
     })
     mockUseSwitchNetwork.mockReturnValue({
@@ -162,25 +180,40 @@ describe("WalletHeader", () => {
   })
 
   describe("display state", () => {
-    it("shows 'No wallet configured' when not connected", async () => {
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+    it("shows 'No wallet' when not connected", async () => {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
-      expect(screen.getByText("No wallet configured")).toBeInTheDocument()
+      expect(screen.getByText("No wallet")).toBeInTheDocument()
     })
 
     it("shows formatted account address when connected", async () => {
       await seedEncryptedSession("0x1234567890abcdef1234567890abcdef12345678")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0x1234567890abcdef1234567890abcdef12345678",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0x1234567890abcdef1234567890abcdef12345678",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -192,13 +225,28 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xTestAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xTestAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xTestAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -210,7 +258,7 @@ describe("WalletHeader", () => {
 
   describe("testnet switch", () => {
     it("is disabled when wallet is not connected", () => {
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -223,13 +271,28 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xTestAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xTestAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xTestAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -246,21 +309,30 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xTestAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xTestAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xTestAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(
-        () => (
-          <WalletHeader
-            handleDisconnect={() => {}}
-            handleNetworkSwitch={handleNetworkSwitch}
-          />
-        ),
-        { wrapper: createWrapper() },
-      )
+      render(() => <WalletHeader handleNetworkSwitch={handleNetworkSwitch} />, {
+        wrapper: createWrapper(),
+      })
 
       await user.click(screen.getByText("0xTest...ress"))
       await user.click(screen.getByRole("switch"))
@@ -278,21 +350,30 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xTestAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xTestAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xTestAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(
-        () => (
-          <WalletHeader
-            handleDisconnect={() => {}}
-            handleNetworkSwitch={handleNetworkSwitch}
-          />
-        ),
-        { wrapper: createWrapper() },
-      )
+      render(() => <WalletHeader handleNetworkSwitch={handleNetworkSwitch} />, {
+        wrapper: createWrapper(),
+      })
 
       await user.click(screen.getByText("0xTest...ress"))
       await user.click(screen.getByRole("switch"))
@@ -305,13 +386,13 @@ describe("WalletHeader", () => {
   })
 
   describe("disconnected and locked states", () => {
-    it("does not open a dialog when clicking 'No wallet configured'", async () => {
+    it("does not open a dialog when clicking 'No wallet'", async () => {
       const user = userEvent.setup()
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
-      await user.click(screen.getByText("No wallet configured"))
+      await user.click(screen.getByText("No wallet"))
 
       expect(screen.queryByText("Connect Wallet")).not.toBeInTheDocument()
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
@@ -330,8 +411,30 @@ describe("WalletHeader", () => {
           ...encrypted,
         }),
       )
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xLockedAccountAddress",
+              balanceUsd: null,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
+        }),
+        isConnected: () => true,
+      })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -353,8 +456,30 @@ describe("WalletHeader", () => {
           ...encrypted,
         }),
       )
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xLockedAccountAddress",
+              balanceUsd: null,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
+        }),
+        isConnected: () => true,
+      })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -373,19 +498,34 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
       await user.click(screen.getByText("0xConn...ress"))
 
-      expect(screen.getByText("Account")).toBeInTheDocument()
+      expect(screen.getByText("Hyperliquid account")).toBeInTheDocument()
       expect(screen.getByText("0xConnectedAccountAddress")).toBeInTheDocument()
     })
 
@@ -394,13 +534,28 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -419,18 +574,35 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
       await user.click(screen.getByText("0xConn...ress"))
-      await user.click(screen.getByRole("button", { name: "Copy address" }))
+      await user.click(
+        screen.getByRole("button", { name: "Copy Hyperliquid address" }),
+      )
 
       expect(writeText).toHaveBeenCalledWith("0xConnectedAccountAddress")
       expect(screen.getByText("Copied")).toBeInTheDocument()
@@ -447,18 +619,35 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
       await user.click(screen.getByText("0xConn...ress"))
-      await user.click(screen.getByRole("button", { name: "Copy address" }))
+      await user.click(
+        screen.getByRole("button", { name: "Copy Hyperliquid address" }),
+      )
 
       await waitFor(() => {
         expect(toast.error).toHaveBeenCalledWith(
@@ -472,13 +661,28 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -497,13 +701,28 @@ describe("WalletHeader", () => {
 
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -511,7 +730,7 @@ describe("WalletHeader", () => {
       await user.click(screen.getByRole("button", { name: "Disconnect" }))
 
       await waitFor(() => {
-        expect(toast.success).toHaveBeenCalledWith("Wallet disconnected")
+        expect(toast.success).toHaveBeenCalledWith("Hyperliquid disconnected")
       })
       expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
     })
@@ -522,13 +741,28 @@ describe("WalletHeader", () => {
 
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -552,13 +786,28 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -578,13 +827,28 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -602,8 +866,23 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
@@ -613,7 +892,7 @@ describe("WalletHeader", () => {
         isPending: true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -633,13 +912,28 @@ describe("WalletHeader", () => {
       await seedEncryptedSession("0xConnectedAccountAddress")
       mockUseWalletSettings.mockReturnValue({
         data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
           isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: true,
+              address: "0xConnectedAccountAddress",
+              balanceUsd: 100,
+              canRevoke: true,
+            },
+            {
+              id: "derive" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+          ],
         }),
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
@@ -660,13 +954,13 @@ describe("WalletHeader", () => {
 
   describe("wallet status styling", () => {
     it("renders disconnected state as non-interactive text", () => {
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader />, {
         wrapper: createWrapper(),
       })
 
-      const walletStatus = screen.getByText("No wallet configured")
-      expect(walletStatus.tagName).toBe("SPAN")
-      expect(walletStatus).not.toHaveClass("cursor-pointer")
+      const walletStatus = screen.getByText("No wallet")
+      expect(walletStatus.tagName).toBe("BUTTON")
+      expect(walletStatus).toHaveClass("cursor-pointer")
     })
   })
 })

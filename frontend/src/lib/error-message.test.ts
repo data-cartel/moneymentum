@@ -11,7 +11,11 @@ import {
   WalletConnectError,
   WalletDisconnectFailed,
 } from "@/services/wallet"
-import { DeriveRpcError, DeriveSessionMissing } from "@/services/deriveAccount"
+import {
+  DeriveRpcError,
+  DeriveSessionKeyInvalid,
+  DeriveSessionMissing,
+} from "@/services/deriveAccount"
 import { RevokeAgentFailed } from "@/services/hyperliquidAgent"
 
 const asFiberFailure = async (error: unknown): Promise<unknown> => {
@@ -134,12 +138,30 @@ describe("getErrorMessage", () => {
     )
   })
 
-  it("keeps the generic WalletConnectError message for other causes", async () => {
+  it("unwraps DeriveSessionKeyInvalid from WalletConnectError", async () => {
+    const failure = await asFiberFailure(
+      new WalletConnectError({
+        cause: new DeriveSessionKeyInvalid({ cause: new Error("bad key") }),
+      }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Invalid session private key. Paste a 0x-prefixed 32-byte hex key from derive.xyz Developers.",
+    )
+  })
+
+  it("surfaces plain Error cause text from WalletConnectError", async () => {
     const failure = await asFiberFailure(
       new WalletConnectError({ cause: new Error("encrypt failed") }),
     )
+    expect(getErrorMessage(failure)).toBe("encrypt failed")
+  })
+
+  it("falls back when WalletConnectError cause has no message", async () => {
+    const failure = await asFiberFailure(
+      new WalletConnectError({ cause: new Error("") }),
+    )
     expect(getErrorMessage(failure)).toBe(
-      "Failed to connect Hyperliquid agent. Please try again.",
+      "Failed to connect wallet credentials. Please try again.",
     )
   })
 

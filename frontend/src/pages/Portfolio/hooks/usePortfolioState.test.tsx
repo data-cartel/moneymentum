@@ -16,12 +16,14 @@ vi.mock("@/hooks/useTrading", () => ({
   useHyperliquidPositions: vi.fn(),
   useHyperliquidLeverageLimits: vi.fn(),
   useRebalanceHyperliquidPositions: vi.fn(),
+  useDeriveBalance: vi.fn(() => ({ data: undefined })),
 }))
 
 vi.mock("@/hooks/useWallet", () => ({
   useWallet: vi.fn(() => ({
     networkMode: () => "testnet",
     isConnected: () => true,
+    isHyperliquidConnected: () => true,
   })),
 }))
 
