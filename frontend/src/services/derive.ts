@@ -31,3 +31,14 @@ export const postActiveExpiry = (
     body: JSON.stringify({ expiry_unix: expiryUnix }),
     signal,
   })
+
+export const postActiveAsset = (
+  baseUrl: string,
+  asset: string,
+  signal?: AbortSignal,
+): Effect.Effect<void, NetworkError | HttpStatusError> =>
+  postEmpty(`${baseUrl}/derive/options/active_asset`, {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ asset }),
+    signal,
+  })

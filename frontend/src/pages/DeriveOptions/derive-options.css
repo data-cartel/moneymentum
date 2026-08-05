@@ -1,0 +1,248 @@
+/* Scoped Derive-like options chain chrome (dark board, bid/ask colors). */
+.derive-options {
+  --d-bg: #0a0b0d;
+  --d-surface: #101216;
+  --d-elevated: #161a20;
+  --d-border: #242830;
+  --d-border-soft: #1c1f26;
+  --d-muted: #7a8190;
+  --d-text: #e7e9ee;
+  --d-bid: #2dd4a0;
+  --d-ask: #ff6b8a;
+  --d-call: #34d399;
+  --d-put: #fb7185;
+  --d-itm: rgba(45, 212, 160, 0.075);
+  --d-chip: #1a1e26;
+  --d-chip-active: #243049;
+  --d-accent: #5b8cff;
+  background: var(--d-bg);
+  color: var(--d-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.derive-options .d-chip {
+  border: 1px solid var(--d-border);
+  background: var(--d-chip);
+  color: var(--d-muted);
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+  font-size: 11px;
+  line-height: 1.2;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.derive-options .d-chip:hover {
+  color: var(--d-text);
+  border-color: #343944;
+}
+
+.derive-options .d-chip-active {
+  background: var(--d-chip-active);
+  border-color: #3b4d78;
+  color: var(--d-text);
+}
+
+.derive-options .d-expiry {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--d-muted);
+  padding: 0.45rem 0.65rem 0.35rem;
+  font-size: 11px;
+}
+
+.derive-options .d-expiry:hover {
+  color: var(--d-text);
+}
+
+.derive-options .d-expiry-active {
+  color: var(--d-text);
+  border-bottom-color: var(--d-accent);
+}
+
+.derive-options .d-board {
+  border: 1px solid var(--d-border);
+  background: var(--d-surface);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.derive-options .d-chain-scroll {
+  background: var(--d-surface);
+}
+
+.derive-options .d-chain {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 11px;
+}
+
+.derive-options .d-chain thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--d-elevated);
+  border-bottom: 1px solid var(--d-border);
+  color: var(--d-muted);
+  font-weight: 500;
+  padding: 0.35rem 0.4rem;
+  white-space: nowrap;
+}
+
+.derive-options .d-chain tbody td {
+  padding: 0.28rem 0.4rem;
+  border-bottom: 1px solid var(--d-border-soft);
+  white-space: nowrap;
+}
+
+.derive-options .d-chain tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.derive-options .d-calls-label {
+  color: var(--d-call);
+  text-align: center;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+.derive-options .d-puts-label {
+  color: var(--d-put);
+  text-align: center;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+.derive-options .d-strike-col {
+  position: sticky;
+  z-index: 1;
+  background: var(--d-surface);
+  border-left: 1px solid var(--d-border);
+  border-right: 1px solid var(--d-border);
+  text-align: center !important;
+  font-weight: 600;
+  color: var(--d-text);
+  min-width: 8.5rem;
+}
+
+.derive-options thead .d-expiry-countdown {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--d-muted);
+  white-space: normal;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
+
+.derive-options thead .d-strike-col {
+  z-index: 3;
+  background: var(--d-elevated);
+}
+
+.derive-options .d-itm {
+  background: var(--d-itm);
+}
+
+.derive-options .d-spot-divider-row td {
+  position: relative;
+  height: 2rem;
+  padding: 0 !important;
+  border: none !important;
+  overflow: visible;
+  vertical-align: middle;
+  background: var(--d-surface);
+}
+
+.derive-options .d-spot-divider {
+  position: relative;
+  height: 2rem;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.derive-options .d-spot-divider-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1.5px dashed #3b82f6;
+}
+
+.derive-options .d-spot-badge {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #f8fafc;
+  padding: 0.2rem 0.65rem;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.45);
+}
+
+.derive-options .d-bid {
+  color: var(--d-bid);
+  font-weight: 500;
+}
+
+.derive-options .d-ask {
+  color: var(--d-ask);
+  font-weight: 500;
+}
+
+.derive-options .d-size,
+.derive-options .d-iv,
+.derive-options .d-delta {
+  color: var(--d-muted);
+}
+
+.derive-options .d-mark {
+  color: var(--d-text);
+}
+
+.derive-options .d-spot {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--d-text);
+}
+
+.derive-options .d-panel {
+  border: 1px solid var(--d-border);
+  background: var(--d-surface);
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.derive-options .d-toggle {
+  display: inline-flex;
+  border: 1px solid var(--d-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--d-chip);
+}
+
+.derive-options .d-toggle button {
+  padding: 0.3rem 0.7rem;
+  font-size: 11px;
+  color: var(--d-muted);
+  background: transparent;
+}
+
+.derive-options .d-toggle button.d-toggle-active {
+  background: var(--d-chip-active);
+  color: var(--d-text);
+}

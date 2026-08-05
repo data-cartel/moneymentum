@@ -25,9 +25,19 @@ use tracing::{debug, error, info, warn};
 use url::Url;
 
 const ATM_TOLERANCE: f64 = 0.005;
-const BTC_ASSET: &str = "BTC";
+const DEFAULT_ASSET: &str = "BTC";
 const TICKER_SLIM_INTERVAL_MS: &str = "100";
 const SUBSCRIBE_CHANNELS_PER_MESSAGE: usize = 25;
+const HTTP_USER_AGENT: &str = "moneymentum-derive/0.1";
+
+/// Commands the websocket hub consumes: switch expiry (unsubscribe old
+/// ticker_slim channels, subscribe new) or switch underlying asset (reload
+/// catalogue, then resubscribe to that asset's default expiry).
+#[derive(Debug, Clone)]
+enum HubCommand {
+    SetExpiry(i64),
+    SetAsset(String),
+}
 
 type DeriveWsWriter = futures::stream::SplitSink<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
@@ -65,6 +75,12 @@ struct InstrumentDto {
     instrument_name: String,
     is_active: bool,
     option_details: Option<OptionDetailsDto>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrencyDto {
+    currency: String,
+    instrument_types: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -222,6 +238,7 @@ pub struct ExpiryTabPayload {
 #[derive(Debug, Clone, Serialize)]
 pub struct OptionsBootstrap {
     pub asset: String,
+    pub assets: Vec<String>,
     pub default_expiry_unix: i64,
     pub tabs: Vec<ExpiryTabPayload>,
 }
@@ -229,6 +246,11 @@ pub struct OptionsBootstrap {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ActiveExpiryBody {
     pub expiry_unix: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ActiveAssetBody {
+    pub asset: String,
 }
 
 #[derive(Debug, Clone)]
@@ -265,6 +287,7 @@ impl Default for QuoteState {
     }
 }
 
+#[derive(Clone)]
 struct OptionsCatalogue {
     instrument_by_name: HashMap<String, InstrumentMeta>,
     names_by_expiry_unix: HashMap<i64, Vec<String>>,
@@ -272,10 +295,16 @@ struct OptionsCatalogue {
 }
 
 struct DeriveState {
-    catalogue: Arc<OptionsCatalogue>,
+    assets: Vec<String>,
+    active_asset: Arc<RwLock<String>>,
+    catalogue: Arc<RwLock<OptionsCatalogue>>,
     snapshot: Arc<RwLock<OptionsSnapshot>>,
     tx: broadcast::Sender<OptionsSnapshot>,
-    tab_command_tx: mpsc::Sender<i64>,
+    command_tx: mpsc::Sender<HubCommand>,
+}
+
+fn build_http_client() -> Result<Client, DeriveError> {
+    Ok(Client::builder().user_agent(HTTP_USER_AGENT).build()?)
 }
 
 fn apply_cors_headers(response: &mut Response) {
@@ -395,6 +424,103 @@ async fn fetch_options_catalogue(
     })
 }
 
+async fn currency_has_active_options(
+    http: &Client,
+    rest_base_url: &Url,
+    asset: &str,
+) -> Result<bool, DeriveError> {
+    let rest_url = format!(
+        "{}/public/get_instruments",
+        rest_base_url.as_str().trim_end_matches('/')
+    );
+    let payload = json!({
+        "currency": asset,
+        "instrument_type": "option",
+        "expired": false
+    });
+
+    let response: RpcResponse<Vec<InstrumentDto>> = http
+        .post(&rest_url)
+        .json(&payload)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    Ok(response
+        .result
+        .iter()
+        .any(|row| row.is_active && row.option_details.is_some()))
+}
+
+/// Currencies Derive lists as option underlyings that currently have at least
+/// one active expiry. Prefer [`DEFAULT_ASSET`] as the first entry when present.
+async fn fetch_option_assets(
+    http: &Client,
+    rest_base_url: &Url,
+) -> Result<Vec<String>, DeriveError> {
+    let rest_url = format!(
+        "{}/public/get_all_currencies",
+        rest_base_url.as_str().trim_end_matches('/')
+    );
+    let response: RpcResponse<Vec<CurrencyDto>> = http
+        .post(&rest_url)
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    let mut candidates = response
+        .result
+        .into_iter()
+        .filter(|row| {
+            row.instrument_types
+                .iter()
+                .any(|instrument_type| instrument_type == "option")
+        })
+        .map(|row| row.currency)
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.dedup();
+
+    let mut assets = Vec::new();
+    for currency in candidates {
+        match currency_has_active_options(http, rest_base_url, &currency).await {
+            Ok(true) => assets.push(currency),
+            Ok(false) => {
+                debug!(currency = %currency, "skipping option currency with no active expiries");
+            }
+            Err(error) => {
+                warn!(
+                    currency = %currency,
+                    error = %error,
+                    "skipping option currency after catalogue probe failed"
+                );
+            }
+        }
+    }
+
+    if assets.is_empty() {
+        return Err(DeriveError::Api {
+            message: "derive returned no option currencies with active instruments".to_string(),
+        });
+    }
+
+    if let Some(default_index) = assets.iter().position(|asset| asset == DEFAULT_ASSET) {
+        assets.swap(0, default_index);
+    }
+
+    debug!(
+        count = assets.len(),
+        ?assets,
+        "discovered derive option assets"
+    );
+    Ok(assets)
+}
+
 fn channel_name_for_instrument(instrument_name: &str) -> String {
     format!("ticker_slim.{instrument_name}.{TICKER_SLIM_INTERVAL_MS}")
 }
@@ -504,7 +630,11 @@ fn build_greeks(ticker: &TickerSlimDto) -> OptionGreeks {
     }
 }
 
-fn build_bootstrap(catalogue: &OptionsCatalogue, asset: &str) -> OptionsBootstrap {
+fn build_bootstrap(
+    catalogue: &OptionsCatalogue,
+    asset: &str,
+    assets: &[String],
+) -> OptionsBootstrap {
     let tabs = catalogue
         .expiry_unix_sorted_asc
         .iter()
@@ -524,6 +654,7 @@ fn build_bootstrap(catalogue: &OptionsCatalogue, asset: &str) -> OptionsBootstra
         .unwrap_or(0);
     OptionsBootstrap {
         asset: asset.to_string(),
+        assets: assets.to_vec(),
         default_expiry_unix,
         tabs,
     }
@@ -742,15 +873,20 @@ async fn process_message(
 
 async fn run_websocket_hub(
     ws_url: Url,
-    catalogue: Arc<OptionsCatalogue>,
-    asset: String,
+    rest_base_url: Url,
+    http: Client,
+    shared_catalogue: Arc<RwLock<OptionsCatalogue>>,
+    shared_asset: Arc<RwLock<String>>,
     snapshot: Arc<RwLock<OptionsSnapshot>>,
     broadcast_tx: broadcast::Sender<OptionsSnapshot>,
-    mut tab_command_rx: mpsc::Receiver<i64>,
+    mut command_rx: mpsc::Receiver<HubCommand>,
+    initial_asset: String,
     initial_expiry_unix: i64,
 ) -> Result<(), DeriveError> {
     let mut quote_map: HashMap<String, QuoteState> = HashMap::new();
     let mut active_expiry_unix = initial_expiry_unix;
+    let mut asset = initial_asset;
+    let mut catalogue = shared_catalogue.read().await.clone();
 
     'reconnect: loop {
         let (stream, _) = match connect_async(ws_url.as_str()).await {
@@ -772,7 +908,7 @@ async fn run_websocket_hub(
             &mut message_id,
             &mut subscribed_channels,
             &mut quote_map,
-            catalogue.as_ref(),
+            &catalogue,
             active_expiry_unix,
         )
         .await
@@ -784,7 +920,7 @@ async fn run_websocket_hub(
 
         publish_snapshot(
             asset.as_str(),
-            catalogue.as_ref(),
+            &catalogue,
             active_expiry_unix,
             &quote_map,
             snapshot.as_ref(),
@@ -794,36 +930,113 @@ async fn run_websocket_hub(
 
         'session: loop {
             tokio::select! {
-                maybe_command = tab_command_rx.recv() => {
-                    let Some(next_expiry_unix) = maybe_command else {
+                maybe_command = command_rx.recv() => {
+                    let Some(command) = maybe_command else {
                         return Ok(());
                     };
-                    if !catalogue.expiry_unix_sorted_asc.contains(&next_expiry_unix) {
-                        warn!(expiry_unix = next_expiry_unix, "ignored unknown expiry tab switch");
-                        continue;
+                    match command {
+                        HubCommand::SetExpiry(next_expiry_unix) => {
+                            if !catalogue.expiry_unix_sorted_asc.contains(&next_expiry_unix) {
+                                warn!(
+                                    expiry_unix = next_expiry_unix,
+                                    asset = %asset,
+                                    "ignored unknown expiry tab switch"
+                                );
+                                continue;
+                            }
+                            active_expiry_unix = next_expiry_unix;
+                            if let Err(error) = apply_tab_switch(
+                                &mut writer,
+                                &mut message_id,
+                                &mut subscribed_channels,
+                                &mut quote_map,
+                                &catalogue,
+                                active_expiry_unix,
+                            ).await {
+                                error!(error = %error, "derive tab switch failed");
+                                break 'session;
+                            }
+                            publish_snapshot(
+                                asset.as_str(),
+                                &catalogue,
+                                active_expiry_unix,
+                                &quote_map,
+                                snapshot.as_ref(),
+                                &broadcast_tx,
+                            )
+                            .await;
+                            debug!(
+                                expiry_unix = active_expiry_unix,
+                                asset = %asset,
+                                "derive tab switched and subscriptions updated"
+                            );
+                        }
+                        HubCommand::SetAsset(next_asset) => {
+                            if next_asset == asset {
+                                continue;
+                            }
+                            let next_catalogue = match fetch_options_catalogue(
+                                &http,
+                                &rest_base_url,
+                                &next_asset,
+                            )
+                            .await
+                            {
+                                Ok(next_catalogue) => next_catalogue,
+                                Err(error) => {
+                                    error!(
+                                        asset = %next_asset,
+                                        error = %error,
+                                        "derive asset catalogue fetch failed"
+                                    );
+                                    continue;
+                                }
+                            };
+                            let Some(next_expiry_unix) =
+                                next_catalogue.expiry_unix_sorted_asc.first().copied()
+                            else {
+                                warn!(
+                                    asset = %next_asset,
+                                    "ignored asset switch with no active expiries"
+                                );
+                                continue;
+                            };
+
+                            catalogue = next_catalogue;
+                            *shared_catalogue.write().await = catalogue.clone();
+                            asset = next_asset;
+                            *shared_asset.write().await = asset.clone();
+                            active_expiry_unix = next_expiry_unix;
+
+                            if let Err(error) = apply_tab_switch(
+                                &mut writer,
+                                &mut message_id,
+                                &mut subscribed_channels,
+                                &mut quote_map,
+                                &catalogue,
+                                active_expiry_unix,
+                            )
+                            .await
+                            {
+                                error!(error = %error, "derive asset switch subscriptions failed");
+                                break 'session;
+                            }
+                            publish_snapshot(
+                                asset.as_str(),
+                                &catalogue,
+                                active_expiry_unix,
+                                &quote_map,
+                                snapshot.as_ref(),
+                                &broadcast_tx,
+                            )
+                            .await;
+                            debug!(
+                                asset = %asset,
+                                expiry_unix = active_expiry_unix,
+                                "derive asset switched and subscriptions updated"
+                            );
+                        }
                     }
-                    active_expiry_unix = next_expiry_unix;
-                    if let Err(error) = apply_tab_switch(
-                        &mut writer,
-                        &mut message_id,
-                        &mut subscribed_channels,
-                        &mut quote_map,
-                        catalogue.as_ref(),
-                        active_expiry_unix,
-                    ).await {
-                        error!(error = %error, "derive tab switch failed");
-                        break 'session;
-                    }
-                    publish_snapshot(
-                        asset.as_str(),
-                        catalogue.as_ref(),
-                        active_expiry_unix,
-                        &quote_map,
-                        snapshot.as_ref(),
-                        &broadcast_tx,
-                    )
-                    .await;
-                    debug!(expiry_unix = active_expiry_unix, "derive tab switched and subscriptions updated");
                 }
                 maybe_message = reader.next() => {
                     let Some(message_result) = maybe_message else {
@@ -838,7 +1051,7 @@ async fn run_websocket_hub(
                     };
                     process_message(
                         message,
-                        catalogue.as_ref(),
+                        &catalogue,
                         asset.as_str(),
                         active_expiry_unix,
                         &mut quote_map,
@@ -860,7 +1073,9 @@ async fn health() -> &'static str {
 }
 
 async fn get_bootstrap(State(state): State<Arc<DeriveState>>) -> Json<OptionsBootstrap> {
-    Json(build_bootstrap(state.catalogue.as_ref(), BTC_ASSET))
+    let asset = state.active_asset.read().await.clone();
+    let catalogue = state.catalogue.read().await;
+    Json(build_bootstrap(&catalogue, asset.as_str(), &state.assets))
 }
 
 async fn get_snapshot(State(state): State<Arc<DeriveState>>) -> Json<OptionsSnapshot> {
@@ -902,63 +1117,93 @@ async fn post_active_expiry(
     State(state): State<Arc<DeriveState>>,
     Json(body): Json<ActiveExpiryBody>,
 ) -> Result<StatusCode, StatusCode> {
-    if !state
-        .catalogue
-        .expiry_unix_sorted_asc
-        .contains(&body.expiry_unix)
-    {
+    let catalogue = state.catalogue.read().await;
+    if !catalogue.expiry_unix_sorted_asc.contains(&body.expiry_unix) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    drop(catalogue);
+    state
+        .command_tx
+        .send(HubCommand::SetExpiry(body.expiry_unix))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Switch the active underlying asset. Reloads that currency's option
+/// catalogue and resubscribes websocket channels to its nearest expiry.
+///
+/// Same single-client caveat as [`post_active_expiry`].
+async fn post_active_asset(
+    State(state): State<Arc<DeriveState>>,
+    Json(body): Json<ActiveAssetBody>,
+) -> Result<StatusCode, StatusCode> {
+    if !state.assets.iter().any(|asset| asset == &body.asset) {
         return Err(StatusCode::BAD_REQUEST);
     }
     state
-        .tab_command_tx
-        .send(body.expiry_unix)
+        .command_tx
+        .send(HubCommand::SetAsset(body.asset))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn derive_app(config: DeriveConfig) -> Result<Router, DeriveError> {
-    let http = Client::new();
+    let http = build_http_client()?;
+    let assets = fetch_option_assets(&http, &config.rest_base_url).await?;
+    let default_asset = assets.first().cloned().ok_or_else(|| DeriveError::Api {
+        message: "derive option asset list was empty after discovery".to_string(),
+    })?;
+
     let catalogue =
-        Arc::new(fetch_options_catalogue(&http, &config.rest_base_url, BTC_ASSET).await?);
+        fetch_options_catalogue(&http, &config.rest_base_url, default_asset.as_str()).await?;
     let Some(default_expiry_unix) = catalogue.expiry_unix_sorted_asc.first().copied() else {
         error!(
-            asset = BTC_ASSET,
+            asset = %default_asset,
             "derive returned no active option expiries"
         );
         return Err(DeriveError::Api {
-            message: "derive returned no active option expiries".to_string(),
+            message: format!("derive returned no active option expiries for {default_asset}"),
         });
     };
 
     let empty_snapshot = build_tab_snapshot(
-        BTC_ASSET,
-        catalogue.as_ref(),
+        default_asset.as_str(),
+        &catalogue,
         default_expiry_unix,
         &HashMap::new(),
     );
     let snapshot = Arc::new(RwLock::new(empty_snapshot));
     let (broadcast_tx, _) = broadcast::channel(2048);
-    let (tab_command_tx, tab_command_rx) = mpsc::channel::<i64>(32);
+    let (command_tx, command_rx) = mpsc::channel::<HubCommand>(32);
+    let shared_catalogue = Arc::new(RwLock::new(catalogue));
+    let shared_asset = Arc::new(RwLock::new(default_asset.clone()));
 
     let state = Arc::new(DeriveState {
-        catalogue: Arc::clone(&catalogue),
+        assets,
+        active_asset: Arc::clone(&shared_asset),
+        catalogue: Arc::clone(&shared_catalogue),
         snapshot: Arc::clone(&snapshot),
         tx: broadcast_tx.clone(),
-        tab_command_tx,
+        command_tx,
     });
 
     let ws_url = config.ws_url.clone();
+    let rest_base_url = config.rest_base_url.clone();
     let snapshot_for_task = Arc::clone(&snapshot);
-    let catalogue_for_task = Arc::clone(&catalogue);
+    let http_for_task = http.clone();
     tokio::spawn(async move {
         if let Err(error) = run_websocket_hub(
             ws_url,
-            catalogue_for_task,
-            BTC_ASSET.to_string(),
+            rest_base_url,
+            http_for_task,
+            shared_catalogue,
+            shared_asset,
             snapshot_for_task,
             broadcast_tx,
-            tab_command_rx,
+            command_rx,
+            default_asset,
             default_expiry_unix,
         )
         .await
@@ -974,6 +1219,7 @@ pub async fn derive_app(config: DeriveConfig) -> Result<Router, DeriveError> {
         .route("/derive/options/snapshot", get(get_snapshot))
         .route("/derive/options/stream", get(stream_options))
         .route("/derive/options/active_expiry", post(post_active_expiry))
+        .route("/derive/options/active_asset", post(post_active_asset))
         .layer(middleware::from_fn(cors_middleware))
         .with_state(state);
     Ok(router)
@@ -1261,5 +1507,35 @@ mod tests {
         assert_eq!(snapshot.quotes.len(), 3);
         assert!((snapshot.risk.aggregate_delta - 0.4).abs() < 1e-9);
         assert_eq!(snapshot.scenarios.len(), 4);
+    }
+
+    #[test]
+    fn build_bootstrap_includes_assets_and_default_expiry() {
+        let expiry = Utc
+            .timestamp_opt(1_700_000_000, 0)
+            .single()
+            .expect("valid timestamp");
+        let meta = InstrumentMeta {
+            instrument_name: "ETH-C-3000".to_string(),
+            kind: OptionKind::Call,
+            strike: 3000.0,
+            expiry,
+            expiry_unix: 1_700_000_000,
+        };
+        let mut instrument_by_name = HashMap::new();
+        instrument_by_name.insert(meta.instrument_name.clone(), meta.clone());
+        let mut names_by_expiry_unix = HashMap::new();
+        names_by_expiry_unix.insert(1_700_000_000, vec![meta.instrument_name]);
+        let catalogue = OptionsCatalogue {
+            instrument_by_name,
+            names_by_expiry_unix,
+            expiry_unix_sorted_asc: vec![1_700_000_000],
+        };
+        let assets = vec!["BTC".to_string(), "ETH".to_string()];
+        let bootstrap = build_bootstrap(&catalogue, "ETH", &assets);
+        assert_eq!(bootstrap.asset, "ETH");
+        assert_eq!(bootstrap.assets, assets);
+        assert_eq!(bootstrap.default_expiry_unix, 1_700_000_000);
+        assert_eq!(bootstrap.tabs.len(), 1);
     }
 }

@@ -21,3 +21,9 @@ max_concurrent_requests = 1
 max_retries = 5             # so that Rust patiently retries on 429
 
 markets_refresh_token = "local-markets-refresh-token"
+
+# Derive (Lyra) options integration -- used by `derive_cli` on port 8100.
+[derive]
+port = 8100
+rest_base_url = "https://api.lyra.finance"
+ws_url = "wss://api.lyra.finance/ws"

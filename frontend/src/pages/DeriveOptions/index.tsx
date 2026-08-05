@@ -9,12 +9,14 @@ import {
   onMount,
   type Accessor,
 } from "solid-js"
+import { createStore, reconcile } from "solid-js/store"
 import * as Effect from "effect/Effect"
 
 import { fetchStreamChecked, NetworkError } from "@/lib/http"
 import { computeRollingVolatility } from "@/pages/Prototype/metrics/computations"
 import type { TimeSeriesPoint } from "@/pages/Prototype/metrics/registry"
 import * as deriveService from "@/services/derive"
+import "./derive-options.css"
 
 /**
  * Effect wraps an aborted fetch as a `NetworkError` whose `cause` is the
@@ -80,6 +82,32 @@ const EMPTY_TAB_RISK: PortfolioRiskSummary = {
   hedge_ratio_btc: 0,
 }
 
+const EMPTY_OPTION_GREEKS: OptionGreeks = {
+  bid_iv: null,
+  ask_iv: null,
+  delta: null,
+  gamma: null,
+  vega: null,
+  theta: null,
+  iv: null,
+  rho: null,
+  forward_price: null,
+  discount_factor: null,
+  option_model_mark: null,
+}
+
+/** Keep strike / instrument layout while zeroing prices for a switch skeleton. */
+const skeletonizeQuotes = (quotes: OptionQuote[]): OptionQuote[] =>
+  quotes.map(quote => ({
+    ...quote,
+    bid: null,
+    ask: null,
+    bid_size: null,
+    ask_size: null,
+    mark: null,
+    greeks: EMPTY_OPTION_GREEKS,
+  }))
+
 type ScenarioPoint = {
   pct_move: number
   estimated_pnl: number
@@ -100,34 +128,70 @@ export type OptionsSnapshot = {
 
 export type OptionsBootstrap = {
   asset: string
+  assets: string[]
   default_expiry_unix: ExpiryUnix
   tabs: Array<{ expiry_unix: ExpiryUnix; instruments: string[] }>
 }
 
 const formatNumber = (value: number | null, digits = 2): string =>
-  value === null ? "-" : value.toFixed(digits)
+  value === null ? "—" : value.toFixed(digits)
+
+const formatIvPercent = (value: number | null): string =>
+  value === null ? "—" : (value * 100).toFixed(1)
+
+const formatSpotBadge = (asset: string, spot: number): string =>
+  `${asset} $${spot.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+
+/** Derive-style expiry header: `Thu Aug 6 13h 12m 31s`. */
+const formatExpiryCountdown = (expiryUnix: number, nowMs: number): string => {
+  const expiryDate = new Date(expiryUnix * 1000)
+  const weekday = expiryDate.toLocaleDateString("en-US", { weekday: "short" })
+  const month = expiryDate.toLocaleDateString("en-US", { month: "short" })
+  const day = expiryDate.getDate()
+
+  const remainingSeconds = Math.max(0, Math.floor(expiryUnix - nowMs / 1000))
+  const days = Math.floor(remainingSeconds / 86_400)
+  const hours = Math.floor((remainingSeconds % 86_400) / 3_600)
+  const minutes = Math.floor((remainingSeconds % 3_600) / 60)
+  const seconds = remainingSeconds % 60
+
+  const remainingLabel =
+    days > 0
+      ? `${days}d ${hours}h ${minutes}m ${seconds}s`
+      : `${hours}h ${minutes}m ${seconds}s`
+
+  return `${weekday} ${month} ${day} ${remainingLabel}`
+}
+
+const OPTION_CHAIN_COLUMN_COUNT = 17
 
 const formatMoneyness = (value: Moneyness): string =>
   value === "in_the_money" ? "ITM" : value === "at_the_money" ? "ATM" : "OTM"
 
 const OPTION_CHAIN_LEG_COL_CLASSES = [
-  "w-[3.5rem]",
   "w-[3.25rem]",
-  "w-[4.5rem]",
-  "w-[4.5rem]",
-  "w-[4.5rem]",
+  "w-[3rem]",
+  "w-[4rem]",
+  "w-[4rem]",
+  "w-[4rem]",
+  "w-[3rem]",
   "w-[3.25rem]",
-  "w-[3.5rem]",
-  "w-[3.25rem]",
+  "w-[3rem]",
 ] as const
 
 const OPTION_CHAIN_COL_CLASSES = [
   ...OPTION_CHAIN_LEG_COL_CLASSES,
-  "w-[3.25rem]",
-  "w-[3.75rem]",
+  "w-[8.5rem]",
   ...OPTION_CHAIN_LEG_COL_CLASSES,
-  "w-[3.25rem]",
 ] as const
+
+const legCellClass = (moneyness: Moneyness | undefined, extra = ""): string => {
+  const itm = moneyness === "in_the_money" ? "d-itm" : ""
+  return `text-right ${itm} ${extra}`.trim()
+}
 
 const GREEKS_CHAIN_COL_CLASSES = [
   "w-[10.5rem]",
@@ -267,16 +331,11 @@ const priceTickDirection = (
 }
 
 const bidAskFlashClass = (
-  flashMap: Partial<Record<string, QuoteFlashEntry>>,
-  instrumentName: string | undefined,
   side: "bid" | "ask",
+  direction: QuotePriceFlash | undefined,
 ): string => {
-  const base =
-    "inline-block min-w-[2.75rem] rounded-sm px-1 py-px text-right tabular-nums"
-  if (instrumentName === undefined) {
-    return base
-  }
-  const direction = flashMap[instrumentName]?.[side]
+  const tone = side === "bid" ? "d-bid" : "d-ask"
+  const base = `inline-block min-w-[2.5rem] rounded-sm px-0.5 text-right tabular-nums ${tone}`
   if (direction === "up") {
     return `${base} quote-flash-up`
   }
@@ -286,6 +345,233 @@ const bidAskFlashClass = (
   return base
 }
 
+type StrikeLegs = {
+  call: OptionQuote | null
+  put: OptionQuote | null
+}
+
+type BoardKey = number | "spot"
+
+const FlashingPrice = (props: {
+  side: "bid" | "ask"
+  value: Accessor<number | null>
+  instrumentName: Accessor<string | undefined>
+  flashStore: Record<string, QuoteFlashEntry>
+}) => (
+  <span
+    class={bidAskFlashClass(
+      props.side,
+      (() => {
+        const instrumentName = props.instrumentName()
+        if (instrumentName === undefined) {
+          return undefined
+        }
+        return props.flashStore[instrumentName][props.side]
+      })(),
+    )}
+  >
+    {formatNumber(props.value())}
+  </span>
+)
+
+const SpotDividerRow = (props: {
+  asset: Accessor<string>
+  spot: Accessor<number>
+}) => (
+  <tr class="d-spot-divider-row">
+    <td colspan={OPTION_CHAIN_COLUMN_COUNT}>
+      <div class="d-spot-divider">
+        <div class="d-spot-divider-line" />
+        <div class="d-spot-badge">
+          {formatSpotBadge(props.asset(), props.spot())}
+        </div>
+      </div>
+    </td>
+  </tr>
+)
+
+type ExpiryTab = {
+  unix: ExpiryUnix
+  iso: string
+}
+
+const formatExpiryTabLabel = (iso: string): string =>
+  new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "2-digit",
+  })
+
+const expiryTabsEqual = (left: ExpiryTab[], right: ExpiryTab[]): boolean =>
+  left.length === right.length &&
+  left.every(
+    (tab, index) =>
+      tab.unix === right[index]?.unix && tab.iso === right[index]?.iso,
+  )
+
+const stabilizeExpiryTabs = (
+  previous: ExpiryTab[] | undefined,
+  next: ExpiryTab[],
+): ExpiryTab[] => {
+  if (previous !== undefined && expiryTabsEqual(previous, next)) {
+    return previous
+  }
+  return next.map(tab => {
+    const reused = previous?.find(
+      entry => entry.unix === tab.unix && entry.iso === tab.iso,
+    )
+    return reused ?? tab
+  })
+}
+
+const ExpiryTabButtons = (props: {
+  tabs: Accessor<ExpiryTab[]>
+  selectedUnix: Accessor<ExpiryUnix | null>
+  onSelect: (unix: ExpiryUnix) => void
+}) => (
+  <For each={props.tabs()}>
+    {tab => (
+      <button
+        type="button"
+        classList={{
+          "d-expiry": true,
+          "d-expiry-active": props.selectedUnix() === tab.unix,
+        }}
+        onMouseDown={() => {
+          props.onSelect(tab.unix)
+        }}
+        onClick={(
+          event: MouseEvent & {
+            currentTarget: HTMLButtonElement
+            target: Element
+          },
+        ) => {
+          if (event.detail === 0) {
+            props.onSelect(tab.unix)
+          }
+        }}
+      >
+        {formatExpiryTabLabel(tab.iso)}
+      </button>
+    )}
+  </For>
+)
+
+const ExpiryCountdownHeader = (props: {
+  expiryUnix: Accessor<ExpiryUnix | null>
+}) => {
+  const [nowMs, setNowMs] = createSignal(Date.now())
+
+  onMount(() => {
+    const tickId = window.setInterval(() => {
+      setNowMs(Date.now())
+    }, 1000)
+    onCleanup(() => {
+      window.clearInterval(tickId)
+    })
+  })
+
+  return (
+    <th class="d-strike-col d-expiry-countdown">
+      {(() => {
+        const expiryUnix = props.expiryUnix()
+        if (expiryUnix === null) {
+          return "—"
+        }
+        return formatExpiryCountdown(expiryUnix, nowMs())
+      })()}
+    </th>
+  )
+}
+
+const ChainStrikeRow = (props: {
+  strike: number
+  rowByStrike: Accessor<Map<number, StrikeLegs>>
+  flashStore: Record<string, QuoteFlashEntry>
+}) => {
+  const call = createMemo(
+    () => props.rowByStrike().get(props.strike)?.call ?? null,
+  )
+  const put = createMemo(
+    () => props.rowByStrike().get(props.strike)?.put ?? null,
+  )
+
+  return (
+    <tr>
+      <td class={legCellClass(call()?.moneyness, "d-size")}>
+        {formatNumber(call()?.bid_size ?? null, 2)}
+      </td>
+      <td class={legCellClass(call()?.moneyness, "d-iv")}>
+        {formatIvPercent(call()?.greeks.bid_iv ?? null)}
+      </td>
+      <td class={legCellClass(call()?.moneyness)}>
+        <FlashingPrice
+          side="bid"
+          value={() => call()?.bid ?? null}
+          instrumentName={() => call()?.instrument_name}
+          flashStore={props.flashStore}
+        />
+      </td>
+      <td class={legCellClass(call()?.moneyness, "d-mark")}>
+        {formatNumber(call()?.mark ?? null)}
+      </td>
+      <td class={legCellClass(call()?.moneyness)}>
+        <FlashingPrice
+          side="ask"
+          value={() => call()?.ask ?? null}
+          instrumentName={() => call()?.instrument_name}
+          flashStore={props.flashStore}
+        />
+      </td>
+      <td class={legCellClass(call()?.moneyness, "d-iv")}>
+        {formatIvPercent(call()?.greeks.ask_iv ?? null)}
+      </td>
+      <td class={legCellClass(call()?.moneyness, "d-size")}>
+        {formatNumber(call()?.ask_size ?? null, 2)}
+      </td>
+      <td class={legCellClass(call()?.moneyness, "d-delta")}>
+        {formatNumber(call()?.greeks.delta ?? null, 3)}
+      </td>
+
+      <td class="d-strike-col">{formatNumber(props.strike, 0)}</td>
+
+      <td class={legCellClass(put()?.moneyness, "d-delta")}>
+        {formatNumber(put()?.greeks.delta ?? null, 3)}
+      </td>
+      <td class={legCellClass(put()?.moneyness, "d-size")}>
+        {formatNumber(put()?.ask_size ?? null, 2)}
+      </td>
+      <td class={legCellClass(put()?.moneyness, "d-iv")}>
+        {formatIvPercent(put()?.greeks.ask_iv ?? null)}
+      </td>
+      <td class={legCellClass(put()?.moneyness)}>
+        <FlashingPrice
+          side="ask"
+          value={() => put()?.ask ?? null}
+          instrumentName={() => put()?.instrument_name}
+          flashStore={props.flashStore}
+        />
+      </td>
+      <td class={legCellClass(put()?.moneyness, "d-mark")}>
+        {formatNumber(put()?.mark ?? null)}
+      </td>
+      <td class={legCellClass(put()?.moneyness)}>
+        <FlashingPrice
+          side="bid"
+          value={() => put()?.bid ?? null}
+          instrumentName={() => put()?.instrument_name}
+          flashStore={props.flashStore}
+        />
+      </td>
+      <td class={legCellClass(put()?.moneyness, "d-iv")}>
+        {formatIvPercent(put()?.greeks.bid_iv ?? null)}
+      </td>
+      <td class={legCellClass(put()?.moneyness, "d-size")}>
+        {formatNumber(put()?.bid_size ?? null, 2)}
+      </td>
+    </tr>
+  )
+}
+
 const DeriveOptionsPage = () => {
   const [snapshot, setSnapshot] = createSignal<OptionsSnapshot | null>(null)
   const [bootstrap, setBootstrap] = createSignal<OptionsBootstrap | null>(null)
@@ -293,11 +579,16 @@ const DeriveOptionsPage = () => {
   const [isLoading, setIsLoading] = createSignal(true)
   const [selectedExpiryUnix, setSelectedExpiryUnix] =
     createSignal<ExpiryUnix | null>(null)
+  const [selectedAsset, setSelectedAsset] = createSignal<string | null>(null)
   const [smileKind, setSmileKind] = createSignal<"C" | "P" | "both">("both")
   const [tableView, setTableView] = createSignal<"chain" | "greeks">("chain")
-  const [flashByInstrument, setFlashByInstrument] = createSignal<
-    Partial<Record<string, QuoteFlashEntry>>
+  const [flashByInstrument, setFlashByInstrument] = createStore<
+    Record<string, QuoteFlashEntry>
   >({})
+
+  const clearQuoteFlash = (): void => {
+    setFlashByInstrument(reconcile({}))
+  }
   const [realizedVolAnnual30d, setRealizedVolAnnual30d] = createSignal<
     number | null
   >(null)
@@ -321,31 +612,53 @@ const DeriveOptionsPage = () => {
     blockStreamUntilExpiryUnix: ExpiryUnix | null
   } = { postAbort: undefined, blockStreamUntilExpiryUnix: null }
 
-  const expiryTabList = createMemo(() => {
-    const current = snapshot()
-    let tabs: Array<{ unix: ExpiryUnix; iso: string }> = []
-    if (current !== null && current.expiry_unixes.length > 0) {
-      tabs = current.expiry_unixes.map((unix, index) => ({
-        unix,
-        iso: current.expiry_dates[index] ?? new Date(unix * 1000).toISOString(),
-      }))
-    } else {
-      const boot = bootstrap()
-      if (boot !== null && boot.tabs.length > 0) {
-        tabs = boot.tabs.map(tab => ({
-          unix: tab.expiry_unix,
-          iso: new Date(tab.expiry_unix * 1000).toISOString(),
-        }))
-      }
+  const assetSwitchInFlightRef: {
+    postAbort: AbortController | undefined
+    blockStreamUntilAsset: string | null
+  } = { postAbort: undefined, blockStreamUntilAsset: null }
+
+  const assetTabList = createMemo(() => {
+    const boot = bootstrap()
+    if (boot !== null && boot.assets.length > 0) {
+      return boot.assets
     }
-    return [...tabs].sort((left, right) => left.unix - right.unix)
+    const current = snapshot()
+    if (current !== null) {
+      return [current.asset]
+    }
+    return [] as string[]
   })
 
-  const formatExpiryTabLabel = (iso: string): string =>
-    new Date(iso).toLocaleDateString("en-US", {
-      month: "short",
-      day: "2-digit",
-    })
+  const expiryTabList = createMemo(
+    (previous: ExpiryTab[] | undefined): ExpiryTab[] => {
+      const current = snapshot()
+      let tabs: ExpiryTab[] = []
+      if (current !== null && current.expiry_unixes.length > 0) {
+        tabs = current.expiry_unixes.map((unix, index) => ({
+          unix,
+          iso:
+            current.expiry_dates[index] ?? new Date(unix * 1000).toISOString(),
+        }))
+      } else {
+        const boot = bootstrap()
+        if (boot !== null && boot.tabs.length > 0) {
+          tabs = boot.tabs.map(tab => ({
+            unix: tab.expiry_unix,
+            iso: new Date(tab.expiry_unix * 1000).toISOString(),
+          }))
+        }
+      }
+      return stabilizeExpiryTabs(
+        previous,
+        [...tabs].sort((left, right) => left.unix - right.unix),
+      )
+    },
+  )
+
+  const expiryCountdownUnix = createMemo(
+    (): ExpiryUnix | null =>
+      selectedExpiryUnix() ?? snapshot()?.active_expiry_unix ?? null,
+  )
 
   const postActiveExpiry = (
     expiryUnix: ExpiryUnix,
@@ -355,7 +668,43 @@ const DeriveOptionsPage = () => {
       deriveService.postActiveExpiry(deriveBaseUrl, expiryUnix, signal),
     )
 
+  const postActiveAsset = (
+    asset: string,
+    signal?: AbortSignal,
+  ): Promise<void> =>
+    Effect.runPromise(
+      deriveService.postActiveAsset(deriveBaseUrl, asset, signal),
+    )
+
+  const clearQuotesForPendingSwitch = (
+    nextExpiryUnix: ExpiryUnix | null,
+    nextAsset: string | null,
+  ): void => {
+    const snap = snapshot()
+    if (snap === null) {
+      return
+    }
+    // Keep previous strikes / instruments so the chain does not collapse;
+    // prices show as em-dashes until the matching stream snapshot arrives.
+    setSnapshot({
+      ...snap,
+      asset: nextAsset ?? snap.asset,
+      active_expiry_unix: nextExpiryUnix ?? snap.active_expiry_unix,
+      updated_at: new Date().toISOString(),
+      quotes: skeletonizeQuotes(snap.quotes),
+      risk: EMPTY_TAB_RISK,
+      scenarios: snap.scenarios.map(scenario => ({
+        ...scenario,
+        estimated_pnl: 0,
+      })),
+    })
+    clearQuoteFlash()
+  }
+
   const switchExpiryTab = (expiryUnix: ExpiryUnix): void => {
+    if (assetSwitchInFlightRef.blockStreamUntilAsset !== null) {
+      return
+    }
     const currentSnap = snapshot()
     if (
       selectedExpiryUnix() === expiryUnix &&
@@ -374,22 +723,7 @@ const DeriveOptionsPage = () => {
     expirySwitchInFlightRef.blockStreamUntilExpiryUnix = expiryUnix
 
     setSelectedExpiryUnix(expiryUnix)
-
-    const snap = snapshot()
-    if (snap !== null) {
-      setSnapshot({
-        ...snap,
-        active_expiry_unix: expiryUnix,
-        updated_at: new Date().toISOString(),
-        quotes: [],
-        strikes: [],
-        risk: EMPTY_TAB_RISK,
-        scenarios: snap.scenarios.map(scenario => ({
-          ...scenario,
-          estimated_pnl: 0,
-        })),
-      })
-    }
+    clearQuotesForPendingSwitch(expiryUnix, null)
 
     void postActiveExpiry(expiryUnix, controller.signal)
       .then(() => {
@@ -408,10 +742,57 @@ const DeriveOptionsPage = () => {
       })
   }
 
+  const switchAssetTab = (asset: string): void => {
+    const currentSnap = snapshot()
+    if (
+      selectedAsset() === asset &&
+      currentSnap !== null &&
+      currentSnap.asset === asset &&
+      currentSnap.quotes.length > 0
+    ) {
+      return
+    }
+
+    const previousAsset = selectedAsset()
+    const previousExpiryUnix = selectedExpiryUnix()
+
+    assetSwitchInFlightRef.postAbort?.abort()
+    expirySwitchInFlightRef.postAbort?.abort()
+    const controller = new AbortController()
+    assetSwitchInFlightRef.postAbort = controller
+    assetSwitchInFlightRef.blockStreamUntilAsset = asset
+    expirySwitchInFlightRef.blockStreamUntilExpiryUnix = null
+
+    setSelectedAsset(asset)
+    setSelectedExpiryUnix(null)
+    quotePriceHistoryRef.map.clear()
+    quotePriceHistoryRef.activeExpiryUnix = null
+    clearQuotesForPendingSwitch(null, asset)
+    setIsLoading(true)
+
+    void postActiveAsset(asset, controller.signal)
+      .then(() => {
+        setErrorMessage(null)
+      })
+      .catch((error: unknown) => {
+        const aborted = isAbortError(error)
+        if (aborted) {
+          return
+        }
+        assetSwitchInFlightRef.blockStreamUntilAsset = null
+        setSelectedAsset(previousAsset)
+        setSelectedExpiryUnix(previousExpiryUnix)
+        setIsLoading(false)
+        setErrorMessage(
+          error instanceof Error ? error.message : "Asset switch failed",
+        )
+      })
+  }
+
   const activeExpiryLabel = createMemo(() => {
     const unix = selectedExpiryUnix()
     if (unix === null) {
-      return "-"
+      return "—"
     }
     const tab = expiryTabList().find(entry => entry.unix === unix)
     if (tab !== undefined) {
@@ -482,6 +863,31 @@ const DeriveOptionsPage = () => {
       .map(([strike, row]) => ({ strike, call: row.call, put: row.put }))
   })
 
+  const rowByStrike = createMemo(() => {
+    const map = new Map<number, StrikeLegs>()
+    for (const row of chainRows()) {
+      map.set(row.strike, { call: row.call, put: row.put })
+    }
+    return map
+  })
+
+  const boardKeys = createMemo((): BoardKey[] => {
+    const strikes = chainRows().map(row => row.strike)
+    const current = snapshot()
+    if (current === null || current.spot_price <= 0 || strikes.length === 0) {
+      return strikes
+    }
+
+    const spot = current.spot_price
+    const insertAt = strikes.findIndex(strike => strike >= spot)
+    const spotIndex = insertAt === -1 ? strikes.length : insertAt
+
+    return [...strikes.slice(0, spotIndex), "spot", ...strikes.slice(spotIndex)]
+  })
+
+  const spotAsset = createMemo(() => snapshot()?.asset ?? selectedAsset() ?? "")
+  const spotPrice = createMemo(() => snapshot()?.spot_price ?? 0)
+
   const greeksRows = createMemo(() => {
     const current = snapshot()
     if (!current) {
@@ -518,7 +924,7 @@ const DeriveOptionsPage = () => {
           ask: quote.ask,
         })
       }
-      setFlashByInstrument({})
+      setFlashByInstrument(reconcile({}))
       return
     }
 
@@ -552,23 +958,14 @@ const DeriveOptionsPage = () => {
       if (flashClearTimerRef.id !== undefined) {
         window.clearTimeout(flashClearTimerRef.id)
       }
-      const previousFlash = flashByInstrument()
-      const mergedFlash: Partial<Record<string, QuoteFlashEntry>> = {
-        ...previousFlash,
-      }
-      for (const name of Object.keys(nextFlash)) {
-        const tick = nextFlash[name]
-        if (tick === undefined) {
-          continue
-        }
-        mergedFlash[name] = {
-          ...mergedFlash[name],
+      for (const [instrumentName, tick] of Object.entries(nextFlash)) {
+        setFlashByInstrument(instrumentName, previous => ({
+          ...previous,
           ...tick,
-        }
+        }))
       }
-      setFlashByInstrument(mergedFlash)
       flashClearTimerRef.id = window.setTimeout(() => {
-        setFlashByInstrument({})
+        setFlashByInstrument(reconcile({}))
         flashClearTimerRef.id = undefined
       }, 950)
     }
@@ -576,7 +973,8 @@ const DeriveOptionsPage = () => {
 
   const smileGeometry = createMemo(() => {
     const points = ivSmilePoints()
-    const realizedAnnual = realizedVolAnnual30d()
+    const realizedAnnual =
+      selectedAsset() === "BTC" ? realizedVolAnnual30d() : null
     const width = 760
     const height = 260
     const paddingLeft = 52
@@ -676,9 +1074,40 @@ const DeriveOptionsPage = () => {
           return
         }
         const next = parseJsonUnknown(event.data) as OptionsSnapshot
-        const pending = expirySwitchInFlightRef.blockStreamUntilExpiryUnix
-        if (pending !== null) {
-          if (next.active_expiry_unix !== pending) {
+        const pendingAsset = assetSwitchInFlightRef.blockStreamUntilAsset
+        if (pendingAsset !== null) {
+          if (next.asset !== pendingAsset) {
+            return
+          }
+          assetSwitchInFlightRef.blockStreamUntilAsset = null
+          setSelectedAsset(next.asset)
+          setSelectedExpiryUnix(next.active_expiry_unix)
+          quotePriceHistoryRef.map.clear()
+          quotePriceHistoryRef.activeExpiryUnix = next.active_expiry_unix
+          setFlashByInstrument(reconcile({}))
+          setBootstrap(previous =>
+            previous === null
+              ? previous
+              : {
+                  ...previous,
+                  asset: next.asset,
+                  default_expiry_unix: next.active_expiry_unix,
+                  tabs: next.expiry_unixes.map(expiryUnix => ({
+                    expiry_unix: expiryUnix,
+                    instruments: [],
+                  })),
+                },
+          )
+          setSnapshot(next)
+          setErrorMessage(null)
+          return
+        }
+        if (next.asset !== selectedAsset()) {
+          return
+        }
+        const pendingExpiry = expirySwitchInFlightRef.blockStreamUntilExpiryUnix
+        if (pendingExpiry !== null) {
+          if (next.active_expiry_unix !== pendingExpiry) {
             return
           }
           expirySwitchInFlightRef.blockStreamUntilExpiryUnix = null
@@ -752,6 +1181,7 @@ const DeriveOptionsPage = () => {
           return
         }
         setBootstrap(boot)
+        setSelectedAsset(boot.asset)
         const defaultUnix = boot.default_expiry_unix
         setSelectedExpiryUnix(defaultUnix)
         await postActiveExpiry(defaultUnix, controller.signal)
@@ -763,6 +1193,7 @@ const DeriveOptionsPage = () => {
           return
         }
         setSnapshot(data)
+        setSelectedAsset(data.asset)
         setSelectedExpiryUnix(data.active_expiry_unix)
         setErrorMessage(null)
         startStream()
@@ -791,429 +1222,315 @@ const DeriveOptionsPage = () => {
       expirySwitchInFlightRef.postAbort?.abort()
       expirySwitchInFlightRef.postAbort = undefined
       expirySwitchInFlightRef.blockStreamUntilExpiryUnix = null
+      assetSwitchInFlightRef.postAbort?.abort()
+      assetSwitchInFlightRef.postAbort = undefined
+      assetSwitchInFlightRef.blockStreamUntilAsset = null
       streamRef?.close()
       streamRef = null
     })
   })
 
   return (
-    <div class="h-screen overflow-auto bg-background p-4 text-[11px] text-foreground">
-      <div class="mx-auto max-w-[1600px] space-y-4">
-        <h1 class="text-sm font-semibold">BTC Options Realtime Monitor</h1>
-
-        <Show when={snapshot()}>
-          <div class="rounded border border-border p-3">
-            <div class="mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
-              <div class="min-w-0 flex-1">
-                <div class="mb-2 text-xs font-semibold text-muted-foreground">
-                  Expiry
-                </div>
-                <div class="flex flex-wrap gap-1">
-                  <For each={expiryTabList()}>
-                    {tab => (
-                      <button
-                        type="button"
-                        class={`rounded border px-2 py-1 text-xs ${
-                          selectedExpiryUnix() === tab.unix
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border text-muted-foreground"
-                        }`}
-                        onMouseDown={() => {
-                          switchExpiryTab(tab.unix)
-                        }}
-                        onClick={(
-                          event: MouseEvent & {
-                            currentTarget: HTMLButtonElement
-                            target: Element
-                          },
-                        ) => {
-                          if (event.detail === 0) {
-                            switchExpiryTab(tab.unix)
-                          }
-                        }}
-                      >
-                        {formatExpiryTabLabel(tab.iso)}
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </div>
-              <Show when={snapshot()}>
-                {(getSnapshot: Accessor<OptionsSnapshot>) => (
-                  <div class="shrink-0 text-xs text-muted-foreground whitespace-nowrap">
-                    Updated:{" "}
-                    {new Date(getSnapshot().updated_at).toLocaleTimeString()}
-                  </div>
-                )}
-              </Show>
+    <div class="derive-options h-screen overflow-auto p-3 text-[11px]">
+      <div class="mx-auto flex max-w-[1680px] flex-col gap-3">
+        <header class="flex flex-wrap items-end justify-between gap-3">
+          <div class="min-w-0 space-y-2">
+            <div class="text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--d-muted)]">
+              Options
             </div>
-
-            <div class="mb-2 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-              <div class="flex items-center gap-3">
-                <div class="text-xs font-semibold">Option Chain</div>
-                <div class="inline-flex rounded border border-border p-0.5 text-xs">
-                  <button
-                    type="button"
-                    class={`rounded px-2 py-1 ${tableView() === "chain" ? "bg-muted text-foreground" : "text-muted-foreground"}`}
-                    onClick={() => {
-                      setTableView("chain")
-                    }}
-                  >
-                    Prices
-                  </button>
-                  <button
-                    type="button"
-                    class={`rounded px-2 py-1 ${tableView() === "greeks" ? "bg-muted text-foreground" : "text-muted-foreground"}`}
-                    onClick={() => {
-                      setTableView("greeks")
-                    }}
-                  >
-                    Greeks
-                  </button>
-                </div>
+            <div class="flex flex-wrap items-center gap-3">
+              <div class="flex flex-wrap gap-1">
+                <For each={assetTabList()}>
+                  {asset => (
+                    <button
+                      type="button"
+                      class={`d-chip ${selectedAsset() === asset ? "d-chip-active" : ""}`}
+                      onMouseDown={() => {
+                        switchAssetTab(asset)
+                      }}
+                      onClick={(
+                        event: MouseEvent & {
+                          currentTarget: HTMLButtonElement
+                          target: Element
+                        },
+                      ) => {
+                        if (event.detail === 0) {
+                          switchAssetTab(asset)
+                        }
+                      }}
+                    >
+                      {asset}
+                    </button>
+                  )}
+                </For>
               </div>
-              <div class="text-xs text-muted-foreground">
-                Expiry:{" "}
-                <span class="font-medium text-foreground">
-                  {activeExpiryLabel()}
+              <div class="d-spot">
+                {formatNumber(snapshot()?.spot_price ?? null, 2)}
+              </div>
+              <div class="text-[var(--d-muted)]">
+                {selectedAsset() ?? "—"} / USDC
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-3 text-[var(--d-muted)]">
+            <Show when={isLoading()}>
+              <span>Loading chain...</span>
+            </Show>
+            <Show when={snapshot()}>
+              {(getSnapshot: Accessor<OptionsSnapshot>) => (
+                <span>
+                  Updated{" "}
+                  {new Date(getSnapshot().updated_at).toLocaleTimeString()}
                 </span>
-              </div>
-            </div>
-            <Show when={tableView() === "chain"}>
-              <div class="overflow-x-auto">
-                <table class="table-fixed w-full min-w-[1040px] border-collapse text-xs tabular-nums [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
-                  <colgroup>
-                    <For each={[...OPTION_CHAIN_COL_CLASSES]}>
-                      {widthClass => <col class={widthClass} />}
-                    </For>
-                  </colgroup>
-                  <thead>
-                    <tr class="border-b border-border text-muted-foreground">
-                      <th class="p-1 text-left" colSpan={8}>
-                        Calls
-                      </th>
-                      <th class="p-1 text-center">Strike</th>
-                      <th class="p-1 text-center border-x border-border">
-                        Strike
-                      </th>
-                      <th class="p-1 text-left" colSpan={8}>
-                        Puts
-                      </th>
-                      <th class="p-1 text-center">Strike</th>
-                    </tr>
-                    <tr class="border-b border-border text-left text-muted-foreground">
-                      <th class="p-1 text-right">Bid Size</th>
-                      <th class="p-1 text-right">Bid IV</th>
-                      <th class="p-1 text-right">Bid</th>
-                      <th class="p-1 text-right">Mark</th>
-                      <th class="p-1 text-right">Ask</th>
-                      <th class="p-1 text-right">Ask IV</th>
-                      <th class="p-1 text-right">Ask Size</th>
-                      <th class="p-1 text-right">Delta</th>
-                      <th class="p-1 text-right">Strike</th>
-                      <th class="p-1 text-right border-x border-border">
-                        Strike
-                      </th>
-                      <th class="p-1 text-right">Bid Size</th>
-                      <th class="p-1 text-right">Bid IV</th>
-                      <th class="p-1 text-right">Bid</th>
-                      <th class="p-1 text-right">Mark</th>
-                      <th class="p-1 text-right">Ask</th>
-                      <th class="p-1 text-right">Ask IV</th>
-                      <th class="p-1 text-right">Ask Size</th>
-                      <th class="p-1 text-right">Delta</th>
-                      <th class="p-1 text-right">Strike</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <Index each={chainRows()}>
-                      {row => (
-                        <tr class="border-b border-border/50">
-                          <td
-                            class={`p-1 text-right ${row().call?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().call?.bid_size ?? null, 4)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().call?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().call?.greeks.bid_iv ?? null, 4)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().call?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            <span
-                              class={bidAskFlashClass(
-                                flashByInstrument(),
-                                row().call?.instrument_name,
-                                "bid",
-                              )}
-                            >
-                              {formatNumber(row().call?.bid ?? null)}
-                            </span>
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().call?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().call?.mark ?? null)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().call?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            <span
-                              class={bidAskFlashClass(
-                                flashByInstrument(),
-                                row().call?.instrument_name,
-                                "ask",
-                              )}
-                            >
-                              {formatNumber(row().call?.ask ?? null)}
-                            </span>
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().call?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().call?.greeks.ask_iv ?? null, 4)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().call?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().call?.ask_size ?? null, 4)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().call?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().call?.greeks.delta ?? null, 4)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().call?.moneyness === "in_the_money" ? "bg-emerald-500/10 text-emerald-300" : "text-muted-foreground"}`}
-                          >
-                            {formatNumber(row().call?.strike ?? null, 0)}
-                          </td>
-
-                          <td class="p-1 text-right border-x border-border font-semibold">
-                            {formatNumber(row().strike, 0)}
-                          </td>
-
-                          <td
-                            class={`p-1 text-right ${row().put?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().put?.bid_size ?? null, 4)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().put?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().put?.greeks.bid_iv ?? null, 4)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().put?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            <span
-                              class={bidAskFlashClass(
-                                flashByInstrument(),
-                                row().put?.instrument_name,
-                                "bid",
-                              )}
-                            >
-                              {formatNumber(row().put?.bid ?? null)}
-                            </span>
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().put?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().put?.mark ?? null)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().put?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            <span
-                              class={bidAskFlashClass(
-                                flashByInstrument(),
-                                row().put?.instrument_name,
-                                "ask",
-                              )}
-                            >
-                              {formatNumber(row().put?.ask ?? null)}
-                            </span>
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().put?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().put?.greeks.ask_iv ?? null, 4)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().put?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().put?.ask_size ?? null, 4)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().put?.moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                          >
-                            {formatNumber(row().put?.greeks.delta ?? null, 4)}
-                          </td>
-                          <td
-                            class={`p-1 text-right ${row().put?.moneyness === "in_the_money" ? "bg-emerald-500/10 text-emerald-300" : "text-muted-foreground"}`}
-                          >
-                            {formatNumber(row().put?.strike ?? null, 0)}
-                          </td>
-                        </tr>
-                      )}
-                    </Index>
-                  </tbody>
-                </table>
-              </div>
+              )}
             </Show>
+          </div>
+        </header>
 
-            <Show when={tableView() === "greeks"}>
-              <div class="overflow-x-auto">
-                <table class="table-fixed w-full min-w-[1320px] border-collapse text-xs tabular-nums [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
-                  <colgroup>
-                    <For each={[...GREEKS_CHAIN_COL_CLASSES]}>
-                      {widthClass => <col class={widthClass} />}
-                    </For>
-                  </colgroup>
-                  <thead>
-                    <tr class="border-b border-border text-left text-muted-foreground">
-                      <th class="p-1">Instrument</th>
-                      <th class="p-1 text-right">Strike</th>
-                      <th class="p-1">Type</th>
-                      <th class="p-1">Money</th>
-                      <th class="p-1 text-right">Bid</th>
-                      <th class="p-1 text-right">Ask</th>
-                      <th class="p-1 text-right">IV</th>
-                      <th class="p-1 text-right">Delta</th>
-                      <th class="p-1 text-right">Gamma</th>
-                      <th class="p-1 text-right">Vega</th>
-                      <th class="p-1 text-right">Theta</th>
-                      <th class="p-1 text-right">Bid IV</th>
-                      <th class="p-1 text-right">Ask IV</th>
-                      <th class="p-1 text-right">Rho</th>
-                      <th class="p-1 text-right">Forward</th>
-                      <th class="p-1 text-right">DF</th>
-                      <th class="p-1 text-right">Mdl M</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <Index each={greeksRows()}>
-                      {quote => (
-                        <tr
-                          class={`border-b border-border/50 ${quote().moneyness === "in_the_money" ? "bg-emerald-500/10" : ""}`}
-                        >
-                          <td
-                            class="max-w-[10.5rem] truncate p-1"
-                            title={quote().instrument_name}
-                          >
-                            {quote().instrument_name}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().strike, 0)}
-                          </td>
-                          <td class="p-1">{quote().kind}</td>
-                          <td class="p-1">
-                            {formatMoneyness(quote().moneyness)}
-                          </td>
-                          <td class="p-1 text-right">
-                            <span
-                              class={bidAskFlashClass(
-                                flashByInstrument(),
-                                quote().instrument_name,
-                                "bid",
-                              )}
-                            >
-                              {formatNumber(quote().bid)}
-                            </span>
-                          </td>
-                          <td class="p-1 text-right">
-                            <span
-                              class={bidAskFlashClass(
-                                flashByInstrument(),
-                                quote().instrument_name,
-                                "ask",
-                              )}
-                            >
-                              {formatNumber(quote().ask)}
-                            </span>
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.iv, 4)}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.delta, 4)}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.gamma, 6)}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.vega, 4)}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.theta, 4)}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.bid_iv, 4)}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.ask_iv, 4)}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.rho, 2)}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.forward_price, 0)}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.discount_factor, 4)}
-                          </td>
-                          <td class="p-1 text-right">
-                            {formatNumber(quote().greeks.option_model_mark, 0)}
-                          </td>
-                        </tr>
-                      )}
-                    </Index>
-                  </tbody>
-                </table>
-              </div>
-            </Show>
+        <Show when={errorMessage()}>
+          <div class="rounded border border-[var(--d-ask)]/40 bg-[rgba(255,107,138,0.08)] px-3 py-2 text-[var(--d-ask)]">
+            {errorMessage()}
           </div>
         </Show>
 
-        <div class="rounded border border-border p-3">
-          <div class="text-xs text-muted-foreground">
-            Spot:{" "}
-            <span class="font-medium text-foreground">
-              {formatNumber(snapshot()?.spot_price ?? null, 2)}
-            </span>
+        <div class="d-board">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--d-border)] px-2">
+            <div class="flex min-w-0 flex-1 flex-wrap">
+              <ExpiryTabButtons
+                tabs={expiryTabList}
+                selectedUnix={selectedExpiryUnix}
+                onSelect={switchExpiryTab}
+              />
+            </div>
+            <div class="flex items-center gap-3 py-2 pr-1">
+              <span class="text-[var(--d-muted)]">{activeExpiryLabel()}</span>
+              <div class="d-toggle">
+                <button
+                  type="button"
+                  class={tableView() === "chain" ? "d-toggle-active" : ""}
+                  onClick={() => {
+                    setTableView("chain")
+                  }}
+                >
+                  Prices
+                </button>
+                <button
+                  type="button"
+                  class={tableView() === "greeks" ? "d-toggle-active" : ""}
+                  onClick={() => {
+                    setTableView("greeks")
+                  }}
+                >
+                  Greeks
+                </button>
+              </div>
+            </div>
           </div>
-          <Show when={errorMessage()}>
-            <div class="mt-2 text-xs text-destructive">{errorMessage()}</div>
+
+          <Show when={tableView() === "chain"}>
+            <div class="d-chain-scroll max-h-[min(70vh,820px)] overflow-auto">
+              <table class="d-chain table-fixed">
+                <colgroup>
+                  <For each={[...OPTION_CHAIN_COL_CLASSES]}>
+                    {widthClass => <col class={widthClass} />}
+                  </For>
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th class="d-calls-label" colSpan={8}>
+                      Calls
+                    </th>
+                    <ExpiryCountdownHeader expiryUnix={expiryCountdownUnix} />
+                    <th class="d-puts-label" colSpan={8}>
+                      Puts
+                    </th>
+                  </tr>
+                  <tr>
+                    <th class="text-right">Size</th>
+                    <th class="text-right">Bid IV</th>
+                    <th class="text-right">Bid</th>
+                    <th class="text-right">Mark</th>
+                    <th class="text-right">Ask</th>
+                    <th class="text-right">Ask IV</th>
+                    <th class="text-right">Size</th>
+                    <th class="text-right">Delta</th>
+                    <th class="d-strike-col">Strike</th>
+                    <th class="text-right">Delta</th>
+                    <th class="text-right">Size</th>
+                    <th class="text-right">Ask IV</th>
+                    <th class="text-right">Ask</th>
+                    <th class="text-right">Mark</th>
+                    <th class="text-right">Bid</th>
+                    <th class="text-right">Bid IV</th>
+                    <th class="text-right">Size</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <For each={boardKeys()}>
+                    {key =>
+                      key === "spot" ? (
+                        <SpotDividerRow asset={spotAsset} spot={spotPrice} />
+                      ) : (
+                        <ChainStrikeRow
+                          strike={key}
+                          rowByStrike={rowByStrike}
+                          flashStore={flashByInstrument}
+                        />
+                      )
+                    }
+                  </For>
+                </tbody>
+              </table>
+            </div>
           </Show>
-          <Show when={isLoading()}>
-            <div class="mt-2 text-xs">Loading realtime chain...</div>
+
+          <Show when={tableView() === "greeks"}>
+            <div class="max-h-[min(70vh,820px)] overflow-auto">
+              <table class="d-chain table-fixed min-w-[1320px]">
+                <colgroup>
+                  <For each={[...GREEKS_CHAIN_COL_CLASSES]}>
+                    {widthClass => <col class={widthClass} />}
+                  </For>
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th class="text-left">Instrument</th>
+                    <th class="text-right">Strike</th>
+                    <th class="text-left">Type</th>
+                    <th class="text-left">Money</th>
+                    <th class="text-right">Bid</th>
+                    <th class="text-right">Ask</th>
+                    <th class="text-right">IV</th>
+                    <th class="text-right">Delta</th>
+                    <th class="text-right">Gamma</th>
+                    <th class="text-right">Vega</th>
+                    <th class="text-right">Theta</th>
+                    <th class="text-right">Bid IV</th>
+                    <th class="text-right">Ask IV</th>
+                    <th class="text-right">Rho</th>
+                    <th class="text-right">Forward</th>
+                    <th class="text-right">DF</th>
+                    <th class="text-right">Mdl M</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <Index each={greeksRows()}>
+                    {quote => (
+                      <tr>
+                        <td
+                          class={`max-w-[10.5rem] truncate text-left ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                          title={quote().instrument_name}
+                        >
+                          {quote().instrument_name}
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatNumber(quote().strike, 0)}
+                        </td>
+                        <td
+                          class={`text-left ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {quote().kind}
+                        </td>
+                        <td
+                          class={`text-left ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatMoneyness(quote().moneyness)}
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          <FlashingPrice
+                            side="bid"
+                            value={() => quote().bid}
+                            instrumentName={() => quote().instrument_name}
+                            flashStore={flashByInstrument}
+                          />
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          <FlashingPrice
+                            side="ask"
+                            value={() => quote().ask}
+                            instrumentName={() => quote().instrument_name}
+                            flashStore={flashByInstrument}
+                          />
+                        </td>
+                        <td
+                          class={`text-right d-iv ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatIvPercent(quote().greeks.iv)}
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatNumber(quote().greeks.delta, 4)}
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatNumber(quote().greeks.gamma, 6)}
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatNumber(quote().greeks.vega, 4)}
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatNumber(quote().greeks.theta, 4)}
+                        </td>
+                        <td
+                          class={`text-right d-iv ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatIvPercent(quote().greeks.bid_iv)}
+                        </td>
+                        <td
+                          class={`text-right d-iv ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatIvPercent(quote().greeks.ask_iv)}
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatNumber(quote().greeks.rho, 2)}
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatNumber(quote().greeks.forward_price, 0)}
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatNumber(quote().greeks.discount_factor, 4)}
+                        </td>
+                        <td
+                          class={`text-right ${quote().moneyness === "in_the_money" ? "d-itm" : ""}`}
+                        >
+                          {formatNumber(quote().greeks.option_model_mark, 0)}
+                        </td>
+                      </tr>
+                    )}
+                  </Index>
+                </tbody>
+              </table>
+            </div>
           </Show>
         </div>
 
         <Show when={snapshot()}>
           {(getSnapshot: Accessor<OptionsSnapshot>) => (
             <>
-              <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <div class="rounded border border-border p-3">
-                  <div class="mb-2 text-xs font-semibold">
-                    Available Strikes
+              <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <div class="d-panel">
+                  <div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--d-muted)]">
+                    Portfolio Risk
                   </div>
-                  <div class="max-h-40 overflow-auto flex flex-wrap gap-1">
-                    <For each={getSnapshot().strikes}>
-                      {strike => (
-                        <span class="rounded border border-border px-1 py-0.5 text-xs">
-                          {formatNumber(strike, 0)}
-                        </span>
-                      )}
-                    </For>
-                  </div>
-                </div>
-
-                <div class="rounded border border-border p-3">
-                  <div class="mb-2 text-xs font-semibold">Portfolio Risk</div>
-                  <div class="space-y-1 text-xs">
+                  <div class="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
                     <div>
                       Delta:{" "}
                       {formatNumber(getSnapshot().risk.aggregate_delta, 4)}
@@ -1230,101 +1547,82 @@ const DeriveOptionsPage = () => {
                       {formatNumber(getSnapshot().risk.aggregate_theta, 4)}
                     </div>
                     <div>
-                      Hedge Ratio BTC:{" "}
+                      Hedge:{" "}
                       {formatNumber(getSnapshot().risk.hedge_ratio_btc, 4)}
                     </div>
                   </div>
                 </div>
+
+                <div class="d-panel">
+                  <div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--d-muted)]">
+                    Scenario PnL
+                  </div>
+                  <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+                    <For each={getSnapshot().scenarios}>
+                      {scenario => (
+                        <div class="rounded border border-[var(--d-border)] px-2 py-1.5">
+                          <div class="text-[var(--d-muted)]">
+                            Move: {formatNumber(scenario.pct_move * 100, 1)}%
+                          </div>
+                          <div class="mt-0.5 font-medium">
+                            {formatNumber(scenario.estimated_pnl, 2)}
+                          </div>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </div>
               </div>
 
-              <div class="rounded border border-border p-3">
-                <div class="mb-2 text-xs font-semibold">
-                  Scenario PnL (delta + gamma approximation)
-                </div>
-                <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
-                  <For each={getSnapshot().scenarios}>
-                    {scenario => (
-                      <div class="rounded border border-border p-2 text-xs">
-                        <div class="text-muted-foreground">
-                          BTC move: {formatNumber(scenario.pct_move * 100, 1)}%
-                        </div>
-                        <div class="mt-1 font-medium">
-                          est. PnL: {formatNumber(scenario.estimated_pnl, 2)}
-                        </div>
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </div>
-
-              <div class="rounded border border-border p-3">
-                <div class="mb-2">
-                  <div class="flex flex-wrap items-center justify-between gap-2">
-                    <div class="text-xs font-semibold">IV Smile</div>
-                    <div class="flex items-center gap-2 text-xs">
-                      <select
-                        class="rounded border border-border bg-background px-2 py-1"
-                        value={
-                          selectedExpiryUnix() !== null
-                            ? String(selectedExpiryUnix())
-                            : ""
+              <div class="d-panel">
+                <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div class="text-[10px] font-semibold uppercase tracking-wide text-[var(--d-muted)]">
+                    IV Smile
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <select
+                      class="rounded border border-[var(--d-border)] bg-[var(--d-chip)] px-2 py-1 text-xs text-[var(--d-text)]"
+                      value={
+                        selectedExpiryUnix() !== null
+                          ? String(selectedExpiryUnix())
+                          : ""
+                      }
+                      onChange={event => {
+                        const value = Number.parseInt(
+                          event.currentTarget.value,
+                          10,
+                        )
+                        if (Number.isFinite(value)) {
+                          switchExpiryTab(value as ExpiryUnix)
                         }
-                        onChange={event => {
-                          const nextUnix = Number.parseInt(
-                            event.currentTarget.value,
-                            10,
-                          )
-                          if (Number.isNaN(nextUnix)) {
-                            return
-                          }
-                          switchExpiryTab(nextUnix as ExpiryUnix)
-                        }}
-                      >
-                        <For each={expiryTabList()}>
-                          {tab => (
-                            <option value={String(tab.unix)}>
-                              {new Date(tab.iso).toLocaleDateString()}
-                            </option>
-                          )}
-                        </For>
-                      </select>
-                      <select
-                        class="rounded border border-border bg-background px-2 py-1"
-                        value={smileKind()}
-                        onChange={event => {
-                          const nextKind = event.currentTarget.value
-                          if (
-                            nextKind === "C" ||
-                            nextKind === "P" ||
-                            nextKind === "both"
-                          ) {
-                            setSmileKind(nextKind)
-                          }
-                        }}
-                      >
-                        <option value="both">Call + Put (avg)</option>
-                        <option value="C">Calls only</option>
-                        <option value="P">Puts only</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div class="mt-1 text-[10px] leading-snug text-muted-foreground">
-                    Blue: implied volatility (options). Orange dashed: realized{" "}
-                    {REALIZED_VOL_WINDOW_DAYS}d annualized vol from BTC{" "}
-                    <code class="rounded bg-muted px-0.5">/candles/1d</code>{" "}
-                    (main API). Same vertical scale as IV.
+                      }}
+                    >
+                      <For each={expiryTabList()}>
+                        {tab => (
+                          <option value={String(tab.unix)}>
+                            {formatExpiryTabLabel(tab.iso)}
+                          </option>
+                        )}
+                      </For>
+                    </select>
+                    <select
+                      class="rounded border border-[var(--d-border)] bg-[var(--d-chip)] px-2 py-1 text-xs text-[var(--d-text)]"
+                      value={smileKind()}
+                      onChange={event => {
+                        const next = event.currentTarget.value
+                        if (next === "C" || next === "P" || next === "both") {
+                          setSmileKind(next)
+                        }
+                      }}
+                    >
+                      <option value="both">Calls + Puts</option>
+                      <option value="C">Calls</option>
+                      <option value="P">Puts</option>
+                    </select>
                   </div>
                 </div>
-
-                <Show
-                  when={smileGeometry().circles.length >= 2}
-                  fallback={
-                    <div class="text-xs text-muted-foreground">
-                      Not enough IV points for smile chart
-                    </div>
-                  }
-                >
-                  <div class="overflow-auto rounded border border-border/60 p-2">
+                <Show when={ivSmilePoints().length > 0}>
+                  <div class="overflow-auto rounded border border-[var(--d-border)] p-2">
                     <svg
                       width={smileGeometry().width}
                       height={smileGeometry().height}
@@ -1347,9 +1645,6 @@ const DeriveOptionsPage = () => {
                       />
                       <Show when={smileGeometry().realizedY !== null}>
                         {() => {
-                          // realizedY is a pixel coordinate that can legitimately
-                          // be 0, so gate on an explicit null check (not falsiness)
-                          // and read the value with a defensive nullish fallback.
                           const realizedY = smileGeometry().realizedY ?? 0
                           return (
                             <g>
@@ -1368,51 +1663,51 @@ const DeriveOptionsPage = () => {
                           )
                         }}
                       </Show>
-                      <path
-                        d={smileGeometry().path}
-                        fill="none"
-                        stroke="#60a5fa"
-                        stroke-width="2"
-                      />
+                      <Show when={smileGeometry().path.length > 0}>
+                        <path
+                          d={smileGeometry().path}
+                          fill="none"
+                          stroke="#38bdf8"
+                          stroke-width="1.75"
+                        />
+                      </Show>
                       <For each={smileGeometry().circles}>
-                        {point => (
-                          <g>
-                            <circle
-                              cx={point.x}
-                              cy={point.y}
-                              r="3"
-                              fill="#93c5fd"
-                            >
-                              <title>{`K=${formatNumber(point.strike, 0)} IV=${formatNumber(point.iv, 4)}`}</title>
-                            </circle>
-                          </g>
+                        {circle => (
+                          <circle
+                            cx={circle.x}
+                            cy={circle.y}
+                            r="3"
+                            fill="#38bdf8"
+                          />
                         )}
                       </For>
                     </svg>
                   </div>
-                  <div class="mt-2 flex flex-wrap items-center gap-4 text-[10px] text-muted-foreground">
+                  <div class="mt-2 flex flex-wrap items-center gap-4 text-[10px] text-[var(--d-muted)]">
                     <div class="flex items-center gap-2">
                       <span class="inline-block h-0.5 w-7 bg-sky-400" />
                       <span>Implied vol</span>
                     </div>
-                    <div class="flex items-center gap-2">
-                      <span class="inline-block w-7 border-t-2 border-dashed border-orange-400" />
-                      <span>
-                        Realized {REALIZED_VOL_WINDOW_DAYS}d (ann.):{" "}
-                        <span class="font-medium text-foreground">
-                          {realizedVolAnnual30d() !== null
-                            ? formatNumber(realizedVolAnnual30d(), 4)
-                            : "—"}
+                    <Show when={selectedAsset() === "BTC"}>
+                      <div class="flex items-center gap-2">
+                        <span class="inline-block w-7 border-t-2 border-dashed border-orange-400" />
+                        <span>
+                          Realized {REALIZED_VOL_WINDOW_DAYS}d (ann.):{" "}
+                          <span class="font-medium text-[var(--d-text)]">
+                            {realizedVolAnnual30d() !== null
+                              ? formatNumber(realizedVolAnnual30d(), 4)
+                              : "—"}
+                          </span>
                         </span>
-                      </span>
-                    </div>
+                      </div>
+                    </Show>
                   </div>
                   <div class="mt-2 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
                     <For each={ivSmilePoints().slice(0, 12)}>
                       {point => (
-                        <div class="rounded border border-border/60 px-2 py-1">
+                        <div class="rounded border border-[var(--d-border)] px-2 py-1">
                           K {formatNumber(point.strike, 0)} | IV{" "}
-                          {formatNumber(point.iv, 4)}
+                          {formatIvPercent(point.iv)}
                         </div>
                       )}
                     </For>
