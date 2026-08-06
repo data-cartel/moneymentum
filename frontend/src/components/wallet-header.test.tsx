@@ -22,6 +22,10 @@ const TEST_PIN = "123456"
 vi.mock("@/hooks/useTrading", () => ({
   useWalletSettings: () => mockUseWalletSettings(),
   useSwitchNetwork: () => mockUseSwitchNetwork(),
+  useDeriveAccountSnapshot: () => ({
+    data: undefined,
+    isLoading: false,
+  }),
 }))
 
 vi.mock("solid-sonner", () => ({

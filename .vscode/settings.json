@@ -30,5 +30,14 @@
     "frontend",
     ".devenv",
     "infra"
-  ]
+  ],
+  "zenMode.hideLineNumbers": false,
+  "zenMode.fullScreen": false,
+  "zenMode.centerLayout": true,
+  "editor.fontSize": 15,
+  "editor.multiCursorModifier": "ctrlCmd",
+  "git.autofetch": true,
+  "git.confirmSync": false,
+  "explorer.confirmDelete": false,
+  "workbench.activityBar.location": "top"
 }

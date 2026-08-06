@@ -5,7 +5,7 @@ import type { HttpStatusError, JsonParseError, NetworkError } from "@/lib/http"
 import type {
   OptionsBootstrap,
   OptionsSnapshot,
-} from "@/pages/DeriveOptions/index"
+} from "@/components/derive-options"
 
 type DeriveFetchError = NetworkError | HttpStatusError | JsonParseError
 

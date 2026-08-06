@@ -73,6 +73,33 @@
 
 .derive-options .d-chain-scroll {
   background: var(--d-surface);
+  /* Localize paints to the scrolling chain, not the whole dockview panel. */
+  contain: content;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.derive-options .d-chain-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.derive-options .d-greeks-scroll {
+  contain: content;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.derive-options .d-greeks-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.derive-options .d-options-split {
+  min-height: 0;
+}
+
+.derive-options .d-options-split .dv-split-view-container {
+  height: 100%;
+  width: 100%;
 }
 
 .derive-options .d-chain {

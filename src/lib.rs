@@ -43,7 +43,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use thiserror::Error;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::derive_markets::{DeriveMarketsClients, DeriveNetwork};
@@ -966,7 +966,26 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
         market_catalog_projection,
     });
 
-    Ok(build_router(state))
+    let derive_config = state.config.derive.clone();
+    let router = build_router(state);
+    let router = match derive_config {
+        Some(derive_config) => match derive::derive_options_router(derive_config).await {
+            Ok(options_router) => {
+                info!("derive options routes mounted");
+                router.merge(options_router)
+            }
+            Err(error) => {
+                error!(
+                    error = %error,
+                    "derive options hub failed to start; serving without options routes"
+                );
+                router
+            }
+        },
+        None => router,
+    };
+
+    Ok(router)
 }
 
 /// Wires every moneymentum route to its handler and injects the shared state.

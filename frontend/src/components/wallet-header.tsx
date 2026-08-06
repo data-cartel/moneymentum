@@ -1,4 +1,10 @@
-import { Show, createSignal, onCleanup } from "solid-js"
+import {
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+} from "solid-js"
 import * as Effect from "effect/Effect"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
@@ -8,12 +14,23 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { useWalletSettings, useSwitchNetwork } from "@/hooks/useTrading"
+import {
+  useWalletSettings,
+  useSwitchNetwork,
+  useDeriveAccountSnapshot,
+} from "@/hooks/useTrading"
 import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
@@ -36,6 +53,17 @@ const walletStatusClass =
 const REVOKE_AGENT_TOOLTIP =
   "Revokes Moneymentum's trading agent on Hyperliquid. Your main wallet signs once via Reown. After revoke, this app cannot place trades until you authorize a new agent."
 
+interface SubaccountOption {
+  id: number
+  label: string
+}
+
+const formatUsd = (value: number): string =>
+  value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+
 interface WalletHeaderProps {
   handleNetworkSwitch?: () => void
 }
@@ -51,7 +79,10 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     isLocked,
     isDeriveLocked,
     canTrade,
+    deriveCredentials,
+    setDeriveSubaccountId,
   } = useWallet()
+  const accountSnapshot = useDeriveAccountSnapshot()
   const shell = tryUsePortfolioShell()
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [isRevokingAgent, setIsRevokingAgent] = createSignal(false)
@@ -71,6 +102,49 @@ export const WalletHeader = (props: WalletHeaderProps) => {
   const hyperliquidVenue = () =>
     venues().find(venue => venue.id === "hyperliquid")
   const deriveVenue = () => venues().find(venue => venue.id === "derive")
+
+  const subaccountOptions = createMemo((): SubaccountOption[] => {
+    const snapshot = accountSnapshot.data
+    if (snapshot === undefined) {
+      return []
+    }
+
+    return snapshot.subaccounts.map(subaccount => {
+      const balance = Number.parseFloat(subaccount.subaccountValue)
+      const balanceLabel = Number.isFinite(balance)
+        ? formatUsd(balance)
+        : subaccount.subaccountValue
+      return {
+        id: subaccount.subaccountId,
+        label: `#${String(subaccount.subaccountId)} ($${balanceLabel})`,
+      }
+    })
+  })
+
+  const selectedSubaccount = createMemo(() => {
+    const selectedId = deriveCredentials()?.subaccountId
+    if (selectedId === null || selectedId === undefined) {
+      return null
+    }
+    return subaccountOptions().find(option => option.id === selectedId) ?? null
+  })
+
+  // createEffect: auto-select first subaccount when none is chosen.
+  createEffect(() => {
+    const options = subaccountOptions()
+    const current = deriveCredentials()?.subaccountId
+    if (options.length === 0) {
+      return
+    }
+    if (current !== null && current !== undefined) {
+      const stillValid = options.some(option => option.id === current)
+      if (stillValid) {
+        return
+      }
+    }
+    const first = options[0]
+    setDeriveSubaccountId(first.id)
+  })
 
   const triggerLabel = () => {
     const connected = venues().filter(
@@ -416,6 +490,49 @@ export const WalletHeader = (props: WalletHeaderProps) => {
                   <p class="text-[10px] text-muted-foreground">
                     Session locked — enter PIN on Derive tab
                   </p>
+                </Show>
+                <Show when={!isDeriveLocked()}>
+                  <div class="space-y-1">
+                    <p class="text-[10px] text-muted-foreground">Subaccount</p>
+                    <Show
+                      when={subaccountOptions().length > 0}
+                      fallback={
+                        <p class="text-[10px] text-muted-foreground">
+                          {accountSnapshot.isLoading
+                            ? "Loading subaccounts..."
+                            : "No subaccounts found."}
+                        </p>
+                      }
+                    >
+                      <Select<SubaccountOption>
+                        options={subaccountOptions()}
+                        optionValue="id"
+                        optionTextValue="label"
+                        value={selectedSubaccount()}
+                        onChange={option => {
+                          if (option !== null) {
+                            setDeriveSubaccountId(option.id)
+                          }
+                        }}
+                        placeholder="Select subaccount"
+                        itemComponent={itemProps => (
+                          <SelectItem item={itemProps.item}>
+                            {itemProps.item.rawValue.label}
+                          </SelectItem>
+                        )}
+                      >
+                        <SelectTrigger class="h-8 w-full font-mono text-[11px]">
+                          <SelectValue<SubaccountOption>>
+                            {state => {
+                              const selected = state.selectedOption()
+                              return selected.label
+                            }}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent />
+                      </Select>
+                    </Show>
+                  </div>
                 </Show>
                 <Button
                   type="button"

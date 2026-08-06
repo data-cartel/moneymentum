@@ -1,14 +1,18 @@
 import {
   createEffect,
-  createMemo,
   createSignal,
   Show,
+  type Accessor,
   type JSX,
 } from "solid-js"
 import * as Effect from "effect/Effect"
 import * as Either from "effect/Either"
 import { toast } from "solid-sonner"
 
+import {
+  OptionsTradingView,
+  useDebouncedStreamEnabled,
+} from "@/components/derive-options"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -19,16 +23,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { hasSharedWalletPin } from "@/contexts/wallet-context"
 import { useWallet } from "@/hooks/useWallet"
-import { useDeriveAccountSnapshot } from "@/hooks/useTrading"
 import { getErrorMessage } from "@/lib/error-message"
 import {
   normalizeWalletPinInput,
@@ -36,36 +32,26 @@ import {
 } from "@/services/walletCredentialCrypto"
 import { tryUsePortfolioShell } from "../portfolioShellContext"
 
-interface SubaccountOption {
-  id: number
-  label: string
-}
-
 export const DERIVE_WALLET_INPUT_ATTR = "data-derive-wallet-input"
 
-const formatUsd = (value: number): string =>
-  value.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-
 /**
- * Derive venue tab: Developers session credentials + subaccount picker.
- * Account reads need the session key unlocked; trading PIN for HL stays on staged.
+ * Derive venue tab: session credentials + live options chain.
+ * Subaccount selection lives in the wallet header under Derive account.
  */
-export const DerivePanel = (): JSX.Element => {
+export const DerivePanel = (props: {
+  isPanelVisible: Accessor<boolean>
+  greeksVisible: Accessor<boolean>
+  onGreeksVisibleChange: (visible: boolean) => void
+}): JSX.Element => {
   const {
     connectDerive,
     unlock,
-    disconnectDerive,
     isDeriveConnected,
     isDeriveLocked,
-    deriveCredentials,
-    setDeriveSubaccountId,
     hasVerifiedSessionPin,
   } = useWallet()
   const shell = tryUsePortfolioShell()
-  const accountSnapshot = useDeriveAccountSnapshot()
+  const streamEnabled = useDebouncedStreamEnabled(() => props.isPanelVisible())
 
   const [deriveWalletInput, setDeriveWalletInput] = createSignal("")
   const [sessionKeyInput, setSessionKeyInput] = createSignal("")
@@ -77,50 +63,6 @@ export const DerivePanel = (): JSX.Element => {
 
   const pinAlreadyExists = () => hasSharedWalletPin()
   const canReuseSessionPin = () => hasVerifiedSessionPin()
-
-  const subaccountOptions = createMemo((): SubaccountOption[] => {
-    const snapshot = accountSnapshot.data
-    const owner = deriveCredentials()?.deriveWallet ?? ""
-    if (snapshot === undefined) {
-      return []
-    }
-
-    return snapshot.subaccounts.map(subaccount => {
-      const balance = Number.parseFloat(subaccount.subaccountValue)
-      const balanceLabel = Number.isFinite(balance)
-        ? formatUsd(balance)
-        : subaccount.subaccountValue
-      return {
-        id: subaccount.subaccountId,
-        label: `${owner} #${String(subaccount.subaccountId)} ($${balanceLabel})`,
-      }
-    })
-  })
-
-  const selectedSubaccount = createMemo(() => {
-    const selectedId = deriveCredentials()?.subaccountId
-    if (selectedId === null || selectedId === undefined) {
-      return null
-    }
-    return subaccountOptions().find(option => option.id === selectedId) ?? null
-  })
-
-  // createEffect: auto-select first subaccount when none is chosen.
-  createEffect(() => {
-    const options = subaccountOptions()
-    const current = deriveCredentials()?.subaccountId
-    if (options.length === 0) {
-      return
-    }
-    if (current !== null && current !== undefined) {
-      const stillValid = options.some(option => option.id === current)
-      if (stillValid) {
-        return
-      }
-    }
-    const first = options[0]
-    setDeriveSubaccountId(first.id)
-  })
 
   // createEffect: focus wallet field when shell requests Derive focus.
   createEffect(() => {
@@ -221,49 +163,33 @@ export const DerivePanel = (): JSX.Element => {
     setIsSubmitting(false)
   }
 
-  const onDisconnect = () => {
-    void Effect.runPromise(
-      disconnectDerive().pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            toast.success("Derive disconnected")
-            setDeriveWalletInput("")
-            setSessionKeyInput("")
-          }),
-        ),
-        Effect.catchAll(error =>
-          Effect.sync(() => {
-            toast.error(getErrorMessage(error))
-          }),
-        ),
-      ),
-    )
-  }
-
   const connectFormReady = () =>
     deriveWalletInput().trim() !== "" && sessionKeyInput().trim() !== ""
 
   const createPinReady = () =>
     pinAlreadyExists() || pin().length === WALLET_PIN_LENGTH
 
+  const optionsStreamEnabled = (): boolean =>
+    isDeriveConnected() && !isDeriveLocked() && streamEnabled()
+
   return (
     <div
-      class="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-4 overflow-auto p-4 outline-none"
+      class="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col outline-none"
       tabIndex={0}
       data-portfolio-panel="derive"
     >
-      <div class="space-y-1">
-        <h2 class="text-sm font-semibold text-foreground">Derive</h2>
-        <p class="max-w-[60ch] text-[12px] leading-snug text-muted-foreground">
-          Paste your Derive Wallet and session key private key from the Derive
-          developers page. Keys are encrypted locally with your PIN.
-        </p>
-      </div>
-
       <Show
         when={isDeriveConnected()}
         fallback={
-          <div class="flex max-w-xl flex-col gap-3">
+          <div class="flex max-w-xl flex-col gap-3 overflow-auto p-4">
+            <div class="space-y-1">
+              <h2 class="text-sm font-semibold text-foreground">Derive</h2>
+              <p class="max-w-[60ch] text-[12px] leading-snug text-muted-foreground">
+                Paste your Derive Wallet and session key private key from the
+                Derive developers page. Keys are encrypted locally with your
+                PIN.
+              </p>
+            </div>
             <div class="space-y-1">
               <label class="text-[12px] font-medium" for="deriveWalletInput">
                 Derive Wallet
@@ -352,7 +278,7 @@ export const DerivePanel = (): JSX.Element => {
         <Show
           when={!isDeriveLocked()}
           fallback={
-            <div class="flex max-w-xl flex-col gap-3">
+            <div class="flex max-w-xl flex-col gap-3 overflow-auto p-4">
               <p class="text-[12px] text-muted-foreground">
                 Derive session is locked. Enter your PIN to load account data.
               </p>
@@ -392,64 +318,14 @@ export const DerivePanel = (): JSX.Element => {
             </div>
           }
         >
-          <div class="flex max-w-2xl flex-col gap-3">
-            <div class="space-y-1">
-              <p class="text-[11px] text-muted-foreground">Derive Wallet</p>
-              <p class="break-all font-mono text-[12px] text-foreground">
-                {deriveCredentials()?.deriveWallet}
-              </p>
-            </div>
-
-            <div class="space-y-1">
-              <label class="text-[12px] font-medium">Subaccount</label>
-              <Show
-                when={subaccountOptions().length > 0}
-                fallback={
-                  <p class="text-[12px] text-muted-foreground">
-                    {accountSnapshot.isLoading
-                      ? "Loading subaccounts..."
-                      : "No subaccounts found."}
-                  </p>
-                }
-              >
-                <Select<SubaccountOption>
-                  options={subaccountOptions()}
-                  optionValue="id"
-                  optionTextValue="label"
-                  value={selectedSubaccount()}
-                  onChange={option => {
-                    if (option !== null) {
-                      setDeriveSubaccountId(option.id)
-                    }
-                  }}
-                  placeholder="Select subaccount"
-                  itemComponent={itemProps => (
-                    <SelectItem item={itemProps.item}>
-                      {itemProps.item.rawValue.label}
-                    </SelectItem>
-                  )}
-                >
-                  <SelectTrigger class="h-9 w-full max-w-2xl font-mono text-[11px]">
-                    <SelectValue<SubaccountOption>>
-                      {state => {
-                        const selected = state.selectedOption()
-                        return selected.label
-                      }}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent />
-                </Select>
-              </Show>
-            </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              class="h-8 w-fit"
-              onClick={onDisconnect}
-            >
-              Disconnect Derive
-            </Button>
+          <div class="min-h-0 flex-1 overflow-hidden">
+            <OptionsTradingView
+              streamEnabled={optionsStreamEnabled}
+              greeksLayout={{
+                visible: props.greeksVisible,
+                setVisible: props.onGreeksVisibleChange,
+              }}
+            />
           </div>
         </Show>
       </Show>

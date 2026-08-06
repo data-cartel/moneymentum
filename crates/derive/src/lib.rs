@@ -145,8 +145,10 @@ struct OptionPricingSlimDto {
     discount_factor: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct DeriveConfig {
+    /// Bind port for the standalone `derive_cli` binary. Ignored when options
+    /// routes are mounted on the main moneymentum server.
     pub port: u16,
     pub rest_base_url: Url,
     pub ws_url: Url,
@@ -1149,7 +1151,13 @@ async fn post_active_asset(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn derive_app(config: DeriveConfig) -> Result<Router, DeriveError> {
+/// Options chain routes + background Derive websocket hub.
+///
+/// Paths match what the frontend hits through the Vite `/api` proxy
+/// (`/derive/options/...`). No CORS layer -- same-origin via the proxy, same as
+/// the rest of moneymentum. For a standalone process with its own port, use
+/// [`derive_app`].
+pub async fn derive_options_router(config: DeriveConfig) -> Result<Router, DeriveError> {
     let http = build_http_client()?;
     let assets = fetch_option_assets(&http, &config.rest_base_url).await?;
     let default_asset = assets.first().cloned().ok_or_else(|| DeriveError::Api {
@@ -1212,17 +1220,24 @@ pub async fn derive_app(config: DeriveConfig) -> Result<Router, DeriveError> {
         }
     });
 
-    info!(port = config.port, "derive options server ready");
-    let router = Router::new()
-        .route("/health", get(health))
+    debug!("derive options websocket hub spawned");
+    Ok(Router::new()
         .route("/derive/options/bootstrap", get(get_bootstrap))
         .route("/derive/options/snapshot", get(get_snapshot))
         .route("/derive/options/stream", get(stream_options))
         .route("/derive/options/active_expiry", post(post_active_expiry))
         .route("/derive/options/active_asset", post(post_active_asset))
-        .layer(middleware::from_fn(cors_middleware))
-        .with_state(state);
-    Ok(router)
+        .with_state(state))
+}
+
+/// Standalone Derive options HTTP server (used by `derive_cli`).
+pub async fn derive_app(config: DeriveConfig) -> Result<Router, DeriveError> {
+    let port = config.port;
+    let router = derive_options_router(config).await?;
+    info!(port, "derive options server ready");
+    Ok(router
+        .route("/health", get(health))
+        .layer(middleware::from_fn(cors_middleware)))
 }
 
 #[cfg(test)]

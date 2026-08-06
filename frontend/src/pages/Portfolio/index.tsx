@@ -39,6 +39,7 @@ import {
 } from "@arminmajerie/dockview-solid"
 
 import { DerivePanel } from "./components/DerivePanel"
+import { DeriveSettingsMenu } from "./components/DeriveSettingsMenu"
 import { FactorsPanel } from "./components/FactorsPanel"
 import { HyperliquidPanel } from "./components/HyperliquidPanel"
 import { PerformancePanel } from "./components/PerformancePanel"
@@ -50,6 +51,10 @@ import {
   type PortfolioMetricColumnId,
   type PortfolioMetricVisibility,
 } from "./components/PositionsPanel/portfolioMetricVisibility"
+import {
+  readDeriveGreeksVisible,
+  writeDeriveGreeksVisible,
+} from "@/components/derive-options/deriveChromeStorage"
 import { RiskPanel } from "./components/RiskPanel"
 import {
   StagedChangesPanel,
@@ -406,6 +411,9 @@ const PortfolioPage = () => {
   const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
   const [metricVisibility, setMetricVisibility] =
     createSignal<PortfolioMetricVisibility>(readPortfolioMetricVisibility())
+  const [deriveGreeksVisible, setDeriveGreeksVisible] = createSignal(
+    readDeriveGreeksVisible(),
+  )
 
   let dockviewApi: DockviewApi | undefined
   let dockviewContainer: HTMLDivElement | undefined
@@ -510,6 +518,11 @@ const PortfolioPage = () => {
   // createEffect: persist metric visibility when gear toggles change
   createEffect(() => {
     writePortfolioMetricVisibility(metricVisibility())
+  })
+
+  // createEffect: persist Derive greeks visibility when gear / close toggle changes
+  createEffect(() => {
+    writeDeriveGreeksVisible(deriveGreeksVisible())
   })
 
   const betaResult = useBeta(
@@ -619,11 +632,29 @@ const PortfolioPage = () => {
     </KeyboardAwareDockviewProviders>
   )
 
-  const DeriveTab = (props: IDockviewPanelHeaderProps) => (
-    <KeyboardAwareDockviewProviders>
-      <LockedTabWithDigit {...props} digit={PANEL_DIGIT_BY_ID.derive} />
-    </KeyboardAwareDockviewProviders>
-  )
+  const DeriveTab = (props: IDockviewPanelHeaderProps) => {
+    const title = useDockviewPanelTitle(props)
+
+    return (
+      <KeyboardAwareDockviewProviders>
+        <div
+          data-testid="dockview-dv-default-tab"
+          class="dv-default-tab portfolio-dockview-tab"
+        >
+          <span class="dv-default-tab-content portfolio-dockview-tab-title">
+            {title()}
+          </span>
+          <kbd class="ml-1 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+            {PANEL_DIGIT_BY_ID.derive}
+          </kbd>
+          <DeriveSettingsMenu
+            greeksVisible={deriveGreeksVisible}
+            onGreeksVisibleChange={setDeriveGreeksVisible}
+          />
+        </div>
+      </KeyboardAwareDockviewProviders>
+    )
+  }
 
   const StagedTab = (props: IDockviewPanelHeaderProps) => (
     <KeyboardAwareDockviewProviders>
@@ -696,13 +727,33 @@ const PortfolioPage = () => {
         </div>
       </KeyboardAwareDockviewProviders>
     ),
-    derive: (_props: IDockviewPanelProps) => (
-      <KeyboardAwareDockviewProviders>
-        <div class="portfolio-dockview-panel-body">
-          <DerivePanel />
-        </div>
-      </KeyboardAwareDockviewProviders>
-    ),
+    derive: (panelProps: IDockviewPanelProps) => {
+      const [isPanelVisible, setIsPanelVisible] = createSignal(true)
+
+      // createEffect: track dockview panel visibility for options stream lifecycle.
+      createEffect(() => {
+        // Dockview's isVisible is imperative; seed once then subscribe to changes.
+        setIsPanelVisible(panelProps.api.isVisible)
+        const disposable = panelProps.api.onDidVisibilityChange(event => {
+          setIsPanelVisible(event.isVisible)
+        })
+        onCleanup(() => {
+          disposable.dispose()
+        })
+      })
+
+      return (
+        <KeyboardAwareDockviewProviders>
+          <div class="portfolio-dockview-panel-body">
+            <DerivePanel
+              isPanelVisible={isPanelVisible}
+              greeksVisible={deriveGreeksVisible}
+              onGreeksVisibleChange={setDeriveGreeksVisible}
+            />
+          </div>
+        </KeyboardAwareDockviewProviders>
+      )
+    },
     performance: (_props: IDockviewPanelProps) => (
       <KeyboardAwareDockviewProviders>
         <div class="portfolio-dockview-panel-body">
