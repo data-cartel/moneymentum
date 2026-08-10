@@ -28,7 +28,18 @@ import type { TimeSeriesPoint } from "@/pages/Prototype/metrics/registry"
 import { DERIVE_CHAIN_GREEKS_SPLIT_STORAGE_KEY } from "./deriveChromeStorage"
 import * as deriveService from "@/services/derive"
 
+import {
+  DeriveOrderTicket,
+  type DeriveOrderTicketAddRequest,
+} from "./DeriveOrderTicket"
 import { deriveOptionsBaseUrl } from "./deriveOptionsBaseUrl"
+import {
+  selectionFromQuoteClick,
+  selectionWithOrderSide,
+  quoteSideForOrderSide,
+  type DeriveOrderTicketSelection,
+  type QuoteBookSide,
+} from "./orderTicket"
 import {
   type ExpiryUnix,
   type Moneyness,
@@ -63,8 +74,11 @@ const isAbortError = (error: unknown): boolean => {
 const formatNumber = (value: number | null, digits = 2): string =>
   value === null ? "—" : value.toFixed(digits)
 
+const formatUsdPrice = (value: number | null, digits = 2): string =>
+  value === null ? "+" : `$${value.toFixed(digits)}`
+
 const formatIvPercent = (value: number | null): string =>
-  value === null ? "—" : (value * 100).toFixed(1)
+  value === null ? "—" : `${(value * 100).toFixed(1)}%`
 
 const formatSpotBadge = (asset: string, spot: number): string =>
   `${asset} $${spot.toLocaleString("en-US", {
@@ -100,24 +114,24 @@ const formatMoneyness = (value: Moneyness): string =>
 
 const OPTION_CHAIN_LEG_COL_CLASSES = [
   "w-[3.25rem]",
-  "w-[3rem]",
+  "w-[3.75rem]",
+  "w-[4.5rem]",
   "w-[4rem]",
-  "w-[4rem]",
-  "w-[4rem]",
-  "w-[3rem]",
+  "w-[4.5rem]",
+  "w-[3.75rem]",
   "w-[3.25rem]",
-  "w-[3rem]",
+  "w-[3.25rem]",
 ] as const
 
 const OPTION_CHAIN_COL_CLASSES = [
   ...OPTION_CHAIN_LEG_COL_CLASSES,
-  "w-[8.5rem]",
+  "w-[4.25rem]",
   ...OPTION_CHAIN_LEG_COL_CLASSES,
 ] as const
 
 const legCellClass = (moneyness: Moneyness | undefined, extra = ""): string => {
   const itm = moneyness === "in_the_money" ? "d-itm" : ""
-  return `text-right ${itm} ${extra}`.trim()
+  return `text-right tabular-nums ${itm} ${extra}`.trim()
 }
 
 const GREEKS_CHAIN_COL_CLASSES = [
@@ -260,9 +274,11 @@ const priceTickDirection = (
 const bidAskFlashClass = (
   side: "bid" | "ask",
   direction: QuotePriceFlash | undefined,
+  empty: boolean,
 ): string => {
   const tone = side === "bid" ? "d-bid" : "d-ask"
-  const base = `inline-block min-w-[2.5rem] rounded-sm px-0.5 text-right tabular-nums ${tone}`
+  const align = empty ? "text-center" : "text-right"
+  const base = `block w-full rounded-sm px-0.5 tabular-nums ${align} ${tone}`
   if (direction === "up") {
     return `${base} quote-flash-up`
   }
@@ -277,23 +293,58 @@ const FlashingPrice = (props: {
   value: Accessor<number | null>
   instrumentName: Accessor<string | undefined>
   flashStore: Partial<Record<string, QuoteFlashEntry>>
-}) => (
-  <span
-    class={bidAskFlashClass(
-      props.side,
-      (() => {
-        const instrumentName = props.instrumentName()
-        if (instrumentName === undefined) {
-          return undefined
-        }
-        // Leaf path only -- never scan the whole flash store (`in` would notify broadly).
-        return props.flashStore[instrumentName]?.[props.side]
-      })(),
-    )}
-  >
-    {formatNumber(props.value())}
-  </span>
-)
+  isSelected: Accessor<boolean>
+  onSelect?: () => void
+}) => {
+  const flashClass = (): string => {
+    const selected = props.isSelected()
+    const empty = props.value() === null
+    const selectedClass =
+      selected && props.side === "ask"
+        ? "d-price-selected-ask"
+        : selected && props.side === "bid"
+          ? "d-price-selected-bid"
+          : ""
+    return cn(
+      bidAskFlashClass(
+        props.side,
+        (() => {
+          if (selected || empty) {
+            return undefined
+          }
+          const instrumentName = props.instrumentName()
+          if (instrumentName === undefined) {
+            return undefined
+          }
+          // Leaf path only -- never scan the whole flash store (`in` would notify broadly).
+          return props.flashStore[instrumentName]?.[props.side]
+        })(),
+        empty,
+      ),
+      "d-price-btn",
+      selectedClass,
+    )
+  }
+
+  return (
+    <Show
+      when={props.onSelect !== undefined}
+      fallback={
+        <span class={flashClass()}>{formatUsdPrice(props.value())}</span>
+      }
+    >
+      <button
+        type="button"
+        class={flashClass()}
+        onClick={() => {
+          props.onSelect?.()
+        }}
+      >
+        {formatUsdPrice(props.value())}
+      </button>
+    </Show>
+  )
+}
 
 const SpotDividerRow = (props: {
   asset: Accessor<string>
@@ -395,13 +446,15 @@ const ExpiryCountdownHeader = (props: {
 
   return (
     <th class="d-strike-col d-expiry-countdown">
-      {(() => {
-        const expiryUnix = props.expiryUnix()
-        if (expiryUnix === null) {
-          return "—"
-        }
-        return formatExpiryCountdown(expiryUnix, nowMs())
-      })()}
+      <div class="d-expiry-countdown-label">
+        {(() => {
+          const expiryUnix = props.expiryUnix()
+          if (expiryUnix === null) {
+            return "—"
+          }
+          return formatExpiryCountdown(expiryUnix, nowMs())
+        })()}
+      </div>
     </th>
   )
 }
@@ -410,10 +463,25 @@ const ChainStrikeRow = (props: {
   strike: number
   book: QuoteBook
   flashStore: Partial<Record<string, QuoteFlashEntry>>
+  selection: Accessor<DeriveOrderTicketSelection | null>
+  onQuoteSelect: (instrumentName: string, quoteSide: QuoteBookSide) => void
 }) => {
   const callName = (): string | undefined =>
     props.book.callByStrike[props.strike]
   const putName = (): string | undefined => props.book.putByStrike[props.strike]
+
+  const isSelected = (
+    instrumentName: string | undefined,
+    quoteSide: QuoteBookSide,
+  ): boolean => {
+    const selection = props.selection()
+    return (
+      selection !== null &&
+      instrumentName !== undefined &&
+      selection.instrumentName === instrumentName &&
+      selection.quoteSide === quoteSide
+    )
+  }
 
   const callField = <Field,>(
     read: (quote: OptionQuote) => Field,
@@ -464,6 +532,13 @@ const ChainStrikeRow = (props: {
           value={() => callField(quote => quote.bid, null)}
           instrumentName={callName}
           flashStore={props.flashStore}
+          isSelected={() => isSelected(callName(), "bid")}
+          onSelect={() => {
+            const name = callName()
+            if (name !== undefined) {
+              props.onQuoteSelect(name, "bid")
+            }
+          }}
         />
       </td>
       <td
@@ -480,6 +555,13 @@ const ChainStrikeRow = (props: {
           value={() => callField(quote => quote.ask, null)}
           instrumentName={callName}
           flashStore={props.flashStore}
+          isSelected={() => isSelected(callName(), "ask")}
+          onSelect={() => {
+            const name = callName()
+            if (name !== undefined) {
+              props.onQuoteSelect(name, "ask")
+            }
+          }}
         />
       </td>
       <td
@@ -551,6 +633,13 @@ const ChainStrikeRow = (props: {
           value={() => putField(quote => quote.ask, null)}
           instrumentName={putName}
           flashStore={props.flashStore}
+          isSelected={() => isSelected(putName(), "ask")}
+          onSelect={() => {
+            const name = putName()
+            if (name !== undefined) {
+              props.onQuoteSelect(name, "ask")
+            }
+          }}
         />
       </td>
       <td
@@ -567,6 +656,13 @@ const ChainStrikeRow = (props: {
           value={() => putField(quote => quote.bid, null)}
           instrumentName={putName}
           flashStore={props.flashStore}
+          isSelected={() => isSelected(putName(), "bid")}
+          onSelect={() => {
+            const name = putName()
+            if (name !== undefined) {
+              props.onQuoteSelect(name, "bid")
+            }
+          }}
         />
       </td>
       <td
@@ -596,11 +692,22 @@ const GreeksQuoteRow = (props: {
   instrumentName: string
   book: QuoteBook
   flashStore: Partial<Record<string, QuoteFlashEntry>>
+  selection: Accessor<DeriveOrderTicketSelection | null>
+  onQuoteSelect: (instrumentName: string, quoteSide: QuoteBookSide) => void
 }) => {
   const quote = (): OptionQuote | undefined =>
     props.book.byInstrument[props.instrumentName]
   const itmClass = (): string =>
     quote()?.moneyness === "in_the_money" ? "d-itm" : ""
+
+  const isSelected = (quoteSide: QuoteBookSide): boolean => {
+    const selection = props.selection()
+    return (
+      selection !== null &&
+      selection.instrumentName === props.instrumentName &&
+      selection.quoteSide === quoteSide
+    )
+  }
 
   return (
     <tr>
@@ -626,6 +733,10 @@ const GreeksQuoteRow = (props: {
           value={() => quote()?.bid ?? null}
           instrumentName={() => props.instrumentName}
           flashStore={props.flashStore}
+          isSelected={() => isSelected("bid")}
+          onSelect={() => {
+            props.onQuoteSelect(props.instrumentName, "bid")
+          }}
         />
       </td>
       <td class={`text-right ${itmClass()}`}>
@@ -634,6 +745,10 @@ const GreeksQuoteRow = (props: {
           value={() => quote()?.ask ?? null}
           instrumentName={() => props.instrumentName}
           flashStore={props.flashStore}
+          isSelected={() => isSelected("ask")}
+          onSelect={() => {
+            props.onQuoteSelect(props.instrumentName, "ask")
+          }}
         />
       </td>
       <td class={`text-right d-iv ${itmClass()}`}>
@@ -679,15 +794,21 @@ export type OptionsTradingViewProps = {
   /** Portfolio risk cards + IV smile chart (legacy /derive-options page). */
   showRiskAndSmile?: boolean
   /**
-   * Portfolio-only: toggle + SplitviewSolid resize for the greeks table.
-   * Omit on /derive-options (greeks stay stacked with a fixed max height).
+   * Portfolio-only: toggle + SplitviewSolid resize for the greeks/order panel.
+   * Omit on /derive-options (detail stays stacked with a fixed max height).
    */
   greeksLayout?: {
     visible: Accessor<boolean>
     setVisible: (visible: boolean) => void
   }
+  /** Stage an option into the portfolio target (Portfolio Derive tab). */
+  onAddOption?: (request: DeriveOrderTicketAddRequest) => void
+  /** Minimum premium USD for Add (matches portfolio MIN_USD). */
+  minNotional?: number
   class?: string
 }
+
+type DetailTab = "greeks" | "order"
 
 export const OptionsTradingView = (
   props: OptionsTradingViewProps,
@@ -696,6 +817,7 @@ export const OptionsTradingView = (
   const greeksResizable = () => props.greeksLayout !== undefined
   const greeksVisible = () =>
     props.greeksLayout === undefined ? true : props.greeksLayout.visible()
+  const minNotional = () => props.minNotional ?? 11
 
   const [book, setBook] = createStore(emptyQuoteBook())
   const [bootstrap, setBootstrap] = createSignal<OptionsBootstrap | null>(null)
@@ -708,6 +830,9 @@ export const OptionsTradingView = (
   const [flashByInstrument, setFlashByInstrument] = createStore<
     Record<string, QuoteFlashEntry>
   >({})
+  const [detailTab, setDetailTab] = createSignal<DetailTab>("greeks")
+  const [orderSelection, setOrderSelection] =
+    createSignal<DeriveOrderTicketSelection | null>(null)
 
   const clearQuoteFlash = (): void => {
     setFlashByInstrument(reconcile({}))
@@ -849,6 +974,7 @@ export const OptionsTradingView = (
 
     setSelectedExpiryUnix(expiryUnix)
     clearQuotesForPendingSwitch(expiryUnix, null)
+    setOrderSelection(null)
 
     void postActiveExpiry(expiryUnix, controller.signal)
       .then(() => {
@@ -889,6 +1015,7 @@ export const OptionsTradingView = (
 
     setSelectedAsset(asset)
     setSelectedExpiryUnix(null)
+    setOrderSelection(null)
     quotePriceHistoryRef.map.clear()
     quotePriceHistoryRef.activeExpiryUnix = null
     clearQuotesForPendingSwitch(null, asset)
@@ -911,6 +1038,40 @@ export const OptionsTradingView = (
           error instanceof Error ? error.message : "Asset switch failed",
         )
       })
+  }
+
+  const handleQuoteSelect = (
+    instrumentName: string,
+    quoteSide: QuoteBookSide,
+  ): void => {
+    if (!(instrumentName in book.byInstrument)) {
+      return
+    }
+    const quote = book.byInstrument[instrumentName]
+    const selection = selectionFromQuoteClick(
+      quote,
+      quoteSide,
+      orderSelection(),
+    )
+    setOrderSelection(selection)
+    setDetailTab("order")
+    props.greeksLayout?.setVisible(true)
+  }
+
+  const handleTicketSideChange = (side: "buy" | "sell"): void => {
+    const current = orderSelection()
+    if (current === null) {
+      return
+    }
+    const quoteSide = quoteSideForOrderSide(side)
+    const liveLimit =
+      current.instrumentName in book.byInstrument
+        ? (() => {
+            const quote = book.byInstrument[current.instrumentName]
+            return quoteSide === "ask" ? quote.ask : quote.bid
+          })()
+        : null
+    setOrderSelection(selectionWithOrderSide(current, side, liveLimit))
   }
 
   const ivSmilePoints = createMemo(() => {
@@ -1366,6 +1527,8 @@ export const OptionsTradingView = (
                 strike={key}
                 book={book}
                 flashStore={flashByInstrument}
+                selection={orderSelection}
+                onQuoteSelect={handleQuoteSelect}
               />
             )
           }
@@ -1409,6 +1572,8 @@ export const OptionsTradingView = (
               instrumentName={name}
               book={book}
               flashStore={flashByInstrument}
+              selection={orderSelection}
+              onQuoteSelect={handleQuoteSelect}
             />
           )}
         </For>
@@ -1416,7 +1581,7 @@ export const OptionsTradingView = (
     </table>
   )
 
-  const greeksPanel = (options: {
+  const detailPanel = (options: {
     showClose: boolean
     constrainHeight: boolean
   }): JSX.Element => (
@@ -1427,8 +1592,31 @@ export const OptionsTradingView = (
       )}
     >
       <div class="flex shrink-0 items-center justify-between border-t border-[var(--d-border)] px-2 py-1">
-        <div class="text-[10px] font-semibold uppercase tracking-wide text-[var(--d-muted)]">
-          Greeks
+        <div class="flex items-center gap-1">
+          <button
+            type="button"
+            classList={{
+              "d-detail-tab": true,
+              "d-detail-tab-active": detailTab() === "greeks",
+            }}
+            onClick={() => {
+              setDetailTab("greeks")
+            }}
+          >
+            Greeks
+          </button>
+          <button
+            type="button"
+            classList={{
+              "d-detail-tab": true,
+              "d-detail-tab-active": detailTab() === "order",
+            }}
+            onClick={() => {
+              setDetailTab("order")
+            }}
+          >
+            Order
+          </button>
         </div>
         <Show when={options.showClose}>
           <Button
@@ -1436,7 +1624,7 @@ export const OptionsTradingView = (
             variant="ghost"
             size="icon"
             class="h-6 w-6 text-[var(--d-muted)]"
-            aria-label="Hide greeks"
+            aria-label="Hide detail panel"
             onClick={() => {
               props.greeksLayout?.setVisible(false)
             }}
@@ -1445,9 +1633,23 @@ export const OptionsTradingView = (
           </Button>
         </Show>
       </div>
-      <div class="d-greeks-scroll min-h-0 flex-1 overflow-auto">
-        {greeksTable()}
-      </div>
+      <Show
+        when={detailTab() === "greeks"}
+        fallback={
+          <div class="d-greeks-scroll min-h-0 flex-1 overflow-auto">
+            <DeriveOrderTicket
+              selection={orderSelection}
+              minNotional={minNotional()}
+              onSideChange={handleTicketSideChange}
+              onAdd={props.onAddOption}
+            />
+          </div>
+        }
+      >
+        <div class="d-greeks-scroll min-h-0 flex-1 overflow-auto">
+          {greeksTable()}
+        </div>
+      </Show>
     </div>
   )
 
@@ -1460,7 +1662,7 @@ export const OptionsTradingView = (
         {chainTable()}
       </div>
     ),
-    greeks: () => greeksPanel({ showClose: true, constrainHeight: false }),
+    greeks: () => detailPanel({ showClose: true, constrainHeight: false }),
   }
 
   return (
@@ -1468,12 +1670,12 @@ export const OptionsTradingView = (
       class={cn(
         // overflow-hidden (not auto): outer scrollports paint-flash the whole panel
         // in dockview; chain/greeks keep their own overflow-auto regions.
-        "derive-options flex h-full min-h-0 flex-col overflow-hidden p-3 text-[11px]",
+        "derive-options flex h-full min-h-0 flex-col overflow-hidden pt-3 text-[11px]",
         props.class,
       )}
     >
       <div class="mx-auto flex min-h-0 w-full max-w-[1680px] flex-1 flex-col gap-3">
-        <header class="flex shrink-0 items-center gap-2">
+        <header class="flex shrink-0 items-center gap-2 px-3">
           <div class="min-w-0 flex-1 overflow-x-auto scrollbar-hide">
             <div class="flex w-max gap-1">
               <For each={assetTabList()}>
@@ -1507,7 +1709,7 @@ export const OptionsTradingView = (
         </header>
 
         <Show when={errorMessage()}>
-          <div class="shrink-0 rounded border border-[var(--d-ask)]/40 bg-[rgba(255,107,138,0.08)] px-3 py-2 text-[var(--d-ask)]">
+          <div class="shrink-0 rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
             {errorMessage()}
           </div>
         </Show>
@@ -1538,7 +1740,7 @@ export const OptionsTradingView = (
                   <div class="d-chain-scroll min-h-0 flex-1 overflow-auto">
                     {chainTable()}
                   </div>
-                  {greeksPanel({
+                  {detailPanel({
                     showClose: greeksResizable(),
                     constrainHeight: !greeksResizable(),
                   })}

@@ -138,7 +138,7 @@ const calcLeverage = (totalNotional: number, accountValue: number): number => {
 }
 
 export const usePortfolioState = () => {
-  const { isConnected, isHyperliquidConnected } = useWallet()
+  const { isConnected, isHyperliquidConnected, isDeriveConnected } = useWallet()
 
   const [isPrecise, setPreciseSignal] = createSignal(
     initialPreciseFromStorage(),
@@ -553,12 +553,13 @@ export const usePortfolioState = () => {
     symbol: string,
     kind: PortfolioPositionKind,
     venue: PortfolioVenue,
+    options?: { side?: OrderSide; notional?: number },
   ) => {
     if (!isConnected()) return
-    if (symbol in targetPortfolio) return
-    if (deletedArchive[symbol] !== undefined) return
 
     if (kind === "perp") {
+      if (symbol in targetPortfolio) return
+      if (deletedArchive[symbol] !== undefined) return
       if (venue !== "hyperliquid" || !isHyperliquidConnected()) {
         return
       }
@@ -582,16 +583,46 @@ export const usePortfolioState = () => {
       return
     }
 
+    if (!isDeriveConnected()) {
+      return
+    }
+
+    const side = options?.side ?? "buy"
+    const notional = options?.notional ?? MIN_USD
+    if (!(notional >= MIN_USD)) {
+      return
+    }
+
+    const existing = targetPortfolio[symbol]
+    if (existing !== undefined) {
+      if (!isOptionPosition(existing)) {
+        return
+      }
+      batch(() => {
+        setTargetTotalNotional(prev => prev - existing.notional + notional)
+        setTargetPortfolio(symbol, {
+          kind: "option",
+          venue: "derive",
+          symbol,
+          side,
+          notional,
+        })
+      })
+      return
+    }
+
+    if (deletedArchive[symbol] !== undefined) return
+
     batch(() => {
       setTargetPortfolio(symbol, {
         kind: "option",
         venue: "derive",
         symbol,
-        side: "buy",
-        notional: MIN_USD,
+        side,
+        notional,
       })
 
-      setTargetTotalNotional(prev => prev + MIN_USD)
+      setTargetTotalNotional(prev => prev + notional)
     })
   }
 

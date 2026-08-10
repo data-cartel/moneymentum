@@ -749,6 +749,12 @@ const PortfolioPage = () => {
               isPanelVisible={isPanelVisible}
               greeksVisible={deriveGreeksVisible}
               onGreeksVisibleChange={setDeriveGreeksVisible}
+              onAddOption={request => {
+                portfolio.handleAddToken(request.symbol, "option", "derive", {
+                  side: request.side,
+                  notional: request.notional,
+                })
+              }}
             />
           </div>
         </KeyboardAwareDockviewProviders>

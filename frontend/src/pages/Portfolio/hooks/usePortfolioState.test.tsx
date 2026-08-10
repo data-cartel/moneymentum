@@ -24,6 +24,7 @@ vi.mock("@/hooks/useWallet", () => ({
     networkMode: () => "testnet",
     isConnected: () => true,
     isHyperliquidConnected: () => true,
+    isDeriveConnected: () => true,
   })),
 }))
 
@@ -179,6 +180,44 @@ describe("usePortfolioState", () => {
 
     result.handleRemoveToken("SOL/USDC:USDC")
     expect(result.targetPortfolio["SOL/USDC:USDC"]).toBeUndefined()
+  })
+
+  it("adds derive option with side and notional into target and staged trades", async () => {
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(Object.keys(result.targetPortfolio)).toHaveLength(2)
+    })
+
+    const instrument = "BTC-20260829-100000-P"
+    result.handleAddToken(instrument, "option", "derive", {
+      side: "sell",
+      notional: 250,
+    })
+
+    expect(result.targetPortfolio[instrument]).toEqual({
+      kind: "option",
+      venue: "derive",
+      symbol: instrument,
+      side: "sell",
+      notional: 250,
+    })
+
+    await waitFor(() => {
+      expect(
+        result.stagedTrades.some(trade => trade.underlying === instrument),
+      ).toBe(true)
+    })
+
+    const staged = result.stagedTrades.find(
+      trade => trade.underlying === instrument,
+    )
+    expect(staged?.side).toBe("sell")
+    expect(staged?.notional).toBe(250)
+    expect(staged?.kind).toBe("option")
+    expect(staged?.venue).toBe("derive")
   })
 
   it("clamps per-symbol leverage to max from leverage limits", async () => {

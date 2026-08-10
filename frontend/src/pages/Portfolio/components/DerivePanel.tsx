@@ -30,6 +30,7 @@ import {
   normalizeWalletPinInput,
   WALLET_PIN_LENGTH,
 } from "@/services/walletCredentialCrypto"
+import { MIN_USD } from "../hooks/usePortfolioState"
 import { tryUsePortfolioShell } from "../portfolioShellContext"
 
 export const DERIVE_WALLET_INPUT_ATTR = "data-derive-wallet-input"
@@ -42,6 +43,11 @@ export const DerivePanel = (props: {
   isPanelVisible: Accessor<boolean>
   greeksVisible: Accessor<boolean>
   onGreeksVisibleChange: (visible: boolean) => void
+  onAddOption?: (request: {
+    symbol: string
+    side: "buy" | "sell"
+    notional: number
+  }) => void
 }): JSX.Element => {
   const {
     connectDerive,
@@ -325,6 +331,8 @@ export const DerivePanel = (props: {
                 visible: props.greeksVisible,
                 setVisible: props.onGreeksVisibleChange,
               }}
+              minNotional={MIN_USD}
+              onAddOption={props.onAddOption}
             />
           </div>
         </Show>
