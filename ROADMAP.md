@@ -46,8 +46,9 @@ Design: [adrs/0001](./adrs/0001-event-sorcery-persistence-foundation.md).
 - [x] Name the failing market in ingestion fetch errors --
       [#431](https://github.com/dataclique/moneymentum/issues/431) /
       [#435](https://github.com/dataclique/moneymentum/pull/435)
-- [ ] A single market's failed fetch aborts the whole ingestion run and discards
-      its data -- [#432](https://github.com/dataclique/moneymentum/issues/432)
+- [x] A single market's failed fetch aborts the whole ingestion run and discards
+      its data -- [#432](https://github.com/dataclique/moneymentum/issues/432) /
+      [#460](https://github.com/dataclique/moneymentum/pull/460)
 
 ---
 
