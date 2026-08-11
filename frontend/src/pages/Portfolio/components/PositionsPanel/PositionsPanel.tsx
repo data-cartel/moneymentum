@@ -35,6 +35,7 @@ import {
   CROSS_ACCOUNT_LEVERAGE_MIN,
   CROSS_ACCOUNT_LEVERAGE_STEP,
 } from "./crossAccountLeverage"
+import { DeriveOpenOrdersPanel } from "./DeriveOpenOrdersPanel"
 import { ReadonlyBtcPanel } from "./ReadonlyBtcPanel"
 
 interface PositionsPanelProps {
@@ -276,6 +277,7 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
                   meta={positionsTableMeta()}
                 />
               </Show>
+              <DeriveOpenOrdersPanel />
             </div>
             <ReadonlyBtcPanel
               rows={props.readonlyBtcRows}

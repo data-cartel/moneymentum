@@ -70,6 +70,28 @@ describe("getErrorMessage", () => {
     )
   })
 
+  it("unwraps a nested FiberFailure inside ExchangeRequestError", async () => {
+    const inner = await asFiberFailure(
+      new HttpStatusError({ status: 502, detail: "bad gateway from api" }),
+    )
+    const failure = await asFiberFailure(
+      new ExchangeRequestError({ cause: inner }),
+    )
+    expect(getErrorMessage(failure)).toBe("bad gateway from api")
+    expect(getExchangeErrorDetail(failure)).toBe("bad gateway from api")
+  })
+
+  it("does not surface Effect's opaque FiberFailure message", async () => {
+    const failure = await asFiberFailure(
+      new ExchangeRequestError({
+        cause: new Error("An error has occurred"),
+      }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "The exchange rejected the request. Please try again.",
+    )
+  })
+
   it("falls back when ExchangeRequestError cause is an empty Error", async () => {
     const failure = await asFiberFailure(
       new ExchangeRequestError({ cause: new Error("") }),

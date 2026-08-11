@@ -8,6 +8,7 @@ import {
   type PortfolioPositionKind,
   type PortfolioVenue,
 } from "@/pages/Portfolio/hooks/usePortfolioState"
+import type { DeriveMappedPosition } from "@/services/deriveAccount"
 
 const rebalanceOrderUserMessage = (order: OrderResult): string => {
   if (order.message) {
@@ -50,6 +51,62 @@ export const portfolioMapFromExchangePositions = (
     ]),
   ) as Record<string, PortfolioInterface | undefined>
 
+  return { map, totalNotional }
+}
+
+/** Maps Derive open positions (options + perps) into portfolio rows. */
+export const portfolioMapFromDerivePositions = (
+  positions: DeriveMappedPosition[],
+): {
+  map: Record<string, PortfolioInterface | undefined>
+  totalNotional: number
+} => {
+  const totalNotional = positions.reduce(
+    (sum, position) => sum + position.notional,
+    0,
+  )
+  const map = Object.fromEntries(
+    positions.map(position => {
+      if (position.positionKind === "option") {
+        const optionRow: PortfolioInterface = {
+          kind: "option",
+          venue: "derive",
+          symbol: position.symbol,
+          side: position.side,
+          notional: position.notional,
+        }
+        return [position.symbol, optionRow]
+      }
+
+      const perpRow: PortfolioInterface = {
+        kind: "perp",
+        venue: "derive",
+        symbol: position.symbol,
+        side: position.side,
+        leverage: position.leverage || 1,
+        notional: position.notional,
+      }
+      return [position.symbol, perpRow]
+    }),
+  ) as Record<string, PortfolioInterface | undefined>
+
+  return { map, totalNotional }
+}
+
+export const mergePortfolioMaps = (
+  ...maps: Array<Record<string, PortfolioInterface | undefined>>
+): {
+  map: Record<string, PortfolioInterface | undefined>
+  totalNotional: number
+} => {
+  const map = Object.assign({}, ...maps) as Record<
+    string,
+    PortfolioInterface | undefined
+  >
+  const totalNotional = Object.values(map).reduce(
+    (sum, position) => sum + (position?.notional ?? 0),
+    0,
+  )
   return { map, totalNotional }
 }
 

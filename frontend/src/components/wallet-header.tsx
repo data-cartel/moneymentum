@@ -488,7 +488,7 @@ export const WalletHeader = (props: WalletHeaderProps) => {
                 </button>
                 <Show when={isDeriveLocked()}>
                   <p class="text-[10px] text-muted-foreground">
-                    Session locked — enter PIN on Derive tab
+                    Session locked — enter your PIN
                   </p>
                 </Show>
                 <Show when={!isDeriveLocked()}>

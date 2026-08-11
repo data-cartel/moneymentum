@@ -21,10 +21,12 @@ const weightsFromPortfolio = (
   _portfolioTotalNotional: number,
   readonlyPositions: ReadonlyBetaPosition[],
 ): Record<string, number> => {
-  // Options are excluded from beta until we map them to an underlying ticker.
+  // Options and Derive perps are excluded from beta until we map underlyings.
   const exchangePositions = Object.values(portfolio).filter(
     (position): position is PortfolioInterface =>
-      position !== undefined && isPerpPosition(position),
+      position !== undefined &&
+      isPerpPosition(position) &&
+      position.venue === "hyperliquid",
   )
   const includedReadonlyPositions = readonlyPositions.filter(
     position =>

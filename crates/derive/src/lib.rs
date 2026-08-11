@@ -7,7 +7,7 @@ use std::time::Duration;
 use axum::Json;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response, sse::Event, sse::Sse};
@@ -145,6 +145,13 @@ struct OptionPricingSlimDto {
     discount_factor: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeriveNetwork {
+    Mainnet,
+    Testnet,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeriveConfig {
     /// Bind port for the standalone `derive_cli` binary. Ignored when options
@@ -152,6 +159,13 @@ pub struct DeriveConfig {
     pub port: u16,
     pub rest_base_url: Url,
     pub ws_url: Url,
+    pub testnet_rest_base_url: Url,
+    pub testnet_ws_url: Url,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetworkQuery {
+    network: DeriveNetwork,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -303,6 +317,21 @@ struct DeriveState {
     snapshot: Arc<RwLock<OptionsSnapshot>>,
     tx: broadcast::Sender<OptionsSnapshot>,
     command_tx: mpsc::Sender<HubCommand>,
+}
+
+/// Dual-network hubs: one websocket process per Derive deployment.
+struct DeriveNetworksState {
+    mainnet: Arc<DeriveState>,
+    testnet: Arc<DeriveState>,
+}
+
+impl DeriveNetworksState {
+    fn for_network(&self, network: DeriveNetwork) -> &Arc<DeriveState> {
+        match network {
+            DeriveNetwork::Mainnet => &self.mainnet,
+            DeriveNetwork::Testnet => &self.testnet,
+        }
+    }
 }
 
 fn build_http_client() -> Result<Client, DeriveError> {
@@ -1074,19 +1103,29 @@ async fn health() -> &'static str {
     "ok"
 }
 
-async fn get_bootstrap(State(state): State<Arc<DeriveState>>) -> Json<OptionsBootstrap> {
+async fn get_bootstrap(
+    State(networks): State<Arc<DeriveNetworksState>>,
+    Query(query): Query<NetworkQuery>,
+) -> Json<OptionsBootstrap> {
+    let state = networks.for_network(query.network);
     let asset = state.active_asset.read().await.clone();
     let catalogue = state.catalogue.read().await;
     Json(build_bootstrap(&catalogue, asset.as_str(), &state.assets))
 }
 
-async fn get_snapshot(State(state): State<Arc<DeriveState>>) -> Json<OptionsSnapshot> {
+async fn get_snapshot(
+    State(networks): State<Arc<DeriveNetworksState>>,
+    Query(query): Query<NetworkQuery>,
+) -> Json<OptionsSnapshot> {
+    let state = networks.for_network(query.network);
     Json(state.snapshot.read().await.clone())
 }
 
 async fn stream_options(
-    State(state): State<Arc<DeriveState>>,
+    State(networks): State<Arc<DeriveNetworksState>>,
+    Query(query): Query<NetworkQuery>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let state = networks.for_network(query.network);
     let receiver = state.tx.subscribe();
     let stream = futures::stream::unfold(receiver, |mut receiver| async move {
         loop {
@@ -1109,16 +1148,18 @@ async fn stream_options(
     Sse::new(stream)
 }
 
-/// Switch the active expiry that the server streams.
+/// Switch the active expiry that the selected network hub streams.
 ///
-/// The derive server holds a single, process-global active expiry shared by
-/// every SSE subscriber, so it is intended for single-client use: if two
-/// clients select different expiries, the most recent request wins and both
-/// clients see that expiry's data.
+/// Each Derive network holds a single, process-global active expiry shared by
+/// every SSE subscriber on that network, so it is intended for single-client
+/// use: if two clients select different expiries, the most recent request wins
+/// and both clients see that expiry's data.
 async fn post_active_expiry(
-    State(state): State<Arc<DeriveState>>,
+    State(networks): State<Arc<DeriveNetworksState>>,
+    Query(query): Query<NetworkQuery>,
     Json(body): Json<ActiveExpiryBody>,
 ) -> Result<StatusCode, StatusCode> {
+    let state = networks.for_network(query.network);
     let catalogue = state.catalogue.read().await;
     if !catalogue.expiry_unix_sorted_asc.contains(&body.expiry_unix) {
         return Err(StatusCode::BAD_REQUEST);
@@ -1132,14 +1173,17 @@ async fn post_active_expiry(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Switch the active underlying asset. Reloads that currency's option
-/// catalogue and resubscribes websocket channels to its nearest expiry.
+/// Switch the active underlying asset on the selected network hub. Reloads that
+/// currency's option catalogue and resubscribes websocket channels to its
+/// nearest expiry.
 ///
 /// Same single-client caveat as [`post_active_expiry`].
 async fn post_active_asset(
-    State(state): State<Arc<DeriveState>>,
+    State(networks): State<Arc<DeriveNetworksState>>,
+    Query(query): Query<NetworkQuery>,
     Json(body): Json<ActiveAssetBody>,
 ) -> Result<StatusCode, StatusCode> {
+    let state = networks.for_network(query.network);
     if !state.assets.iter().any(|asset| asset == &body.asset) {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -1151,28 +1195,28 @@ async fn post_active_asset(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Options chain routes + background Derive websocket hub.
-///
-/// Paths match what the frontend hits through the Vite `/api` proxy
-/// (`/derive/options/...`). No CORS layer -- same-origin via the proxy, same as
-/// the rest of moneymentum. For a standalone process with its own port, use
-/// [`derive_app`].
-pub async fn derive_options_router(config: DeriveConfig) -> Result<Router, DeriveError> {
+async fn spawn_options_hub(
+    rest_base_url: Url,
+    ws_url: Url,
+    network: DeriveNetwork,
+) -> Result<Arc<DeriveState>, DeriveError> {
     let http = build_http_client()?;
-    let assets = fetch_option_assets(&http, &config.rest_base_url).await?;
+    let assets = fetch_option_assets(&http, &rest_base_url).await?;
     let default_asset = assets.first().cloned().ok_or_else(|| DeriveError::Api {
-        message: "derive option asset list was empty after discovery".to_string(),
+        message: format!("derive {network:?} option asset list was empty after discovery"),
     })?;
 
-    let catalogue =
-        fetch_options_catalogue(&http, &config.rest_base_url, default_asset.as_str()).await?;
+    let catalogue = fetch_options_catalogue(&http, &rest_base_url, default_asset.as_str()).await?;
     let Some(default_expiry_unix) = catalogue.expiry_unix_sorted_asc.first().copied() else {
         error!(
             asset = %default_asset,
+            ?network,
             "derive returned no active option expiries"
         );
         return Err(DeriveError::Api {
-            message: format!("derive returned no active option expiries for {default_asset}"),
+            message: format!(
+                "derive returned no active option expiries for {default_asset} on {network:?}"
+            ),
         });
     };
 
@@ -1197,8 +1241,6 @@ pub async fn derive_options_router(config: DeriveConfig) -> Result<Router, Deriv
         command_tx,
     });
 
-    let ws_url = config.ws_url.clone();
-    let rest_base_url = config.rest_base_url.clone();
     let snapshot_for_task = Arc::clone(&snapshot);
     let http_for_task = http.clone();
     tokio::spawn(async move {
@@ -1216,18 +1258,43 @@ pub async fn derive_options_router(config: DeriveConfig) -> Result<Router, Deriv
         )
         .await
         {
-            error!(error = %error, "derive websocket hub exited with error");
+            error!(error = %error, ?network, "derive websocket hub exited with error");
         }
     });
 
-    debug!("derive options websocket hub spawned");
+    debug!(?network, "derive options websocket hub spawned");
+    Ok(state)
+}
+
+/// Options chain routes + background Derive websocket hubs (mainnet + testnet).
+///
+/// Paths match what the frontend hits through the Vite `/api` proxy
+/// (`/derive/options/...?network=`). No CORS layer -- same-origin via the proxy,
+/// same as the rest of moneymentum. For a standalone process with its own port,
+/// use [`derive_app`].
+pub async fn derive_options_router(config: DeriveConfig) -> Result<Router, DeriveError> {
+    let mainnet = spawn_options_hub(
+        config.rest_base_url.clone(),
+        config.ws_url.clone(),
+        DeriveNetwork::Mainnet,
+    )
+    .await?;
+    let testnet = spawn_options_hub(
+        config.testnet_rest_base_url.clone(),
+        config.testnet_ws_url.clone(),
+        DeriveNetwork::Testnet,
+    )
+    .await?;
+
+    let networks = Arc::new(DeriveNetworksState { mainnet, testnet });
+
     Ok(Router::new()
         .route("/derive/options/bootstrap", get(get_bootstrap))
         .route("/derive/options/snapshot", get(get_snapshot))
         .route("/derive/options/stream", get(stream_options))
         .route("/derive/options/active_expiry", post(post_active_expiry))
         .route("/derive/options/active_asset", post(post_active_asset))
-        .with_state(state))
+        .with_state(networks))
 }
 
 /// Standalone Derive options HTTP server (used by `derive_cli`).

@@ -17,6 +17,7 @@ import {
   PORTFOLIO_SYMBOL_ATTR,
   ALL_SYMBOLS_SEARCH_ATTR,
   STAGED_PIN_ATTR,
+  DERIVE_PIN_ATTR,
   usePortfolioKeyboardContext,
   type PortfolioKeyboardActions,
   type KeyboardPanelId,
@@ -38,6 +39,7 @@ const onOpenWalletPinDialog = vi.fn()
 const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
 const [connectionState, setConnectionState] =
   createSignal<StagedConnectionState>("ready")
+const [deriveSessionLocked, setDeriveSessionLocked] = createSignal(false)
 const [portfolioSymbols, setPortfolioSymbols] = createSignal([
   "BTC",
   "ETH",
@@ -65,6 +67,7 @@ const buildActions = (): PortfolioKeyboardActions => ({
   getAllSymbolSymbols: () => hyperliquid(),
   isPinDialogOpen: () => pinDialogOpen(),
   connectionState: () => connectionState(),
+  isDeriveSessionLocked: () => deriveSessionLocked(),
   onRemove,
   onUndoRemove,
   onSideChange,
@@ -148,7 +151,13 @@ const Harness = (props: { children?: JSX.Element }) => (
       tabIndex={0}
       {...{ [PORTFOLIO_PANEL_ATTR]: "derive" }}
       data-testid="derive-panel"
-    />
+    >
+      <input
+        {...{ [DERIVE_PIN_ATTR]: "" }}
+        aria-label="Enter 6-digit PIN to load data"
+        defaultValue=""
+      />
+    </div>
     <div {...{ [PORTFOLIO_PANEL_ATTR]: "staged" }} data-testid="staged-panel">
       <input
         {...{ [STAGED_PIN_ATTR]: "" }}
@@ -166,6 +175,7 @@ describe("portfolio keyboard workflow", () => {
     vi.clearAllMocks()
     setPinDialogOpen(false)
     setConnectionState("ready")
+    setDeriveSessionLocked(false)
     setPortfolioSymbols(["BTC", "ETH", "SOL"])
     setAllSymbols(["BTC", "ETH", "SOL", "DOGE"])
     setSides({ BTC: "buy", ETH: "buy", SOL: "sell" })
@@ -199,6 +209,20 @@ describe("portfolio keyboard workflow", () => {
 
     fireEvent.keyDown(window, { key: "1" })
     expect(activatePanel).toHaveBeenCalledWith("portfolio")
+  })
+
+  it("focuses Derive PIN when opening panel 3 with a locked session", async () => {
+    setDeriveSessionLocked(true)
+    render(() => <Harness />)
+
+    fireEvent.keyDown(window, { key: "3" })
+    expect(activatePanel).toHaveBeenCalledWith("derive")
+
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Enter 6-digit PIN to load data"),
+      )
+    })
   })
 
   it("navigates portfolio rows with j/k and restores selection", () => {

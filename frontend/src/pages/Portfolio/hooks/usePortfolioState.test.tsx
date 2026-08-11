@@ -5,18 +5,28 @@ import type { ParentProps } from "solid-js"
 
 import { MIN_USD, usePortfolioState } from "./usePortfolioState"
 import {
+  useDeriveAccountSnapshot,
+  useDeriveBalance,
+  useDeriveSessionCredentials,
   useHyperliquidAccountSummary,
   useHyperliquidLeverageLimits,
   useHyperliquidPositions,
   useRebalanceHyperliquidPositions,
 } from "@/hooks/useTrading"
+import { useWallet } from "@/hooks/useWallet"
 
 vi.mock("@/hooks/useTrading", () => ({
   useHyperliquidAccountSummary: vi.fn(),
   useHyperliquidPositions: vi.fn(),
   useHyperliquidLeverageLimits: vi.fn(),
   useRebalanceHyperliquidPositions: vi.fn(),
-  useDeriveBalance: vi.fn(() => ({ data: undefined })),
+  useDeriveBalance: vi.fn(() => ({ data: undefined, isLoading: false })),
+  useDeriveAccountSnapshot: vi.fn(() => ({
+    data: undefined,
+    isLoading: false,
+    refetch: vi.fn(),
+  })),
+  useDeriveSessionCredentials: vi.fn(() => () => null),
 }))
 
 vi.mock("@/hooks/useWallet", () => ({
@@ -24,7 +34,8 @@ vi.mock("@/hooks/useWallet", () => ({
     networkMode: () => "testnet",
     isConnected: () => true,
     isHyperliquidConnected: () => true,
-    isDeriveConnected: () => true,
+    isDeriveConnected: () => false,
+    isDeriveLocked: () => false,
   })),
 }))
 
@@ -110,6 +121,30 @@ describe("usePortfolioState", () => {
       options?.onSettled?.(settledOrders, null)
     })
 
+    vi.mocked(useWallet).mockReturnValue({
+      networkMode: () => "testnet",
+      isConnected: () => true,
+      isHyperliquidConnected: () => true,
+      isDeriveConnected: () => false,
+      isDeriveLocked: () => false,
+    } as ReturnType<typeof useWallet>)
+
+    vi.mocked(useDeriveBalance).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDeriveBalance>)
+
+    vi.mocked(useDeriveAccountSnapshot).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDeriveAccountSnapshot>)
+
+    vi.mocked(useDeriveSessionCredentials).mockReturnValue(
+      (() => null) as ReturnType<typeof useDeriveSessionCredentials>,
+    )
+
     vi.mocked(useHyperliquidAccountSummary).mockReturnValue({
       data: {
         accountValue: 1000,
@@ -166,6 +201,99 @@ describe("usePortfolioState", () => {
     expect(result.targetTotalNotional).toBe(1000)
   })
 
+  it("merges derive open positions into current and target portfolios", async () => {
+    vi.mocked(useWallet).mockReturnValue({
+      networkMode: () => "testnet",
+      isConnected: () => true,
+      isHyperliquidConnected: () => true,
+      isDeriveConnected: () => true,
+      isDeriveLocked: () => false,
+    } as ReturnType<typeof useWallet>)
+
+    vi.mocked(useDeriveSessionCredentials).mockReturnValue((() => ({
+      deriveWallet: "0xabc",
+      sessionAddress: "0xdef",
+      sessionPrivateKey:
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      networkMode: "testnet" as const,
+      subaccountId: 7,
+    })) as ReturnType<typeof useDeriveSessionCredentials>)
+
+    vi.mocked(useDeriveBalance).mockReturnValue({
+      data: {
+        accountValue: 500,
+        positionsValue: 620,
+        collateralsValue: 0,
+        totals: {},
+      },
+      isLoading: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDeriveBalance>)
+
+    vi.mocked(useDeriveAccountSnapshot).mockReturnValue({
+      data: {
+        deriveWallet: "0xabc",
+        subaccountIds: [7],
+        subaccounts: [
+          {
+            subaccountId: 7,
+            subaccountValue: "500",
+            collateralsValue: "0",
+            initialMargin: "0",
+            maintenanceMargin: "0",
+            positionsValue: "620",
+            positions: [
+              {
+                symbol: "ETH-20260327-2000-C",
+                side: "buy" as const,
+                notional: 120,
+                entryPrice: 100,
+                unrealizedPnl: 20,
+                leverage: 1,
+                positionKind: "option" as const,
+              },
+              {
+                symbol: "ETH-PERP",
+                side: "sell" as const,
+                notional: 500,
+                entryPrice: 2000,
+                unrealizedPnl: -10,
+                leverage: 1,
+                positionKind: "perp" as const,
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDeriveAccountSnapshot>)
+
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(result.currentPortfolio["ETH-20260327-2000-C"]).toBeDefined()
+      expect(result.currentPortfolio["ETH-PERP"]).toBeDefined()
+    })
+
+    expect(result.currentPortfolio["ETH-20260327-2000-C"]).toMatchObject({
+      kind: "option",
+      venue: "derive",
+      notional: 120,
+    })
+    expect(result.currentPortfolio["ETH-PERP"]).toMatchObject({
+      kind: "perp",
+      venue: "derive",
+      side: "sell",
+      notional: 500,
+    })
+    expect(result.currentPortfolio["BTC/USDC:USDC"]?.venue).toBe("hyperliquid")
+    expect(result.currentTotalNotional).toBe(1620)
+    expect(result.targetPortfolio["ETH-20260327-2000-C"]?.venue).toBe("derive")
+  })
+
   it("adds and removes token in target portfolio", async () => {
     const { result } = renderHook(() => usePortfolioState(), {
       wrapper: createWrapper(),
@@ -183,6 +311,35 @@ describe("usePortfolioState", () => {
   })
 
   it("adds derive option with side and notional into target and staged trades", async () => {
+    vi.mocked(useWallet).mockReturnValue({
+      networkMode: () => "testnet",
+      isConnected: () => true,
+      isHyperliquidConnected: () => true,
+      isDeriveConnected: () => true,
+      isDeriveLocked: () => false,
+    } as ReturnType<typeof useWallet>)
+
+    vi.mocked(useDeriveAccountSnapshot).mockReturnValue({
+      data: {
+        deriveWallet: "0xabc",
+        subaccountIds: [],
+        subaccounts: [],
+      },
+      isLoading: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDeriveAccountSnapshot>)
+
+    vi.mocked(useDeriveBalance).mockReturnValue({
+      data: {
+        accountValue: 0,
+        positionsValue: 0,
+        collateralsValue: 0,
+        totals: {},
+      },
+      isLoading: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDeriveBalance>)
+
     const { result } = renderHook(() => usePortfolioState(), {
       wrapper: createWrapper(),
     })
@@ -600,6 +757,10 @@ describe("usePortfolioState", () => {
       expect(btcTrade?.orderError).toBeUndefined()
     })
 
-    expect(consoleWarn).not.toHaveBeenCalled()
+    const unexpectedWarns = consoleWarn.mock.calls.filter(
+      ([message]) =>
+        message !== "rebalance finalize: non-filled orders kept staged target",
+    )
+    expect(unexpectedWarns).toEqual([])
   })
 })

@@ -23,6 +23,8 @@ export interface DeriveWalletCredentials {
   sessionAddress: string
   sessionPrivateKey: `0x${string}`
   subaccountId: number | null
+  /** Network the session key was connected against. */
+  networkMode: NetworkMode
 }
 
 export interface WalletContextType {
@@ -122,6 +124,8 @@ export interface EncryptedDeriveSession {
   salt: string
   iv: string
   subaccountId: number | null
+  /** Network the session key was connected against. */
+  networkMode: NetworkMode
 }
 
 const HEX_ENCODING_PATTERN = /^[0-9a-fA-F]+$/
@@ -191,6 +195,11 @@ const isEncryptedDeriveSession = (
     subaccountId !== null &&
     (typeof subaccountId !== "number" || !Number.isInteger(subaccountId))
   ) {
+    return false
+  }
+
+  const networkMode = sessionCandidate.networkMode
+  if (networkMode !== "testnet" && networkMode !== "mainnet") {
     return false
   }
 

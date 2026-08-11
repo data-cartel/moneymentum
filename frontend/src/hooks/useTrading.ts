@@ -20,6 +20,11 @@ import {
   fetchDeriveBalance,
   type DeriveSessionCredentials,
 } from "@/services/deriveAccount"
+import {
+  cancelDeriveOrder,
+  fetchDeriveOpenOrders,
+} from "@/services/derive-client"
+import { DeriveSessionMissing } from "@/services/deriveAccount"
 import type { RebalanceAction } from "@/pages/Portfolio/hooks/portfolioRebalancer"
 
 export type {
@@ -38,6 +43,7 @@ const QUERY_KEYS = {
   fundingRates: ["hyperliquid", "funding-rates"],
   deriveBalance: ["derive", "balance"],
   deriveAccount: ["derive", "account"],
+  deriveOpenOrders: ["derive", "open-orders"],
 } as const
 
 const DATA_STALE_TIME_MS = 30_000
@@ -216,27 +222,15 @@ export interface RebalanceParams {
 }
 
 export const useRebalanceHyperliquidPositions = () => {
-  const { client, credentials, networkMode } = useHyperliquidClient()
-  const queryClient = useQueryClient()
+  const { client } = useHyperliquidClient()
 
   return useMutation(() => ({
     mutationFn: (params: RebalanceParams) =>
       Effect.runPromise(
         Hyperliquid.rebalancePositions(client(), params.actions),
       ),
-    onSuccess: () => {
-      const account = credentials()?.accountAddress
-      const network = networkMode()
-      void queryClient.invalidateQueries({
-        queryKey: [...QUERY_KEYS.positions, account, network],
-      })
-      void queryClient.invalidateQueries({
-        queryKey: [...QUERY_KEYS.balance, account, network],
-      })
-      void queryClient.invalidateQueries({
-        queryKey: [...QUERY_KEYS.accountSummary, account, network],
-      })
-    },
+    // Portfolio `finalizeRebalance` owns post-trade refresh. Invalidating here
+    // races that settle and can briefly reapply a stale snapshot.
   }))
 }
 
@@ -308,12 +302,15 @@ export const useDeriveSessionCredentials = () => {
     if (unlocked === null) {
       return null
     }
+    if (unlocked.networkMode !== networkMode()) {
+      return null
+    }
 
     return {
       deriveWallet: unlocked.deriveWallet,
       sessionAddress: unlocked.sessionAddress,
       sessionPrivateKey: unlocked.sessionPrivateKey,
-      networkMode: networkMode(),
+      networkMode: unlocked.networkMode,
       subaccountId: unlocked.subaccountId,
     }
   })
@@ -368,6 +365,62 @@ export const useDeriveAccountSnapshot = () => {
       staleTime: DATA_STALE_TIME_MS,
     }
   })
+}
+
+export const useDeriveOpenOrders = () => {
+  const session = useDeriveSessionCredentials()
+  const { isDeriveConnected, isDeriveLocked } = useWallet()
+
+  return useQuery(() => {
+    const credentials = session()
+    const canFetch =
+      isDeriveConnected() &&
+      !isDeriveLocked() &&
+      credentials !== null &&
+      credentials.subaccountId !== null
+
+    return {
+      queryKey: [
+        ...QUERY_KEYS.deriveOpenOrders,
+        credentials?.sessionAddress ?? null,
+        credentials?.subaccountId ?? null,
+        credentials?.networkMode ?? null,
+      ],
+      queryFn: () => {
+        // Re-read session at fetch time -- refetch() ignores `enabled`.
+        const current = session()
+        const subaccountId = current?.subaccountId
+        if (subaccountId === undefined || subaccountId === null) {
+          return Effect.runPromise(Effect.fail(new DeriveSessionMissing()))
+        }
+        return Effect.runPromise(fetchDeriveOpenOrders(current))
+      },
+      enabled: canFetch,
+      staleTime: DATA_STALE_TIME_MS,
+      refetchInterval: canFetch ? 10_000 : false,
+    }
+  })
+}
+
+export const useCancelDeriveOrder = () => {
+  const session = useDeriveSessionCredentials()
+  const queryClient = useQueryClient()
+
+  return useMutation(() => ({
+    mutationFn: (params: { id: string; symbol: string }) => {
+      const credentials = session()
+      const subaccountId = credentials?.subaccountId
+      if (subaccountId === undefined || subaccountId === null) {
+        return Effect.runPromise(Effect.fail(new DeriveSessionMissing()))
+      }
+      return Effect.runPromise(cancelDeriveOrder(credentials, params))
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: QUERY_KEYS.deriveOpenOrders,
+      })
+    },
+  }))
 }
 
 export const useFullHyperliquidRefresh = () => {

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 
 import {
   diffPortfolios,
+  mergePortfolioMaps,
+  portfolioMapFromDerivePositions,
   portfolioMapFromExchangePositions,
   preciseRebalanceLegs,
   targetAndArchiveAfterRebalance,
@@ -270,6 +272,74 @@ describe("portfolioMapFromExchangePositions", () => {
       leverage: 2,
       notional: 600,
     })
+  })
+})
+
+describe("portfolioMapFromDerivePositions", () => {
+  it("maps derive options and perps into portfolio rows", () => {
+    const snapshot = portfolioMapFromDerivePositions([
+      {
+        symbol: "ETH-20260327-2000-C",
+        side: "buy",
+        notional: 120,
+        entryPrice: 100,
+        unrealizedPnl: 20,
+        leverage: 1,
+        positionKind: "option",
+      },
+      {
+        symbol: "ETH-PERP",
+        side: "sell",
+        notional: 500,
+        entryPrice: 2000,
+        unrealizedPnl: -10,
+        leverage: 1,
+        positionKind: "perp",
+      },
+    ])
+
+    expect(snapshot.totalNotional).toBe(620)
+    expect(snapshot.map["ETH-20260327-2000-C"]).toMatchObject({
+      kind: "option",
+      venue: "derive",
+      notional: 120,
+    })
+    expect(snapshot.map["ETH-PERP"]).toMatchObject({
+      kind: "perp",
+      venue: "derive",
+      side: "sell",
+      notional: 500,
+      leverage: 1,
+    })
+  })
+})
+
+describe("mergePortfolioMaps", () => {
+  it("combines hyperliquid and derive maps", () => {
+    const hyperliquid = portfolioMapFromExchangePositions([
+      {
+        symbol: "BTC/USDC:USDC",
+        side: "buy",
+        leverage: 2,
+        notional: 600,
+      },
+    ])
+    const derive = portfolioMapFromDerivePositions([
+      {
+        symbol: "ETH-20260327-2000-C",
+        side: "buy",
+        notional: 120,
+        entryPrice: 100,
+        unrealizedPnl: 0,
+        leverage: 1,
+        positionKind: "option",
+      },
+    ])
+
+    const merged = mergePortfolioMaps(hyperliquid.map, derive.map)
+    expect(merged.totalNotional).toBe(720)
+    expect(merged.map["BTC/USDC:USDC"]?.venue).toBe("hyperliquid")
+    expect(merged.map["ETH-20260327-2000-C"]?.venue).toBe("derive")
   })
 })
 

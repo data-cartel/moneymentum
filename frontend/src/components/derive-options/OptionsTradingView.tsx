@@ -21,6 +21,7 @@ import {
 } from "@arminmajerie/dockview-solid"
 
 import { Button } from "@/components/ui/button"
+import type { NetworkMode } from "@/contexts/wallet-context"
 import { fetchStreamChecked, NetworkError } from "@/lib/http"
 import { cn } from "@/lib/cn"
 import { computeRollingVolatility } from "@/pages/Prototype/metrics/computations"
@@ -791,6 +792,8 @@ const GreeksQuoteRow = (props: {
 export type OptionsTradingViewProps = {
   /** When false, EventSource is closed (callers debounce panel hide). */
   streamEnabled: Accessor<boolean>
+  /** Which Derive deployment to stream (follows the Testnet toggle). */
+  networkMode: Accessor<NetworkMode>
   /** Portfolio risk cards + IV smile chart (legacy /derive-options page). */
   showRiskAndSmile?: boolean
   /**
@@ -920,7 +923,12 @@ export const OptionsTradingView = (
     signal?: AbortSignal,
   ): Promise<void> =>
     Effect.runPromise(
-      deriveService.postActiveExpiry(deriveBaseUrl, expiryUnix, signal),
+      deriveService.postActiveExpiry(
+        deriveBaseUrl,
+        props.networkMode(),
+        expiryUnix,
+        signal,
+      ),
     )
 
   const postActiveAsset = (
@@ -928,7 +936,12 @@ export const OptionsTradingView = (
     signal?: AbortSignal,
   ): Promise<void> =>
     Effect.runPromise(
-      deriveService.postActiveAsset(deriveBaseUrl, asset, signal),
+      deriveService.postActiveAsset(
+        deriveBaseUrl,
+        props.networkMode(),
+        asset,
+        signal,
+      ),
     )
 
   const clearQuotesForPendingSwitch = (
@@ -1293,11 +1306,15 @@ export const OptionsTradingView = (
   })
 
   const loadSnapshot = (signal?: AbortSignal): Promise<OptionsSnapshot> =>
-    Effect.runPromise(deriveService.fetchSnapshot(deriveBaseUrl, signal))
+    Effect.runPromise(
+      deriveService.fetchSnapshot(deriveBaseUrl, props.networkMode(), signal),
+    )
 
   const startStream = (): void => {
     streamRef?.close()
-    streamRef = new EventSource(`${deriveBaseUrl}/derive/options/stream`)
+    streamRef = new EventSource(
+      deriveService.deriveOptionsStreamUrl(deriveBaseUrl, props.networkMode()),
+    )
     streamRef.onmessage = event => {
       try {
         if (typeof event.data !== "string") {
@@ -1365,6 +1382,7 @@ export const OptionsTradingView = (
   }
 
   // createEffect: open options EventSource only while streamEnabled is true.
+  // Re-bind when networkMode changes so the chain follows the Testnet toggle.
   // Do not read selectedAsset/expiry here -- initialize sets them and would
   // re-trigger this effect into an abort loop.
   createEffect(() => {
@@ -1375,10 +1393,17 @@ export const OptionsTradingView = (
       return
     }
 
+    const network = props.networkMode()
     const controller = new AbortController()
     const mountGeneration = { value: 0 }
     const claim = ++mountGeneration.value
     setIsLoading(true)
+    setBootstrap(null)
+    setOrderSelection(null)
+    setBook(reconcile(emptyQuoteBook()))
+    quotePriceHistoryRef.map.clear()
+    quotePriceHistoryRef.activeExpiryUnix = null
+    setFlashByInstrument(reconcile({}))
 
     const loadBtcRealizedVol = async (): Promise<void> => {
       try {
@@ -1421,7 +1446,11 @@ export const OptionsTradingView = (
     const initialize = async () => {
       try {
         const boot = await Effect.runPromise(
-          deriveService.fetchBootstrap(deriveBaseUrl, controller.signal),
+          deriveService.fetchBootstrap(
+            deriveBaseUrl,
+            network,
+            controller.signal,
+          ),
         )
         if (mountGeneration.value !== claim) {
           return

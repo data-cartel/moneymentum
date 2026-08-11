@@ -466,6 +466,16 @@ export class DeriveTradingClient {
       this.subaccountParams(),
     )
   }
+
+  async cancelOrder(id: string, symbol: string): Promise<DeriveCcxtOrder> {
+    await this.ensureMarketsLoaded()
+    const resolvedSymbol = await this.resolveSymbol(symbol)
+    return this.exchange.cancelOrder(
+      id,
+      resolvedSymbol,
+      this.subaccountParams(),
+    )
+  }
 }
 
 const requireCredentials = (
@@ -536,5 +546,23 @@ export const fetchDeriveOpenOrders = (
   requireCredentials(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() => new DeriveTradingClient(session).fetchOpenOrders()),
+    ),
+  )
+
+export const cancelDeriveOrder = (
+  credentials: DeriveSessionCredentials | null,
+  request: { id: string; symbol: string },
+): Effect.Effect<
+  DeriveCcxtOrder,
+  DeriveSessionMissing | ExchangeRequestError
+> =>
+  requireCredentials(credentials).pipe(
+    Effect.flatMap(session =>
+      wrapExchange(() =>
+        new DeriveTradingClient(session).cancelOrder(
+          request.id,
+          request.symbol,
+        ),
+      ),
     ),
   )

@@ -1,10 +1,14 @@
 import type { Order, OrderRequest } from "ccxt"
 import hyperliquid from "ccxt/hyperliquid"
+import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
+import * as Option from "effect/Option"
 import type { NetworkMode, WalletCredentials } from "@/contexts/wallet-context"
 import type { RebalanceAction } from "@/pages/Portfolio/hooks/portfolioRebalancer"
 import {
   fetchHyperliquidMarkets,
+  type HyperliquidMarketsResponse,
   type LeverageLimit,
 } from "@/services/hyperliquid-markets"
 
@@ -1171,124 +1175,176 @@ export class HyperliquidClient {
     console.log("rebalancePositions", actions)
     const allSymbols = [...new Set(actions.map(action => action.symbol))]
 
-    const [backendMarkets, perpContexts] = await Promise.all([
-      Effect.runPromise(fetchHyperliquidMarkets(this.networkMode)),
-      fetchPerpMarketContexts(this.networkMode),
-    ])
-
-    this.hydrateMarketsFromBackend(backendMarkets.leverageLimits, perpContexts)
-
-    const leverageBySymbol = new Map(
-      backendMarkets.leverageLimits.map(entry => [entry.symbol, entry]),
-    )
-    const leverageActions = actions.filter(isLeverageChangedAction)
-    for (const action of leverageActions) {
-      const onlyIsolated =
-        leverageBySymbol.get(action.symbol)?.onlyIsolated === true
-      await this.setLeverage(action.symbol, action.leverage, onlyIsolated)
-    }
-
-    const [tickers, positions] = await Promise.all([
-      this.exchange.fetchTickers(allSymbols, { type: "swap" }),
-      this.exchange.fetchPositions(),
-    ])
-
-    const { reduction, expansion } = this.splitRebalanceActionsIntoPhases(
-      actions,
-      tickers,
-      positions,
-    )
-
-    // Leverage-only / no-op paths never place orders -- skip watch subscription.
-    if (reduction.length === 0 && expansion.length === 0) {
-      return []
-    }
-
-    let results: OrderResult[] = []
-    let watchTimedOut = false
-
-    // Subscribe to orders before sending them
-    const watchSince = Date.now()
-    let nextWatch = this.exchange.watchOrders(undefined, watchSince)
-
+    let step = "fetch_markets"
     try {
-      if (reduction.length > 0) {
-        const responses = await this.createOrdersWsBatch(reduction)
-        console.log("responses", responses)
-        results.push(...this.workingOrderResultsFromRequests(reduction))
+      const [backendMarkets, perpContexts] = await Promise.all([
+        this.fetchMarketsCatalog(),
+        fetchPerpMarketContexts(this.networkMode),
+      ])
+
+      step = "hydrate_markets"
+      this.hydrateMarketsFromBackend(
+        backendMarkets.leverageLimits,
+        perpContexts,
+      )
+
+      const leverageBySymbol = new Map(
+        backendMarkets.leverageLimits.map(entry => [entry.symbol, entry]),
+      )
+      const leverageActions = actions.filter(isLeverageChangedAction)
+      step = "set_leverage"
+      for (const action of leverageActions) {
+        const onlyIsolated =
+          leverageBySymbol.get(action.symbol)?.onlyIsolated === true
+        await this.setLeverage(action.symbol, action.leverage, onlyIsolated)
       }
 
-      if (expansion.length > 0) {
-        const responses = await this.createOrdersWsBatch(expansion)
-        console.log("responses", responses)
-        results.push(...this.workingOrderResultsFromRequests(expansion))
+      step = "fetch_tickers_positions"
+      const [tickers, positions] = await Promise.all([
+        this.exchange.fetchTickers(allSymbols, { type: "swap" }),
+        this.exchange.fetchPositions(),
+      ])
+
+      step = "split_phases"
+      const { reduction, expansion } = this.splitRebalanceActionsIntoPhases(
+        actions,
+        tickers,
+        positions,
+      )
+
+      // Leverage-only / no-op paths never place orders -- skip watch subscription.
+      if (reduction.length === 0 && expansion.length === 0) {
+        return []
       }
 
-      console.log("results after create orders", results)
+      let results: OrderResult[] = []
+      let watchTimedOut = false
 
-      while (this.hasWorkingOrderResults(results)) {
-        let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-        const timeoutPromise: Promise<Error> = new Promise(resolve => {
-          timeoutHandle = setTimeout(() => {
-            resolve(
-              new Error(
-                `Operation timed out after ${HYPERLIQUID_WATCH_ORDERS_TIMEOUT_MS}ms`,
-              ),
-            )
-          }, HYPERLIQUID_WATCH_ORDERS_TIMEOUT_MS)
-        })
+      // Subscribe to orders before sending them
+      step = "watch_orders_subscribe"
+      const watchSince = Date.now()
+      let nextWatch = this.exchange.watchOrders(undefined, watchSince)
 
-        let ordersUpdate: Order[] | Error
-        try {
-          ordersUpdate = await Promise.race([nextWatch, timeoutPromise])
-        } finally {
-          if (timeoutHandle !== undefined) {
-            clearTimeout(timeoutHandle)
+      try {
+        if (reduction.length > 0) {
+          step = "create_orders_reduction"
+          const responses = await this.createOrdersWsBatch(reduction)
+          console.log("responses", responses)
+          results.push(...this.workingOrderResultsFromRequests(reduction))
+        }
+
+        if (expansion.length > 0) {
+          step = "create_orders_expansion"
+          const responses = await this.createOrdersWsBatch(expansion)
+          console.log("responses", responses)
+          results.push(...this.workingOrderResultsFromRequests(expansion))
+        }
+
+        console.log("results after create orders", results)
+
+        step = "watch_orders"
+        while (this.hasWorkingOrderResults(results)) {
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+          const timeoutPromise: Promise<Error> = new Promise(resolve => {
+            timeoutHandle = setTimeout(() => {
+              resolve(
+                new Error(
+                  `Operation timed out after ${HYPERLIQUID_WATCH_ORDERS_TIMEOUT_MS}ms`,
+                ),
+              )
+            }, HYPERLIQUID_WATCH_ORDERS_TIMEOUT_MS)
+          })
+
+          let ordersUpdate: Order[] | Error
+          try {
+            ordersUpdate = await Promise.race([nextWatch, timeoutPromise])
+          } finally {
+            if (timeoutHandle !== undefined) {
+              clearTimeout(timeoutHandle)
+            }
+          }
+
+          console.log("ordersUpdate", ordersUpdate)
+
+          if (ordersUpdate instanceof Error) {
+            console.error(ordersUpdate.message)
+            results = this.markWorkingOrdersTimedOut(results)
+            watchTimedOut = true
+            break
+          }
+
+          results = this.mergeWatchUpdatesIntoResults(results, ordersUpdate)
+
+          if (this.hasWorkingOrderResults(results)) {
+            nextWatch = this.exchange.watchOrders(undefined, watchSince)
           }
         }
+      } finally {
+        await this.exchange.unWatchOrders()
+      }
 
-        console.log("ordersUpdate", ordersUpdate)
+      console.log("unwatching orders")
+      console.log("results after watch", results)
 
-        if (ordersUpdate instanceof Error) {
-          console.error(ordersUpdate.message)
-          results = this.markWorkingOrdersTimedOut(results)
-          watchTimedOut = true
-          break
-        }
-
-        results = this.mergeWatchUpdatesIntoResults(results, ordersUpdate)
-
-        if (this.hasWorkingOrderResults(results)) {
-          nextWatch = this.exchange.watchOrders(undefined, watchSince)
+      if (watchTimedOut) {
+        step = "fetch_orders_reconcile"
+        try {
+          const passedOrders = await this.exchange.fetchOrders(
+            undefined,
+            watchSince,
+          )
+          console.log("passedOrders", passedOrders)
+          results = this.reconcileTimedOutResultsWithFetchedOrders(
+            results,
+            passedOrders,
+          )
+        } catch (error: unknown) {
+          console.error(
+            "fetchOrders backup after watch timeout failed",
+            error instanceof Error ? error.message : error,
+          )
         }
       }
-    } finally {
-      await this.exchange.unWatchOrders()
+
+      return results
+    } catch (error: unknown) {
+      console.error(
+        `[HyperliquidClient] rebalance failed at ${step}`,
+        error instanceof Error ? error.message : error,
+        error,
+      )
+      throw error
+    }
+  }
+
+  /** Markets catalog via Promise so failures are not nested FiberFailures. */
+  private async fetchMarketsCatalog(): Promise<HyperliquidMarketsResponse> {
+    const exit = await Effect.runPromiseExit(
+      fetchHyperliquidMarkets(this.networkMode),
+    )
+    if (Exit.isSuccess(exit)) {
+      return exit.value
     }
 
-    console.log("unwatching orders")
-    console.log("results after watch", results)
-
-    if (watchTimedOut) {
-      try {
-        const passedOrders = await this.exchange.fetchOrders(
-          undefined,
-          watchSince,
-        )
-        console.log("passedOrders", passedOrders)
-        results = this.reconcileTimedOutResultsWithFetchedOrders(
-          results,
-          passedOrders,
-        )
-      } catch (error: unknown) {
-        console.error(
-          "fetchOrders backup after watch timeout failed",
-          error instanceof Error ? error.message : error,
-        )
+    const failure = Cause.failureOption(exit.cause)
+    if (Option.isSome(failure)) {
+      const tagged = failure.value as {
+        _tag?: string
+        detail?: string
+        status?: number
       }
+      const detail =
+        typeof tagged.detail === "string"
+          ? tagged.detail
+          : typeof tagged.status === "number"
+            ? `status ${tagged.status}`
+            : typeof tagged._tag === "string"
+              ? tagged._tag
+              : "unknown error"
+      throw new Error(`Failed to fetch Hyperliquid markets: ${detail}`)
     }
 
-    return results
+    throw new Error("Failed to fetch Hyperliquid markets")
   }
 
   getNetworkMode(): NetworkMode {

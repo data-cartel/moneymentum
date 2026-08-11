@@ -20,3 +20,5 @@ markets_refresh_token = "local-markets-refresh-token"
 port = 8100
 rest_base_url = "https://api.lyra.finance"
 ws_url = "wss://api.lyra.finance/ws"
+testnet_rest_base_url = "https://api-demo.lyra.finance"
+testnet_ws_url = "wss://api-demo.lyra.finance/ws"

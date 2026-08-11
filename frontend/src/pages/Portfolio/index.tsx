@@ -401,6 +401,7 @@ const PortfolioPage = () => {
     isLocked,
     canTrade,
     isHyperliquidConnected,
+    isDeriveLocked,
     hasVerifiedSessionPin,
     authorizeAgent,
   } = useWallet()
@@ -952,6 +953,7 @@ const PortfolioPage = () => {
     getAllSymbolSymbols: () => screenerSymbols(),
     isPinDialogOpen: () => pinDialogOpen(),
     connectionState: () => stagedConnectionState(),
+    isDeriveSessionLocked: () => isDeriveLocked(),
     onRemove: portfolio.handleRemoveToken,
     onUndoRemove: portfolio.handleUndoRemoveToken,
     onSideChange: portfolio.handleSideChange,

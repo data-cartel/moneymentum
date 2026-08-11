@@ -926,7 +926,10 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
     .await?;
     let derive_markets_clients = DeriveMarketsClients::from_config(
         config.derive.as_ref().map(|derive| &derive.rest_base_url),
-        None,
+        config
+            .derive
+            .as_ref()
+            .map(|derive| &derive.testnet_rest_base_url),
         config.max_retries,
     )?;
     let hyperliquid: Arc<dyn Hyperliquid> = Arc::clone(&hyperliquid_clients.mainnet);

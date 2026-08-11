@@ -66,6 +66,7 @@ const deriveCredentialsFromSession = (
   sessionAddress: session.sessionAddress,
   sessionPrivateKey,
   subaccountId: session.subaccountId,
+  networkMode: session.networkMode,
 })
 
 const persistEncryptedSession = (
@@ -136,6 +137,8 @@ export const WalletProvider = (props: ParentProps) => {
   const [hasStoredDeriveSession, setHasStoredDeriveSession] = createSignal(
     storedDeriveSession !== null,
   )
+  const [deriveSessionNetworkMode, setDeriveSessionNetworkMode] =
+    createSignal<NetworkMode | null>(storedDeriveSession?.networkMode ?? null)
   const [hasVerifiedSessionPin, setHasVerifiedSessionPin] = createSignal(false)
   const [HyperliquidClientClass, setHyperliquidClientClass] =
     createSignal<HyperliquidClientConstructor | null>(null)
@@ -170,11 +173,16 @@ export const WalletProvider = (props: ParentProps) => {
 
   const syncStoredSessionState = () => {
     setHasStoredSession(getStoredEncryptedSession() !== null)
-    setHasStoredDeriveSession(getStoredEncryptedDeriveSession() !== null)
+    const deriveSession = getStoredEncryptedDeriveSession()
+    setHasStoredDeriveSession(deriveSession !== null)
+    setDeriveSessionNetworkMode(deriveSession?.networkMode ?? null)
   }
 
   const isHyperliquidConnected = createMemo(() => mainAddress() !== null)
-  const isDeriveConnected = createMemo(() => hasStoredDeriveSession())
+  const isDeriveConnected = createMemo(
+    () =>
+      hasStoredDeriveSession() && deriveSessionNetworkMode() === networkMode(),
+  )
   const isConnected = createMemo(
     () => isHyperliquidConnected() || isDeriveConnected(),
   )
@@ -182,7 +190,7 @@ export const WalletProvider = (props: ParentProps) => {
     () => hasStoredSession() && credentials() === null,
   )
   const isDeriveLocked = createMemo(
-    () => hasStoredDeriveSession() && deriveCredentials() === null,
+    () => isDeriveConnected() && deriveCredentials() === null,
   )
   const canTrade = createMemo(() => credentials() !== null)
 
@@ -287,8 +295,10 @@ export const WalletProvider = (props: ParentProps) => {
       subaccountId?: number | null
     },
     pin?: string,
-  ): Effect.Effect<void, WalletConnectError> =>
-    Effect.gen(function* () {
+  ): Effect.Effect<void, WalletConnectError> => {
+    const mode = networkMode()
+
+    return Effect.gen(function* () {
       const resolvedPin = yield* resolvePin(pin)
 
       yield* validatePinAgainstStoredSessions(resolvedPin).pipe(
@@ -312,7 +322,9 @@ export const WalletProvider = (props: ParentProps) => {
       const subaccountId =
         input.subaccountId !== undefined
           ? input.subaccountId
-          : (existing?.subaccountId ?? null)
+          : existing?.networkMode === mode
+            ? (existing.subaccountId ?? null)
+            : null
 
       const session: EncryptedDeriveSession = {
         deriveWallet,
@@ -321,6 +333,7 @@ export const WalletProvider = (props: ParentProps) => {
         salt: encrypted.salt,
         iv: encrypted.iv,
         subaccountId,
+        networkMode: mode,
       }
 
       rememberSessionPin(resolvedPin)
@@ -330,6 +343,7 @@ export const WalletProvider = (props: ParentProps) => {
       )
       syncStoredSessionState()
     })
+  }
 
   /**
    * Generate agent + encrypt with PIN, then Reown-signed approveAgent.
@@ -550,18 +564,17 @@ export const WalletProvider = (props: ParentProps) => {
   }
   const setDeriveSubaccountId = (subaccountId: number | null) => {
     const stored = getStoredEncryptedDeriveSession()
-    if (stored === null) {
+    if (stored?.networkMode !== networkMode()) {
       return
     }
-
     const nextSession: EncryptedDeriveSession = {
       ...stored,
       subaccountId,
     }
     persistEncryptedDeriveSession(nextSession)
-
+    syncStoredSessionState()
     const unlocked = untrack(() => deriveCredentials())
-    if (unlocked !== null) {
+    if (unlocked !== null && unlocked.networkMode === networkMode()) {
       setDeriveCredentials({
         ...unlocked,
         subaccountId,
@@ -572,6 +585,10 @@ export const WalletProvider = (props: ParentProps) => {
   const setNetworkMode = (mode: NetworkMode) => {
     setNetworkModeState(mode)
     localStorage.setItem(NETWORK_STORAGE_KEY, mode)
+    const unlocked = untrack(() => deriveCredentials())
+    if (unlocked !== null && unlocked.networkMode !== mode) {
+      setDeriveCredentials(null)
+    }
   }
 
   const handleStorageChange = (event: StorageEvent) => {
@@ -588,7 +605,7 @@ export const WalletProvider = (props: ParentProps) => {
       syncStoredSessionState()
     }
     if (event.key === NETWORK_STORAGE_KEY) {
-      setNetworkModeState(getStoredNetworkMode())
+      setNetworkMode(getStoredNetworkMode())
     }
   }
 

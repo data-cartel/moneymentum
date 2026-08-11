@@ -92,7 +92,7 @@ export const signedFundingRateForPosition = (
   position: PortfolioInterface,
   fundingRatesByBaseSymbol?: Record<string, number>,
 ): number | null => {
-  if (isOptionPosition(position)) {
+  if (isOptionPosition(position) || position.venue !== "hyperliquid") {
     return null
   }
 

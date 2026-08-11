@@ -146,3 +146,47 @@ describe("DeriveTradingClient.createOrdersBatch", () => {
     ).rejects.toThrow(/subaccount id/)
   })
 })
+
+describe("DeriveTradingClient.cancelOrder", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("cancels by id with subaccount params and resolved symbol", async () => {
+    const cancelOrder = vi.fn().mockResolvedValue({
+      id: "order-1",
+      symbol: "ETH/USD:USDC-250925-2000-C",
+      status: "canceled",
+    })
+
+    const client = new DeriveTradingClient(credentials())
+    const exchange = (
+      client as unknown as {
+        exchange: {
+          loadMarkets: () => Promise<Record<string, never>>
+          markets: Record<string, { symbol: string }>
+          markets_by_id: Record<string, { symbol: string }>
+          cancelOrder: typeof cancelOrder
+        }
+      }
+    ).exchange
+
+    exchange.loadMarkets = vi.fn().mockResolvedValue({})
+    exchange.markets = {
+      "ETH/USD:USDC-250925-2000-C": { symbol: "ETH/USD:USDC-250925-2000-C" },
+    }
+    exchange.markets_by_id = {}
+    exchange.cancelOrder = cancelOrder
+    vi.spyOn(client, "resolveSymbol").mockResolvedValue(
+      "ETH/USD:USDC-250925-2000-C",
+    )
+
+    await client.cancelOrder("order-1", "ETH-20250925-2000-C")
+
+    expect(cancelOrder).toHaveBeenCalledWith(
+      "order-1",
+      "ETH/USD:USDC-250925-2000-C",
+      { subaccount_id: 144457 },
+    )
+  })
+})

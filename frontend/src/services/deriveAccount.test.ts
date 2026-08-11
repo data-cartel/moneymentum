@@ -72,6 +72,7 @@ describe("mapDerivePosition", () => {
       entryPrice: 120.5,
       unrealizedPnl: 23.75,
       leverage: 1,
+      positionKind: "option",
     })
   })
 
@@ -89,6 +90,7 @@ describe("mapDerivePosition", () => {
       entryPrice: 120.5,
       unrealizedPnl: 23.75,
       leverage: 1,
+      positionKind: "option",
     })
   })
 
@@ -111,6 +113,7 @@ describe("mapDerivePosition", () => {
       entryPrice: 85,
       unrealizedPnl: 5,
       leverage: 1,
+      positionKind: "option",
     })
   })
 
@@ -133,6 +136,29 @@ describe("mapDerivePosition", () => {
       entryPrice: 40,
       unrealizedPnl: 10,
       leverage: 1,
+      positionKind: "option",
+    })
+  })
+
+  it("classifies ETH-PERP as a derive perp", () => {
+    expect(
+      mapDerivePosition({
+        instrument_name: "ETH-PERP",
+        instrument_type: "perp",
+        amount: "0.5",
+        average_price: "2000",
+        mark_price: "2100",
+        mark_value: "1050",
+        unrealized_pnl: "50",
+      }),
+    ).toEqual({
+      symbol: "ETH-PERP",
+      side: "buy",
+      notional: 1050,
+      entryPrice: 2000,
+      unrealizedPnl: 50,
+      leverage: 1,
+      positionKind: "perp",
     })
   })
 

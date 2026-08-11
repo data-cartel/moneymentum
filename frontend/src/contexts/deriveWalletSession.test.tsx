@@ -78,6 +78,7 @@ describe("Derive encrypted session via WalletProvider", () => {
       SESSION_PRIVATE_KEY,
     )
     expect(result.deriveCredentials()?.subaccountId).toBe(42)
+    expect(result.deriveCredentials()?.networkMode).toBe("testnet")
     expect(localStorage.getItem(DERIVE_WALLET_STORAGE_KEY)).not.toBeNull()
 
     const reloaded = renderHook(() => useWallet(), { wrapper }).result
@@ -90,6 +91,30 @@ describe("Derive encrypted session via WalletProvider", () => {
       SESSION_PRIVATE_KEY,
     )
     expect(reloaded.deriveCredentials()?.subaccountId).toBe(42)
+    expect(reloaded.deriveCredentials()?.networkMode).toBe("testnet")
+  })
+
+  it("treats a Derive session as disconnected when the network toggle differs", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+
+    await Effect.runPromise(
+      result.connectDerive(
+        {
+          deriveWallet: DERIVE_WALLET,
+          sessionPrivateKey: SESSION_PRIVATE_KEY,
+        },
+        TEST_PIN,
+      ),
+    )
+
+    expect(result.isDeriveConnected()).toBe(true)
+    result.setNetworkMode("mainnet")
+    expect(result.isDeriveConnected()).toBe(false)
+    expect(result.deriveCredentials()).toBeNull()
+
+    result.setNetworkMode("testnet")
+    expect(result.isDeriveConnected()).toBe(true)
+    expect(result.isDeriveLocked()).toBe(true)
   })
 
   it("clears the Derive session on disconnectDerive", async () => {

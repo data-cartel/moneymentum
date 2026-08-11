@@ -23,7 +23,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { hasSharedWalletPin } from "@/contexts/wallet-context"
+import {
+  getStoredEncryptedDeriveSession,
+  hasSharedWalletPin,
+} from "@/contexts/wallet-context"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
 import {
@@ -31,9 +34,13 @@ import {
   WALLET_PIN_LENGTH,
 } from "@/services/walletCredentialCrypto"
 import { MIN_USD } from "../hooks/usePortfolioState"
+import { DERIVE_PIN_ATTR, tryUsePortfolioKeyboardContext } from "../keyboard"
 import { tryUsePortfolioShell } from "../portfolioShellContext"
+import { SessionPinUnlockField } from "./SessionPinUnlockField"
 
 export const DERIVE_WALLET_INPUT_ATTR = "data-derive-wallet-input"
+
+const DERIVE_UNLOCK_PIN_PLACEHOLDER = "Enter 6-digit PIN to load data"
 
 /**
  * Derive venue tab: session credentials + live options chain.
@@ -51,12 +58,14 @@ export const DerivePanel = (props: {
 }): JSX.Element => {
   const {
     connectDerive,
-    unlock,
     isDeriveConnected,
     isDeriveLocked,
     hasVerifiedSessionPin,
+    hasStoredDeriveSession,
+    networkMode,
   } = useWallet()
   const shell = tryUsePortfolioShell()
+  const keyboard = tryUsePortfolioKeyboardContext()
   const streamEnabled = useDebouncedStreamEnabled(() => props.isPanelVisible())
 
   const [deriveWalletInput, setDeriveWalletInput] = createSignal("")
@@ -65,10 +74,29 @@ export const DerivePanel = (props: {
   const [existingPinDialogOpen, setExistingPinDialogOpen] = createSignal(false)
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const [isSubmitting, setIsSubmitting] = createSignal(false)
+  const [deriveUnlockFocused, setDeriveUnlockFocused] = createSignal(false)
   let walletInputElement: HTMLInputElement | undefined
 
   const pinAlreadyExists = () => hasSharedWalletPin()
   const canReuseSessionPin = () => hasVerifiedSessionPin()
+
+  const otherNetworkSessionLabel = (): string | null => {
+    if (!hasStoredDeriveSession() || isDeriveConnected()) {
+      return null
+    }
+    const storedNetwork = getStoredEncryptedDeriveSession()?.networkMode ?? null
+    if (storedNetwork === null || storedNetwork === networkMode()) {
+      return null
+    }
+    return storedNetwork
+  }
+
+  // createEffect: focus PIN when Derive panel is active and session is locked.
+  createEffect(() => {
+    setDeriveUnlockFocused(
+      keyboard?.focusedPanel() === "derive" && isDeriveLocked(),
+    )
+  })
 
   // createEffect: focus wallet field when shell requests Derive focus.
   createEffect(() => {
@@ -147,28 +175,6 @@ export const DerivePanel = (props: {
     void runConnect(pin())
   }
 
-  const submitUnlock = async () => {
-    const enteredPin = pin()
-    if (enteredPin.length !== WALLET_PIN_LENGTH || isSubmitting()) {
-      return
-    }
-
-    setIsSubmitting(true)
-    setErrorMessage(null)
-
-    const result = await Effect.runPromise(Effect.either(unlock(enteredPin)))
-    if (Either.isLeft(result)) {
-      setErrorMessage(getErrorMessage(result.left))
-      setPin("")
-      setIsSubmitting(false)
-      return
-    }
-
-    toast.success("Derive session unlocked")
-    setPin("")
-    setIsSubmitting(false)
-  }
-
   const connectFormReady = () =>
     deriveWalletInput().trim() !== "" && sessionKeyInput().trim() !== ""
 
@@ -192,9 +198,18 @@ export const DerivePanel = (props: {
               <h2 class="text-sm font-semibold text-foreground">Derive</h2>
               <p class="max-w-[60ch] text-[12px] leading-snug text-muted-foreground">
                 Paste your Derive Wallet and session key private key from the
-                Derive developers page. Keys are encrypted locally with your
-                PIN.
+                Derive developers page for{" "}
+                {networkMode() === "testnet" ? "testnet" : "mainnet"}. Keys are
+                encrypted locally with your PIN.
               </p>
+              <Show when={otherNetworkSessionLabel()}>
+                {otherNetwork => (
+                  <p class="max-w-[60ch] text-[12px] leading-snug text-amber-600 dark:text-amber-400">
+                    A session is stored for {otherNetwork()}. Switch the Testnet
+                    toggle back, or connect a new session for {networkMode()}.
+                  </p>
+                )}
+              </Show>
             </div>
             <div class="space-y-1">
               <label class="text-[12px] font-medium" for="deriveWalletInput">
@@ -284,49 +299,25 @@ export const DerivePanel = (props: {
         <Show
           when={!isDeriveLocked()}
           fallback={
-            <div class="flex max-w-xl flex-col gap-3 overflow-auto p-4">
-              <p class="text-[12px] text-muted-foreground">
+            <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4">
+              <p class="max-w-[36ch] text-center text-[12px] leading-snug text-muted-foreground">
                 Derive session is locked. Enter your PIN to load account data.
               </p>
-              <Input
-                type="password"
-                inputmode="numeric"
-                autocomplete="one-time-code"
-                class="h-9 max-w-[20ch] font-mono tracking-[0.3em]"
-                maxlength={WALLET_PIN_LENGTH}
-                placeholder="6-digit PIN"
-                value={pin()}
-                disabled={isSubmitting()}
-                onInput={event => {
-                  setPin(normalizeWalletPinInput(event.currentTarget.value))
-                  setErrorMessage(null)
-                }}
-                onKeyDown={event => {
-                  if (event.key === "Enter") {
-                    event.preventDefault()
-                    void submitUnlock()
-                  }
-                }}
+              <SessionPinUnlockField
+                inputId="deriveSessionUnlockPin"
+                placeholder={DERIVE_UNLOCK_PIN_PLACEHOLDER}
+                class="w-full max-w-[24ch] space-y-1"
+                successMessage="Derive session unlocked"
+                autofocus={deriveUnlockFocused()}
+                focusDataAttr={DERIVE_PIN_ATTR}
               />
-              <Show when={errorMessage()}>
-                <p class="text-sm text-destructive">{errorMessage()}</p>
-              </Show>
-              <Button
-                type="button"
-                class="h-8 w-fit"
-                disabled={isSubmitting() || pin().length !== WALLET_PIN_LENGTH}
-                onClick={() => {
-                  void submitUnlock()
-                }}
-              >
-                {isSubmitting() ? "Unlocking..." : "Unlock"}
-              </Button>
             </div>
           }
         >
           <div class="min-h-0 flex-1 overflow-hidden">
             <OptionsTradingView
               streamEnabled={optionsStreamEnabled}
+              networkMode={networkMode}
               greeksLayout={{
                 visible: props.greeksVisible,
                 setVisible: props.onGreeksVisibleChange,

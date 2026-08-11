@@ -4,6 +4,7 @@ export const PORTFOLIO_PANEL_ATTR = "data-portfolio-panel"
 export const ALL_SYMBOLS_SEARCH_ATTR = "data-all-symbols-search"
 export const STAGED_PANEL_ATTR = "data-staged-panel"
 export const STAGED_PIN_ATTR = "data-staged-pin"
+export const DERIVE_PIN_ATTR = "data-derive-pin"
 
 export type PortfolioCellKind = "weight" | "notional"
 
@@ -44,6 +45,17 @@ export const focusAllSymbolsSearch = (): boolean => {
 
 export const focusStagedPin = (): boolean => {
   const input = document.querySelector(`[${STAGED_PIN_ATTR}]`)
+  if (!(input instanceof HTMLInputElement)) {
+    return false
+  }
+
+  input.focus()
+  input.select()
+  return true
+}
+
+export const focusDerivePin = (): boolean => {
+  const input = document.querySelector(`[${DERIVE_PIN_ATTR}]`)
   if (!(input instanceof HTMLInputElement)) {
     return false
   }

@@ -18,7 +18,12 @@ export const getErrorMessage = (error: unknown): string => {
     if (message !== null) return message
   }
 
-  if (unwrapped instanceof Error) return unwrapped.message
+  if (unwrapped instanceof Error) {
+    const message = unwrapped.message.trim()
+    if (message.length > 0 && message !== FIBER_FAILURE_OPAQUE_MESSAGE) {
+      return message
+    }
+  }
 
   return String(unwrapped)
 }
@@ -26,15 +31,40 @@ export const getErrorMessage = (error: unknown): string => {
 const EXCHANGE_REJECTED_MESSAGE =
   "The exchange rejected the request. Please try again."
 
+/** Effect FiberFailure's generic `Error.message` when the Cause is not unwrapped. */
+const FIBER_FAILURE_OPAQUE_MESSAGE = "An error has occurred"
+
 /** Readable text from an ExchangeRequestError cause, or null if unusable. */
 const messageFromExchangeCause = (cause: unknown): string | null => {
-  if (cause instanceof Error) {
-    const message = cause.message.trim()
+  const unwrappedCause = unwrapTaggedError(cause)
+
+  if (hasTag(unwrappedCause)) {
+    const taggedMessage = messageForTag(unwrappedCause)
+    if (taggedMessage !== null) {
+      return taggedMessage
+    }
+  }
+
+  if (unwrappedCause instanceof Error) {
+    const message = unwrappedCause.message.trim()
+    if (message.length > 0 && message !== FIBER_FAILURE_OPAQUE_MESSAGE) {
+      return message
+    }
+  }
+  if (typeof unwrappedCause === "string") {
+    const message = unwrappedCause.trim()
     return message.length > 0 ? message : null
   }
-  if (typeof cause === "string") {
-    const message = cause.trim()
-    return message.length > 0 ? message : null
+  if (
+    typeof unwrappedCause === "object" &&
+    unwrappedCause !== null &&
+    "message" in unwrappedCause &&
+    typeof (unwrappedCause as { message: unknown }).message === "string"
+  ) {
+    const message = (unwrappedCause as { message: string }).message.trim()
+    if (message.length > 0 && message !== FIBER_FAILURE_OPAQUE_MESSAGE) {
+      return message
+    }
   }
   return null
 }
@@ -57,12 +87,27 @@ export const getExchangeErrorDetail = (error: unknown): string => {
   return getErrorMessage(error)
 }
 
+/**
+ * Peel nested FiberFailures until a typed / raw error remains. Nested
+ * `Effect.runPromise` inside `wrapExchange` is a common source of
+ * ExchangeRequestError → FiberFailure → real error chains.
+ */
 const unwrapTaggedError = (error: unknown): unknown => {
-  if (Runtime.isFiberFailure(error)) {
-    const failure = Cause.failureOption(error[Runtime.FiberFailureCauseId])
-    if (Option.isSome(failure)) return failure.value
+  let current: unknown = error
+
+  for (let depth = 0; depth < 8; depth++) {
+    if (!Runtime.isFiberFailure(current)) {
+      break
+    }
+
+    const failure = Cause.failureOption(current[Runtime.FiberFailureCauseId])
+    if (Option.isNone(failure)) {
+      break
+    }
+    current = failure.value
   }
-  return error
+
+  return current
 }
 
 interface TaggedError {

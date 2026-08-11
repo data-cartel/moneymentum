@@ -38,6 +38,11 @@ export interface DeriveSessionCredentials {
 
 export type { CurrentPosition }
 
+/** Open Derive position with kind so portfolio can distinguish options vs perps. */
+export type DeriveMappedPosition = CurrentPosition & {
+  positionKind: "option" | "perp"
+}
+
 /**
  * Balance summary from CCXT `derive.fetchBalance` (`private/get_all_portfolios`).
  * `accountValue` is the USD equity analogue of Hyperliquid's margin account value.
@@ -57,8 +62,7 @@ export interface DeriveSubaccountSnapshot {
   initialMargin: string
   maintenanceMargin: string
   positionsValue: string
-  /** Same shape as Hyperliquid `CurrentPosition` (leverage is 1 for options). */
-  positions: CurrentPosition[]
+  positions: DeriveMappedPosition[]
 }
 
 export interface DeriveAccountSnapshot {
@@ -362,8 +366,30 @@ const sideFromSignedAmount = (signedAmount: number): OrderSide =>
   signedAmount < 0 ? "sell" : "buy"
 
 /**
+ * Classifies a Derive instrument as option or perp for portfolio rows.
+ * Prefers API `instrument_type`; falls back to option name shape
+ * `BASE-YYYYMMDD-STRIKE-C|P`.
+ */
+export const classifyDeriveInstrument = (
+  instrumentName: string,
+  instrumentType: string | undefined,
+): "option" | "perp" => {
+  const normalizedType = (instrumentType ?? "").trim().toLowerCase()
+  if (normalizedType === "option") {
+    return "option"
+  }
+  if (normalizedType === "perp" || normalizedType === "perpetual") {
+    return "perp"
+  }
+  if (/-\d{8}-\d+(?:\.\d+)?-[CP]$/i.test(instrumentName)) {
+    return "option"
+  }
+  return "perp"
+}
+
+/**
  * Maps a Derive `private/get_subaccount` position row onto the shared
- * `CurrentPosition` shape used by Hyperliquid / portfolio.
+ * `CurrentPosition` shape used by Hyperliquid / portfolio, plus Derive kind.
  * Options have no leverage field -- fixed at 1.
  *
  * Openness is gated on `amount` (non-zero), not `mark_value`: short / near-zero
@@ -372,7 +398,7 @@ const sideFromSignedAmount = (signedAmount: number): OrderSide =>
  */
 export const mapDerivePosition = (
   position: DeriveApiPosition,
-): CurrentPosition | null => {
+): DeriveMappedPosition | null => {
   const instrumentName =
     typeof position.instrument_name === "string" ? position.instrument_name : ""
   if (instrumentName === "") {
@@ -408,6 +434,10 @@ export const mapDerivePosition = (
     entryPrice: averagePrice,
     unrealizedPnl: parseNumericValue(position.unrealized_pnl, 0),
     leverage: 1,
+    positionKind: classifyDeriveInstrument(
+      instrumentName,
+      position.instrument_type,
+    ),
   }
 }
 
@@ -562,6 +592,11 @@ export interface DeriveCcxtExchange {
     limit?: number,
     params?: Record<string, unknown>,
   ) => Promise<DeriveCcxtOrder[]>
+  cancelOrder: (
+    id: string,
+    symbol: string,
+    params?: Record<string, unknown>,
+  ) => Promise<DeriveCcxtOrder>
   close?: () => Promise<void>
 }
 
@@ -590,8 +625,10 @@ export interface DeriveCcxtOrder {
   status?: string
   amount?: number
   filled?: number
+  remaining?: number
   price?: number
   average?: number
+  cost?: number
   timestamp?: number
   info?: Record<string, unknown>
 }

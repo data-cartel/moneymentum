@@ -4,6 +4,7 @@ import {
   OptionsTradingView,
   type OptionsTradingViewProps,
 } from "@/components/derive-options"
+import { useWallet } from "@/hooks/useWallet"
 
 export type {
   OptionsBootstrap,
@@ -12,9 +13,11 @@ export type {
 
 /** Standalone options explorer; risk + smile stay on this route only. */
 const DeriveOptionsPage = (): JSX.Element => {
+  const { networkMode } = useWallet()
   const streamEnabled: Accessor<boolean> = () => true
   const viewProps: OptionsTradingViewProps = {
     streamEnabled,
+    networkMode,
     showRiskAndSmile: true,
     class: "h-screen",
   }

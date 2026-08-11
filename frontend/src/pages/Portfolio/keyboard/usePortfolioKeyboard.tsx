@@ -22,6 +22,7 @@ import { isPrimaryModifierPressed } from "./modifierLabel"
 import {
   blurActiveElement,
   focusAllSymbolsSearch,
+  focusDerivePin,
   focusPanelContainer,
   focusPortfolioCell,
   focusStagedPin,
@@ -34,6 +35,8 @@ export interface PortfolioKeyboardActions {
   getAllSymbolSymbols: () => string[]
   isPinDialogOpen: () => boolean
   connectionState: () => StagedConnectionState
+  /** Derive stored session present but credentials not decrypted. */
+  isDeriveSessionLocked: () => boolean
   onRemove: (symbol: string) => void
   onUndoRemove: (symbol: string) => void
   onSideChange: (symbol: string, side: OrderSide) => void
@@ -210,6 +213,12 @@ export const PortfolioKeyboardProvider = (props: {
 
     if (panelId === "derive") {
       focusPanelContainer("derive")
+      if (props.actions.isDeriveSessionLocked()) {
+        // Defer so the PIN field is mounted when switching into Derive.
+        queueMicrotask(() => {
+          focusDerivePin()
+        })
+      }
       return
     }
 
