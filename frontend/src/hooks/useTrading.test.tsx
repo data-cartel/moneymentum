@@ -57,6 +57,11 @@ vi.mock("@/services/hyperliquid-client", async importOriginal => {
   }
 })
 
+vi.mock("@/reown/evmAppKit", () => ({
+  getOrCreateEvmAppKit: () => null,
+  readConnectedEip1193Provider: () => null,
+}))
+
 const createWrapper = () => {
   const queryClient = new QueryClient({
     defaultOptions: {

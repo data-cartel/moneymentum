@@ -83,7 +83,7 @@ impl LogLevel {
 #[derive(Debug, Deserialize)]
 pub struct Config {
     port: u16,
-    data_dir: PathBuf,
+    pub(crate) data_dir: PathBuf,
     database_url: String,
     hyperliquid_base_url: Option<url::Url>,
     hyperliquid_testnet_base_url: Option<url::Url>,
@@ -122,7 +122,7 @@ pub enum ConfigError {
 }
 
 pub(crate) struct AppState {
-    config: Config,
+    pub(crate) config: Config,
     database_pool: SqlitePool,
     hyperliquid_clients: HyperliquidClients,
     portfolio_store: Arc<Store<Portfolio>>,
@@ -133,7 +133,7 @@ pub(crate) struct AppState {
 }
 
 /// Renders pre-serialized JSON bytes with the `application/json` content type.
-fn raw_json(bytes: Vec<u8>) -> Response {
+pub(crate) fn raw_json(bytes: Vec<u8>) -> Response {
     ([(header::CONTENT_TYPE, "application/json")], bytes).into_response()
 }
 
@@ -151,22 +151,6 @@ async fn health() -> impl IntoResponse {
             version: env!("CARGO_PKG_VERSION"),
         }),
     )
-}
-
-async fn get_candles(
-    State(state): State<Arc<AppState>>,
-    AxumPath(timeframe): AxumPath<String>,
-) -> Result<Response, StatusCode> {
-    let timeframe =
-        Timeframe::from_interval_string(&timeframe).ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
-    candle::read_candles_json(&state.config.data_dir, timeframe)
-        .await
-        .map_err(|err| {
-            error!(error = %err, "failed to read candles");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .map(raw_json)
-        .ok_or(StatusCode::NOT_FOUND)
 }
 
 async fn get_factors(
@@ -921,7 +905,7 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/candles/{timeframe}", get(get_candles))
+        .route("/candles/{timeframe}", get(candle::get_candles))
         .route("/factors/{timeframe}", get(get_factors))
         .route("/screener/{timeframe}", post(post_screener))
         .route("/ingestion/status", get(get_ingestion_status))

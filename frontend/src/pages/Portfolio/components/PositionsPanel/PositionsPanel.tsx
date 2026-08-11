@@ -20,7 +20,6 @@ import { Switch } from "@/components/ui/switch"
 import type { OrderSide } from "@/hooks/useTrading"
 import { useWallet } from "@/hooks/useWallet"
 import { WalletInlineConnect } from "./WalletInlineConnect"
-import { WalletInlinePinUnlock } from "./WalletInlinePinUnlock"
 import { cn } from "@/lib/cn"
 
 import { useFactorScores } from "../../hooks/useFactorScores"
@@ -98,7 +97,7 @@ interface PositionsPanelProps {
 }
 
 export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
-  const { isConnected, isLocked } = useWallet()
+  const { isConnected } = useWallet()
   const factorScoresQuery = useFactorScores()
   const [panelView, setPanelView] =
     createSignal<PositionsPanelView>("portfolio")
@@ -361,14 +360,7 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
                 </div>
               }
             >
-              <Show
-                when={isConnected()}
-                fallback={
-                  <Show when={isLocked()} fallback={<WalletInlineConnect />}>
-                    <WalletInlinePinUnlock />
-                  </Show>
-                }
-              >
+              <Show when={isConnected()} fallback={<WalletInlineConnect />}>
                 <div class="flex-1 min-h-0 overflow-auto scrollbar-hide">
                   <Show
                     when={hasRenderablePortfolioRows()}
