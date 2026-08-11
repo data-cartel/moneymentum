@@ -16,6 +16,12 @@ nix run .#tfCreateVars    # Create tfvars from example
 nix run .#tfInit          # Initialize terraform
 ```
 
+## SSH access
+
+Set `ssh_key_names` in encrypted Terraform vars to every DigitalOcean SSH key
+that should be embedded into freshly created droplets. Keep the GitHub Actions
+key and operator keys in the list before reprovisioning.
+
 ## Destroying resources
 
 There is no `terraform destroy` command. All destruction goes through the same

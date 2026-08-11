@@ -10,7 +10,8 @@ interface ReadonlyBtcPanelProps {
   rows: ReadonlyBtcRow[]
   isLoading: boolean
   error: string | null
-  onAddAddress: (address: string) => void
+  validationError: string | null
+  onAddAddress: (address: string) => boolean
   onRemoveAddress: (address: string) => void
   onIncludeInBetaChange: (address: string, includeInBeta: boolean) => void
 }
@@ -40,17 +41,23 @@ export const ReadonlyBtcPanel = (props: ReadonlyBtcPanelProps): JSX.Element => {
             size="sm"
             class="h-7 px-2 text-[11px]"
             onClick={() => {
-              props.onAddAddress(addressInput())
-              setAddressInput("")
+              if (props.onAddAddress(addressInput())) {
+                setAddressInput("")
+              }
             }}
           >
             +
           </Button>
         </div>
       </div>
-      <Show when={props.error !== null}>
-        <div class="text-[11px] text-rose-500">{props.error}</div>
-      </Show>
+      <div class="space-y-1">
+        <Show when={props.validationError}>
+          {message => <div class="text-[11px] text-rose-500">{message()}</div>}
+        </Show>
+        <Show when={props.error}>
+          {message => <div class="text-[11px] text-rose-500">{message()}</div>}
+        </Show>
+      </div>
       <Show
         when={props.rows.length > 0}
         fallback={

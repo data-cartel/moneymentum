@@ -1,51 +1,19 @@
-[package]
-name = "moneymentum"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [".", "crates/timeseries", "crates/derive", "crates/wallet"]
 
-[dependencies]
-apalis = "0.7.4"
-apalis-sql = { version = "0.7.4", features = ["sqlite"] }
-async-trait = "0.1.89"
-backon = "1.6.0"
-bitcoin = "0.32.8"
-chrono = { version = "0.4.43", features = ["serde"] }
-clap = { version = "4.5.57", features = ["derive", "env"] }
-cqrs-es = "0.4.11"
-futures = "0.3.31"
-hyperliquid_rust_sdk = "0.6.0"
-polars = { version = "0.51", features = [
-  "parquet",
-  "lazy",
-  "dtype-datetime",
-  "strings",
-  "csv",
-  "temporal",
-  "json",
-] }
-reqwest = { version = "0.13.2", features = ["json", "rustls"] }
-rocket = { version = "0.5.1", features = ["json"] }
-rust_decimal = { version = "1.40.0", features = ["serde-with-str"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-sqlite-es = { git = "https://github.com/ST0x-Technology/st0x.issuance" }
-sqlx = { version = "0.8.6", features = [
-  "sqlite",
-  "runtime-tokio-rustls",
-  "macros",
-  "migrate",
-] }
+[workspace.dependencies]
+polars = { version = "0.51" }
+proptest = "1.10.0"
 thiserror = "2.0.18"
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros"] }
-toml = "0.9.11"
+tokio = { version = "1.49.0" }
+tower = { version = "0.5" }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-url = { version = "2.5.8", features = ["serde"] }
+tracing-test = "0.2.5"
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
 
-[lints.clippy]
+[workspace.lints.clippy]
 # Zero tolerance for panics in non-test code
 unwrap_used = "deny"
 expect_used = "deny"
@@ -68,11 +36,76 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 redundant_pub_crate = "allow"
 
+[package]
+name = "moneymentum"
+version = "0.1.0"
+edition = "2024"
+authors = ["Data Clique Software Design FZCO"]
+
+[dependencies]
+apalis = "=1.0.0-rc.9"
+apalis-cron = "=1.0.0-rc.8"
+apalis-sqlite = "=1.0.0-rc.8"
+async-trait = "0.1.89"
+axum = "0.8.9"
+backon = "1.6.0"
+bitcoin = "0.32.8"
+chrono = { version = "0.4.43", features = ["serde"] }
+clap = { version = "4.5.57", features = ["derive", "env"] }
+cron = "=0.16.0"
+derive = { path = "crates/derive" }
+event-sorcery = { git = "https://github.com/ST0X-Technology/event-sorcery", tag = "0.2.0-rc2", version = "0.1.0" }
+futures = "0.3.31"
+hyperliquid_rust_sdk = "0.6.0"
+polars = { workspace = true, features = [
+  "parquet",
+  "lazy",
+  "dtype-datetime",
+  "strings",
+  "csv",
+  "temporal",
+  "json",
+] }
+reqwest = { version = "0.13.2", features = ["json", "rustls"] }
+rust_decimal = { version = "1.40.0", features = ["serde-with-str"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sqlx = { version = "0.9.0", features = [
+  "sqlite",
+  "chrono",
+  "runtime-tokio",
+  "tls-rustls",
+  "migrate",
+  "derive",
+] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
+toml = "0.9.11"
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+url = { version = "2.5.8", features = ["serde"] }
+uuid = { version = "1.23.3", features = ["v4", "serde"] }
+
+[lints]
+workspace = true
+
+[features]
+# Forwards event-sorcery's test-support (TestHarness, FailureInjector, and the
+# 4-argument `work` job handler). The ingestion worker registers a
+# FailureInjector only when event-sorcery's test-support is active, so this
+# feature must track it exactly. Enabling it through the self dev-dependency
+# below turns it on for the whole `cargo test` graph (unit and integration
+# tests alike), so `cfg(feature = "test-support")` lines up with when the
+# 4-argument handler is compiled.
+test-support = ["event-sorcery/test-support"]
+
 [dev-dependencies]
-proptest = "1.10.0"
+moneymentum = { path = ".", features = ["test-support"] }
+proptest.workspace = true
 reqwest = { version = "0.13.2", features = ["blocking"] }
 rust_decimal_macros = "1.40.0"
 serde_json = "1.0.149"
 tempfile = "3.24.0"
-tracing-test = "0.2.5"
+tower = { workspace = true, features = ["util"] }
+tracing-test.workspace = true
 wiremock = "0.6.5"

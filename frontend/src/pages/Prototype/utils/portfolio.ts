@@ -76,8 +76,8 @@ export const filterAssetsByQuery = <T extends AssetWithSharpe>(
   query: string,
 ): T[] => {
   if (!query) return assets
-  const q = query.toLowerCase()
-  return assets.filter(a => a.ticker.toLowerCase().includes(q))
+  const lowerQuery = query.toLowerCase()
+  return assets.filter(asset => asset.ticker.toLowerCase().includes(lowerQuery))
 }
 
 export const sortAssetsBySharpe = <T extends AssetWithSharpe>(
@@ -90,9 +90,9 @@ export const lookupCorrelation = (
   asset2: string,
 ): number => {
   const entry = matrix.find(
-    e =>
-      (e.asset1 === asset1 && e.asset2 === asset2) ||
-      (e.asset1 === asset2 && e.asset2 === asset1),
+    candidate =>
+      (candidate.asset1 === asset1 && candidate.asset2 === asset2) ||
+      (candidate.asset1 === asset2 && candidate.asset2 === asset1),
   )
   return entry?.correlation ?? 0
 }
@@ -308,10 +308,10 @@ export const rebalanceWeights = (
   result.set(changedSymbol, newWeight)
 
   const otherSymbols = Array.from(currentWeights.keys()).filter(
-    s => s !== changedSymbol,
+    symbol => symbol !== changedSymbol,
   )
   const otherWeightsTotal = otherSymbols.reduce(
-    (sum, s) => sum + (currentWeights.get(s) ?? 0),
+    (sum, symbol) => sum + (currentWeights.get(symbol) ?? 0),
     0,
   )
 

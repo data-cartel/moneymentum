@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import { diffPortfolios, preciseRebalanceLegs } from "./portfolioRebalancer"
+import {
+  diffPortfolios,
+  portfolioMapFromExchangePositions,
+  preciseRebalanceLegs,
+  targetAndArchiveAfterRebalance,
+} from "./portfolioRebalancer"
 import { MIN_USD, type PortfolioInterface } from "./usePortfolioState"
 
 const buy = (notional: number, leverage = 2): PortfolioInterface => ({
@@ -187,5 +192,217 @@ describe("diffPortfolios precise mode", () => {
         side: "buy",
       }),
     ])
+  })
+})
+
+describe("portfolioMapFromExchangePositions", () => {
+  it("builds portfolio map and total notional from exchange rows", () => {
+    const snapshot = portfolioMapFromExchangePositions([
+      {
+        symbol: "BTC/USDC:USDC",
+        side: "buy",
+        leverage: 2,
+        notional: 600,
+      },
+      {
+        symbol: "ETH/USDC:USDC",
+        side: "sell",
+        leverage: 3,
+        notional: 400,
+      },
+    ])
+
+    expect(snapshot.totalNotional).toBe(1000)
+    expect(snapshot.map["BTC/USDC:USDC"]).toMatchObject({
+      symbol: "BTC/USDC:USDC",
+      side: "buy",
+      leverage: 2,
+      notional: 600,
+    })
+  })
+})
+
+describe("targetAndArchiveAfterRebalance", () => {
+  const symBtc = "BTC/USDC:USDC"
+  const symEth = "ETH/USDC:USDC"
+  const symApt = "APT/USDC:USDC"
+  const symAxs = "AXS/USDC:USDC"
+
+  const btcTarget: PortfolioInterface = {
+    symbol: symBtc,
+    side: "buy",
+    leverage: 2,
+    notional: 800,
+  }
+
+  const ethCurrent: PortfolioInterface = {
+    symbol: symEth,
+    side: "buy",
+    leverage: 2,
+    notional: 400.03,
+  }
+
+  it("sets target to current when every order filled and clears archive", () => {
+    const current = {
+      [symBtc]: { ...btcTarget, notional: 700 },
+    }
+
+    const result = targetAndArchiveAfterRebalance(
+      { [symBtc]: btcTarget },
+      {
+        [symEth]: {
+          symbol: symEth,
+          side: "buy",
+          leverage: 2,
+          notional: 400,
+        },
+      },
+      current,
+      [
+        { kind: "close", symbol: symEth, side: "buy" },
+        {
+          kind: "rebalance",
+          symbol: symBtc,
+          signedNotionalDelta: 100,
+          leverage: 2,
+          leverageChanged: false,
+        },
+      ],
+      [
+        { symbol: symEth, side: "sell", status: "filled" },
+        { symbol: symBtc, side: "buy", status: "filled" },
+      ],
+    )
+
+    expect(result.nextTarget).toEqual(current)
+    expect(result.nextDeletedArchive).toEqual({})
+    expect(result.errorsBySymbol).toEqual({})
+  })
+
+  it("uses current as base, overlays failed rebalance target, drops filled closes from archive", () => {
+    const axsCurrent: PortfolioInterface = {
+      symbol: symAxs,
+      side: "buy",
+      leverage: 5,
+      notional: 15.7,
+    }
+    const atomTarget: PortfolioInterface = {
+      symbol: "ATOM/USDC:USDC",
+      side: "buy",
+      leverage: 10,
+      notional: 20,
+    }
+    const current = {
+      [symAxs]: axsCurrent,
+      [symEth]: ethCurrent,
+      "ATOM/USDC:USDC": {
+        symbol: "ATOM/USDC:USDC",
+        side: "buy",
+        leverage: 5,
+        notional: 15,
+      },
+    }
+
+    const result = targetAndArchiveAfterRebalance(
+      {
+        [symAxs]: {
+          symbol: symAxs,
+          side: "buy",
+          leverage: 5,
+          notional: 0.7,
+        },
+        [symEth]: {
+          symbol: symEth,
+          side: "buy",
+          leverage: 2,
+          notional: 400,
+        },
+        "ATOM/USDC:USDC": atomTarget,
+      },
+      {
+        [symApt]: {
+          symbol: symApt,
+          side: "buy",
+          leverage: 2,
+          notional: 14,
+        },
+      },
+      current,
+      [
+        { kind: "close", symbol: symApt, side: "buy" },
+        {
+          kind: "rebalance",
+          symbol: symAxs,
+          signedNotionalDelta: 15,
+          leverage: 5,
+          leverageChanged: true,
+        },
+        {
+          kind: "rebalance",
+          symbol: "ATOM/USDC:USDC",
+          signedNotionalDelta: 5,
+          leverage: 10,
+          leverageChanged: true,
+        },
+      ],
+      [
+        { symbol: symApt, side: "sell", status: "filled" },
+        { symbol: symAxs, side: "buy", status: "filled" },
+        {
+          symbol: "ATOM/USDC:USDC",
+          side: "buy",
+          status: "failed",
+          message: "min notional",
+        },
+      ],
+    )
+
+    expect(result.nextTarget[symApt]).toBeUndefined()
+    expect(result.nextTarget[symAxs]).toEqual(axsCurrent)
+    expect(result.nextTarget[symEth]).toEqual(ethCurrent)
+    expect(result.nextTarget["ATOM/USDC:USDC"]).toEqual(atomTarget)
+    expect(result.nextDeletedArchive[symApt]).toBeUndefined()
+    expect(result.errorsBySymbol).toEqual({
+      "ATOM/USDC:USDC": "min notional",
+    })
+  })
+
+  it("keeps pending close in archive when close order failed", () => {
+    const current = {
+      [symApt]: {
+        symbol: symApt,
+        side: "buy",
+        leverage: 2,
+        notional: 14,
+      },
+    }
+
+    const result = targetAndArchiveAfterRebalance(
+      {},
+      {
+        [symApt]: {
+          symbol: symApt,
+          side: "buy",
+          leverage: 2,
+          notional: 14,
+        },
+      },
+      current,
+      [{ kind: "close", symbol: symApt, side: "buy" }],
+      [
+        {
+          symbol: symApt,
+          side: "sell",
+          status: "failed",
+          message: "close rejected",
+        },
+      ],
+    )
+
+    expect(result.nextTarget[symApt]).toBeUndefined()
+    expect(result.nextDeletedArchive[symApt]).toBeDefined()
+    expect(result.errorsBySymbol).toEqual({
+      [symApt]: "close rejected",
+    })
   })
 })

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import * as Effect from "effect/Effect"
 import { renderHook, waitFor } from "@solidjs/testing-library"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import type { ParentProps } from "solid-js"
@@ -13,6 +14,7 @@ import {
   useWalletSettings,
   useSwitchNetwork,
 } from "./useTrading"
+import { millisecondsUntilNextUtcMidnight } from "@/services/hyperliquid-client"
 import { WalletProvider } from "@/contexts/WalletProvider"
 import { useWallet } from "@/hooks/useWallet"
 
@@ -22,28 +24,38 @@ const mockMethods = {
   getAccountSummary: vi.fn(),
   getFundingRates: vi.fn(),
   getCurrentPositions: vi.fn(),
-  listPerpTickers: vi.fn(),
-  getLeverageLimits: vi.fn(),
   rebalancePositions: vi.fn(),
   getNetworkMode: vi.fn(),
   getWalletAddress: vi.fn(),
 }
 
-// Mock the HyperliquidClient as a class
-vi.mock("@/services/hyperliquid-client", () => ({
-  HyperliquidClient: class MockHyperliquidClient {
-    getBalance = mockMethods.getBalance
-    getAccountSummary = mockMethods.getAccountSummary
-    getFundingRates = mockMethods.getFundingRates
-    getCurrentPositions = mockMethods.getCurrentPositions
-    listPerpTickers = mockMethods.listPerpTickers
-    getLeverageLimits = mockMethods.getLeverageLimits
-    rebalancePositions = mockMethods.rebalancePositions
-    getNetworkMode = mockMethods.getNetworkMode
-    getWalletAddress = mockMethods.getWalletAddress
-  },
-  preloadMarkets: vi.fn().mockResolvedValue(undefined),
-}))
+const mockMarketsResponse = {
+  tickers: ["BTC/USDC:USDC", "ETH/USDC:USDC", "SOL/USDC:USDC"],
+  leverageLimits: [
+    { symbol: "BTC/USDC:USDC", maxLeverage: 50, assetIndex: 0 },
+    { symbol: "ETH/USDC:USDC", maxLeverage: 25, assetIndex: 1 },
+  ],
+  refreshedAt: new Date().toISOString(),
+  marketsMaxAgeMs: millisecondsUntilNextUtcMidnight(),
+}
+
+// Mock the HyperliquidClient as a class; keep real fetchHyperliquidMarkets.
+vi.mock("@/services/hyperliquid-client", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("@/services/hyperliquid-client")>()
+  return {
+    ...actual,
+    HyperliquidClient: class MockHyperliquidClient {
+      getBalance = mockMethods.getBalance
+      getAccountSummary = mockMethods.getAccountSummary
+      getFundingRates = mockMethods.getFundingRates
+      getCurrentPositions = mockMethods.getCurrentPositions
+      rebalancePositions = mockMethods.rebalancePositions
+      getNetworkMode = mockMethods.getNetworkMode
+      getWalletAddress = mockMethods.getWalletAddress
+    },
+  }
+})
 
 const createWrapper = () => {
   const queryClient = new QueryClient({
@@ -60,11 +72,18 @@ const createWrapper = () => {
   )
 }
 
+const TEST_PIN = "123456"
+
+const waitUntilWalletConnected = async (isConnected: () => boolean) => {
+  await waitFor(() => {
+    expect(isConnected()).toBe(true)
+  })
+}
+
 const createConnectedWrapper = (walletCredentials: {
   accountAddress: string
   apiWalletAddress: string
   privateKey: string
-  vaultAddress?: string
 }) => {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -72,7 +91,7 @@ const createConnectedWrapper = (walletCredentials: {
   const ConnectOnMount = (props: ParentProps) => {
     const { connect } = useWallet()
     onMount(() => {
-      connect(walletCredentials)
+      void Effect.runPromise(connect(walletCredentials, TEST_PIN))
     })
     return <>{props.children}</>
   }
@@ -116,9 +135,24 @@ describe("useTrading hooks", () => {
     vi.clearAllMocks()
     ensureLocalStorage()
     localStorage.clear()
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async input => {
+        const url = String(input)
+        if (!url.includes("network=testnet")) {
+          throw new Error(`expected testnet markets fetch, got ${url}`)
+        }
+        return {
+          ok: true,
+          headers: new Headers({ "cache-control": "public, max-age=86400" }),
+          json: async () => mockMarketsResponse,
+        }
+      }),
+    )
   })
 
   afterEach(() => {
+    vi.unstubAllGlobals()
     ensureLocalStorage()
     localStorage.clear()
   })
@@ -133,7 +167,7 @@ describe("useTrading hooks", () => {
       expect(result.isConnected()).toBe(false)
     })
 
-    it("returns client when wallet is connected", () => {
+    it("returns client when wallet is connected", async () => {
       const { result } = renderHook(() => useHyperliquidClient(), {
         wrapper: createConnectedWrapper({
           accountAddress: "0xTestAccountAddress",
@@ -142,11 +176,12 @@ describe("useTrading hooks", () => {
         }),
       })
 
+      await waitUntilWalletConnected(() => result.isConnected())
+
       expect(result.client()).not.toBeNull()
-      expect(result.isConnected()).toBe(true)
     })
 
-    it("returns correct network mode", () => {
+    it("returns correct network mode", async () => {
       localStorage.setItem("hyperliquid-network", "mainnet")
 
       const { result } = renderHook(() => useHyperliquidClient(), {
@@ -156,6 +191,8 @@ describe("useTrading hooks", () => {
           privateKey: "0xTestSecret",
         }),
       })
+
+      await waitUntilWalletConnected(() => result.isConnected())
 
       expect(result.networkMode()).toBe("mainnet")
     })
@@ -174,19 +211,28 @@ describe("useTrading hooks", () => {
     it("fetches balance when wallet is connected", async () => {
       mockMethods.getBalance.mockResolvedValue(1500.5)
 
-      const { result } = renderHook(() => useHyperliquidBalance(), {
-        wrapper: createConnectedWrapper({
-          accountAddress: "0xTestAccountAddress",
-          apiWalletAddress: "0xTestApiWallet",
-          privateKey: "0xTestSecret",
-        }),
-      })
+      const { result } = renderHook(
+        () => {
+          const wallet = useHyperliquidClient()
+          const balance = useHyperliquidBalance()
+          return { wallet, balance }
+        },
+        {
+          wrapper: createConnectedWrapper({
+            accountAddress: "0xTestAccountAddress",
+            apiWalletAddress: "0xTestApiWallet",
+            privateKey: "0xTestSecret",
+          }),
+        },
+      )
+
+      await waitUntilWalletConnected(() => result.wallet.isConnected())
 
       await waitFor(() => {
-        expect(result.isSuccess).toBe(true)
+        expect(result.balance.isSuccess).toBe(true)
       })
 
-      expect(result.data).toBe(1500.5)
+      expect(result.balance.data).toBe(1500.5)
     })
   })
 
@@ -220,39 +266,38 @@ describe("useTrading hooks", () => {
         },
       ])
 
-      const { result } = renderHook(() => useHyperliquidPositions(), {
-        wrapper: createConnectedWrapper({
-          accountAddress: "0xTestAccountAddress",
-          apiWalletAddress: "0xTestApiWallet",
-          privateKey: "0xTestSecret",
-        }),
-      })
+      const { result } = renderHook(
+        () => {
+          const wallet = useHyperliquidClient()
+          const positions = useHyperliquidPositions()
+          return { wallet, positions }
+        },
+        {
+          wrapper: createConnectedWrapper({
+            accountAddress: "0xTestAccountAddress",
+            apiWalletAddress: "0xTestApiWallet",
+            privateKey: "0xTestSecret",
+          }),
+        },
+      )
+
+      await waitUntilWalletConnected(() => result.wallet.isConnected())
 
       await waitFor(() => {
-        expect(result.isSuccess).toBe(true)
+        expect(result.positions.isSuccess).toBe(true)
       })
 
-      expect(result.data?.positions).toHaveLength(2)
-      expect(result.data?.totalNotional).toBe(1000)
-      expect(result.data?.positions[0].percentage).toBe(50)
-      expect(result.data?.positions[1].percentage).toBe(50)
+      expect(result.positions.data?.positions).toHaveLength(2)
+      expect(result.positions.data?.totalNotional).toBe(1000)
+      expect(result.positions.data?.positions[0].percentage).toBe(50)
+      expect(result.positions.data?.positions[1].percentage).toBe(50)
     })
   })
 
   describe("useHyperliquidTickers", () => {
-    it("fetches tickers when connected", async () => {
-      mockMethods.listPerpTickers.mockResolvedValue([
-        "BTC/USDC:USDC",
-        "ETH/USDC:USDC",
-        "SOL/USDC:USDC",
-      ])
-
+    it("fetches tickers from backend markets endpoint", async () => {
       const { result } = renderHook(() => useHyperliquidTickers(), {
-        wrapper: createConnectedWrapper({
-          accountAddress: "0xTestAccountAddress",
-          apiWalletAddress: "0xTestApiWallet",
-          privateKey: "0xTestSecret",
-        }),
+        wrapper: createWrapper(),
       })
 
       await waitFor(() => {
@@ -264,22 +309,20 @@ describe("useTrading hooks", () => {
         "ETH/USDC:USDC",
         "SOL/USDC:USDC",
       ])
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/hyperliquid/markets?network=testnet",
+        expect.objectContaining({
+          cache: "no-store",
+          signal: expect.any(AbortSignal),
+        }),
+      )
     })
   })
 
   describe("useHyperliquidLeverageLimits", () => {
-    it("fetches leverage limits when connected", async () => {
-      mockMethods.getLeverageLimits.mockResolvedValue([
-        { symbol: "BTC/USDC:USDC", maxLeverage: 50 },
-        { symbol: "ETH/USDC:USDC", maxLeverage: 25 },
-      ])
-
+    it("fetches leverage limits from backend markets endpoint", async () => {
       const { result } = renderHook(() => useHyperliquidLeverageLimits(), {
-        wrapper: createConnectedWrapper({
-          accountAddress: "0xTestAccountAddress",
-          apiWalletAddress: "0xTestApiWallet",
-          privateKey: "0xTestSecret",
-        }),
+        wrapper: createWrapper(),
       })
 
       await waitFor(() => {
@@ -287,8 +330,8 @@ describe("useTrading hooks", () => {
       })
 
       expect(result.data).toEqual([
-        { symbol: "BTC/USDC:USDC", maxLeverage: 50 },
-        { symbol: "ETH/USDC:USDC", maxLeverage: 25 },
+        { symbol: "BTC/USDC:USDC", maxLeverage: 50, assetIndex: 0 },
+        { symbol: "ETH/USDC:USDC", maxLeverage: 25, assetIndex: 1 },
       ])
     })
   })
@@ -307,7 +350,8 @@ describe("useTrading hooks", () => {
         expect(result.isError).toBe(true)
       })
 
-      expect(result.error?.message).toBe("Wallet not connected")
+      expect(result.error).toBeInstanceOf(Error)
+      expect(String(result.error)).toContain("WalletNotConnected")
     })
 
     it("calls rebalancePositions with correct parameters", async () => {
@@ -319,15 +363,24 @@ describe("useTrading hooks", () => {
         },
       ])
 
-      const { result } = renderHook(() => useRebalanceHyperliquidPositions(), {
-        wrapper: createConnectedWrapper({
-          accountAddress: "0xTestAccountAddress",
-          apiWalletAddress: "0xTestApiWallet",
-          privateKey: "0xTestSecret",
-        }),
-      })
+      const { result } = renderHook(
+        () => {
+          const wallet = useHyperliquidClient()
+          const rebalance = useRebalanceHyperliquidPositions()
+          return { wallet, rebalance }
+        },
+        {
+          wrapper: createConnectedWrapper({
+            accountAddress: "0xTestAccountAddress",
+            apiWalletAddress: "0xTestApiWallet",
+            privateKey: "0xTestSecret",
+          }),
+        },
+      )
 
-      result.mutate({
+      await waitUntilWalletConnected(() => result.wallet.isConnected())
+
+      result.rebalance.mutate({
         actions: [
           {
             kind: "rebalance",
@@ -340,7 +393,7 @@ describe("useTrading hooks", () => {
       })
 
       await waitFor(() => {
-        expect(result.isSuccess).toBe(true)
+        expect(result.rebalance.isSuccess).toBe(true)
       })
 
       expect(mockMethods.rebalancePositions).toHaveBeenCalledWith([
@@ -353,8 +406,8 @@ describe("useTrading hooks", () => {
         },
       ])
 
-      expect(result.data?.orders).toHaveLength(1)
-      expect(result.data?.orders[0].status).toBe("filled")
+      expect(result.rebalance.data).toHaveLength(1)
+      expect(result.rebalance.data?.[0].status).toBe("filled")
     })
 
     it("calls rebalancePositions with only the actions array (no separate precise arg)", async () => {
@@ -362,15 +415,24 @@ describe("useTrading hooks", () => {
         { symbol: "ETH/USDC:USDC", side: "sell", status: "working" },
       ])
 
-      const { result } = renderHook(() => useRebalanceHyperliquidPositions(), {
-        wrapper: createConnectedWrapper({
-          accountAddress: "0xTestAccountAddress",
-          apiWalletAddress: "0xTestApiWallet",
-          privateKey: "0xTestSecret",
-        }),
-      })
+      const { result } = renderHook(
+        () => {
+          const wallet = useHyperliquidClient()
+          const rebalance = useRebalanceHyperliquidPositions()
+          return { wallet, rebalance }
+        },
+        {
+          wrapper: createConnectedWrapper({
+            accountAddress: "0xTestAccountAddress",
+            apiWalletAddress: "0xTestApiWallet",
+            privateKey: "0xTestSecret",
+          }),
+        },
+      )
 
-      result.mutate({
+      await waitUntilWalletConnected(() => result.wallet.isConnected())
+
+      result.rebalance.mutate({
         actions: [
           {
             kind: "close",
@@ -381,7 +443,7 @@ describe("useTrading hooks", () => {
       })
 
       await waitFor(() => {
-        expect(result.isSuccess).toBe(true)
+        expect(result.rebalance.isSuccess).toBe(true)
       })
 
       expect(mockMethods.rebalancePositions).toHaveBeenCalledWith([
@@ -405,7 +467,7 @@ describe("useTrading hooks", () => {
       expect(result.isConnected()).toBe(false)
     })
 
-    it("returns wallet settings when connected", () => {
+    it("returns wallet settings when connected", async () => {
       localStorage.setItem("hyperliquid-network", "testnet")
 
       const { result } = renderHook(() => useWalletSettings(), {
@@ -416,12 +478,13 @@ describe("useTrading hooks", () => {
         }),
       })
 
+      await waitUntilWalletConnected(() => result.isConnected())
+
       expect(result.data()?.accountAddress).toBe("0xMyAccountAddress")
       expect(result.data()?.isTestnet).toBe(true)
-      expect(result.isConnected()).toBe(true)
     })
 
-    it("returns mainnet when network is mainnet", () => {
+    it("returns mainnet when network is mainnet", async () => {
       localStorage.setItem("hyperliquid-network", "mainnet")
 
       const { result } = renderHook(() => useWalletSettings(), {
@@ -431,6 +494,8 @@ describe("useTrading hooks", () => {
           privateKey: "0xMySecret",
         }),
       })
+
+      await waitUntilWalletConnected(() => result.isConnected())
 
       expect(result.data()?.isTestnet).toBe(false)
     })

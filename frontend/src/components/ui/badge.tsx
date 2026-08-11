@@ -4,8 +4,7 @@ import { cn } from "@/lib/cn"
 import { badgeVariants, type BadgeVariants } from "@/lib/badge-variants"
 
 interface BadgeProps
-  extends JSX.HTMLAttributes<HTMLDivElement>,
-    BadgeVariants {}
+  extends JSX.HTMLAttributes<HTMLDivElement>, BadgeVariants {}
 
 const Badge = (props: BadgeProps) => {
   const [local, rest] = splitProps(props, ["class", "variant"])

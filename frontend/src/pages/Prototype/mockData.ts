@@ -323,9 +323,9 @@ const generateBacktestData = (): BacktestPoint[] => {
   const points: BacktestPoint[] = []
   let value = 10000
 
-  for (let i = 365; i >= 0; i--) {
+  for (let dayOffset = 365; dayOffset >= 0; dayOffset--) {
     const dayMs = 24 * 60 * 60 * 1000
-    const time = Math.floor((now - i * dayMs) / 1000)
+    const time = Math.floor((now - dayOffset * dayMs) / 1000)
     const dailyReturn = (Math.random() - 0.48) * 0.03
     value = value * (1 + dailyReturn)
     points.push({ time, value })
@@ -771,8 +771,8 @@ const generateFactorHistoricalReturns = (): FactorHistoricalReturn[] => {
 
   for (const factor of factors) {
     let cumulativeReturn = 1
-    for (let i = 365; i >= 0; i--) {
-      const time = Math.floor((now - i * dayMs) / 1000)
+    for (let dayOffset = 365; dayOffset >= 0; dayOffset--) {
+      const time = Math.floor((now - dayOffset * dayMs) / 1000)
       const dailyReturn =
         factorDrifts[factor] +
         (Math.random() - 0.5) * factorVolatilities[factor]
@@ -833,10 +833,10 @@ const generateReturnDistribution = (): ReturnDistributionBucket[] => {
   const buckets: Map<number, number> = new Map()
   const bucketSize = 0.005
 
-  for (let i = 1; i < MOCK_BACKTEST_DATA.length; i++) {
+  for (let index = 1; index < MOCK_BACKTEST_DATA.length; index++) {
     const dailyReturn =
-      (MOCK_BACKTEST_DATA[i].value - MOCK_BACKTEST_DATA[i - 1].value) /
-      MOCK_BACKTEST_DATA[i - 1].value
+      (MOCK_BACKTEST_DATA[index].value - MOCK_BACKTEST_DATA[index - 1].value) /
+      MOCK_BACKTEST_DATA[index - 1].value
     const bucket = Math.round(dailyReturn / bucketSize) * bucketSize
     buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1)
   }

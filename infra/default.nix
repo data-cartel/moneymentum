@@ -1,8 +1,17 @@
-{ pkgs, ragenix, nixos-anywhere, system }:
+{
+  pkgs,
+  ragenix,
+  nixos-anywhere,
+  system,
+}:
 
 let
-  buildInputs =
-    [ pkgs.terraform pkgs.rage pkgs.jq ragenix.packages.${system}.default ];
+  buildInputs = [
+    pkgs.terraform
+    pkgs.rage
+    pkgs.jq
+    ragenix.packages.${system}.default
+  ];
 
   tfState = "infra/terraform.tfstate";
   tfVars = "infra/terraform.tfvars";
@@ -25,9 +34,7 @@ let
 
   encryptState = ''
     if [ -f ${tfState} ]; then
-      nix eval --raw --file ${
-        ../keys.nix
-      } roles.infra --apply 'builtins.concatStringsSep "\n"' \
+      nix eval --raw --file ${../keys.nix} roles.infra --apply 'builtins.concatStringsSep "\n"' \
         | rage -e -R /dev/stdin -o ${tfState}.age ${tfState}
     fi
   '';
@@ -76,20 +83,20 @@ let
   '';
 
   encryptVars = ''
-    nix eval --raw --file ${
-      ../keys.nix
-    } roles.infra --apply 'builtins.concatStringsSep "\n"' \
+    nix eval --raw --file ${../keys.nix} roles.infra --apply 'builtins.concatStringsSep "\n"' \
       | rage -e -R /dev/stdin -o ${tfVars}.age ${tfVars}
   '';
 
-  mkTask = name: body:
+  mkTask =
+    name: body:
     pkgs.writeShellApplication {
       inherit name;
       runtimeInputs = buildInputs;
       text = body;
     };
 
-in {
+in
+{
   inherit buildInputs parseIdentity resolveIp;
 
   rekey = mkTask "rekey" ''
@@ -199,7 +206,11 @@ in {
 
   remote = pkgs.writeShellApplication {
     name = "remote";
-    runtimeInputs = [ pkgs.rage pkgs.jq pkgs.openssh ];
+    runtimeInputs = [
+      pkgs.rage
+      pkgs.jq
+      pkgs.openssh
+    ];
     text = ''
       ${resolveIp}
       exec ssh -i "$identity" "root@$host_ip" "$@"

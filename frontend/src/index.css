@@ -276,3 +276,45 @@
   border: 2px solid color-mix(in srgb, var(--background) 70%, white);
   box-shadow: 0 0 8px rgba(0, 0, 0, 0.25);
 }
+
+@keyframes quote-flash-up {
+  0% {
+    background-color: color-mix(in oklch, var(--positive) 78%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in oklch, var(--positive) 55%, transparent),
+      0 0 12px color-mix(in oklch, var(--positive) 40%, transparent);
+  }
+  35% {
+    background-color: color-mix(in oklch, var(--positive) 32%, transparent);
+    box-shadow: none;
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+@keyframes quote-flash-down {
+  0% {
+    background-color: color-mix(in oklch, var(--negative) 74%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in oklch, var(--negative) 50%, transparent),
+      0 0 12px color-mix(in oklch, var(--negative) 38%, transparent);
+  }
+  35% {
+    background-color: color-mix(in oklch, var(--negative) 28%, transparent);
+    box-shadow: none;
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+.quote-flash-up {
+  animation: quote-flash-up 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.quote-flash-down {
+  animation: quote-flash-down 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}

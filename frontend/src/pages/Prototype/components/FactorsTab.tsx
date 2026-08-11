@@ -78,7 +78,7 @@ export const FactorsTab = (props: FactorsTabProps) => {
 
     for (const factor of factors) {
       const factorData = props.factorHistoricalReturns.filter(
-        r => r.factor === factor,
+        record => record.factor === factor,
       )
       const series = chart.addSeries(LineSeries, {
         color: FACTOR_CHART_COLORS[factor] ?? "#888",

@@ -1,12 +1,13 @@
 import { createSignal, createMemo, Show } from "solid-js"
 import { columns } from "@/components/ui/columns"
-import { DataTable } from "@/components/ui/data-table"
+import { VirtualizedDataTable } from "@/components/ui/virtualized-data-table"
 import { Calendar22 as DatePicker } from "@/components/ui/date-picker"
 import {
   TimeframeSelect,
   type Timeframe,
 } from "@/components/ui/timeframe-select"
 import { cn } from "@/lib/cn"
+import { getErrorMessage } from "@/lib/error-message"
 import { Button } from "@/components/ui/button"
 import {
   useDateRange,
@@ -108,8 +109,10 @@ const MainPage = () => {
     dateRangeQuery.isLoading ||
     analysisQuery.isLoading ||
     reloadMutation.isPending
-  const error = () =>
-    dateRangeQuery.error?.message ?? analysisQuery.error?.message ?? null
+  const error = () => {
+    const failure = dateRangeQuery.error ?? analysisQuery.error
+    return failure ? getErrorMessage(failure) : null
+  }
   const data = () => analysisQuery.data?.data ?? []
   const message = () => analysisQuery.data?.message ?? null
 
@@ -206,7 +209,7 @@ const MainPage = () => {
           <Show when={message()}>
             <div class="mb-4 text-center">{message()}</div>
           </Show>
-          <DataTable columns={columns} data={data()} />
+          <VirtualizedDataTable columns={columns} data={data()} />
         </div>
       </Show>
     </>

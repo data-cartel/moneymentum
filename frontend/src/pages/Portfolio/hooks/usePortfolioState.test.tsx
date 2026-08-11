@@ -25,15 +25,24 @@ vi.mock("@/hooks/useWallet", () => ({
   })),
 }))
 
+const readonlyPortfolioActions = vi.hoisted(() => ({
+  addAddress: vi.fn(),
+  removeAddress: vi.fn(),
+  setIncludeInBeta: vi.fn(),
+  clearAddresses: vi.fn(),
+}))
+
 vi.mock("./useReadonlyPortfolioState", () => ({
   useReadonlyPortfolioState: vi.fn(() => ({
     rows: [],
     betaPositions: [],
     isLoading: false,
     error: null,
-    addAddress: vi.fn(),
-    removeAddress: vi.fn(),
-    setIncludeInBeta: vi.fn(),
+    validationError: null,
+    addAddress: readonlyPortfolioActions.addAddress,
+    removeAddress: readonlyPortfolioActions.removeAddress,
+    setIncludeInBeta: readonlyPortfolioActions.setIncludeInBeta,
+    clearAddresses: readonlyPortfolioActions.clearAddresses,
   })),
 }))
 
@@ -50,9 +59,54 @@ const createWrapper = () => {
 
 describe("usePortfolioState", () => {
   const mutate = vi.fn()
+  const refetchPositions = vi.fn()
+  const refetchAccountSummary = vi.fn()
+  let settledOrders: Array<{
+    symbol: string
+    side: "buy" | "sell"
+    status: "filled" | "timed_out" | "failed"
+    message?: string
+  }>
+
+  const exchangePositions = {
+    positions: [
+      {
+        symbol: "BTC/USDC:USDC",
+        side: "buy" as const,
+        leverage: 2,
+        notional: 600,
+        percentage: 60,
+      },
+      {
+        symbol: "ETH/USDC:USDC",
+        side: "buy" as const,
+        leverage: 3,
+        notional: 400,
+        percentage: 40,
+      },
+    ],
+    totalNotional: 1000,
+  }
 
   beforeEach(() => {
     vi.clearAllMocks()
+    settledOrders = [
+      { symbol: "BTC/USDC:USDC", side: "buy", status: "filled" },
+      { symbol: "ETH/USDC:USDC", side: "buy", status: "filled" },
+    ]
+    refetchPositions.mockResolvedValue({ data: exchangePositions })
+    refetchAccountSummary.mockResolvedValue({
+      data: {
+        accountValue: 1000,
+        totalNotionalPosition: 1000,
+        withdrawable: 500,
+        crossAccountLeverage: 1,
+      },
+    })
+    mutate.mockImplementation((_payload, options) => {
+      options?.onSettled?.(settledOrders, null)
+    })
+
     vi.mocked(useHyperliquidAccountSummary).mockReturnValue({
       data: {
         accountValue: 1000,
@@ -61,29 +115,13 @@ describe("usePortfolioState", () => {
         crossAccountLeverage: 1,
       },
       isLoading: false,
+      refetch: refetchAccountSummary,
     } as ReturnType<typeof useHyperliquidAccountSummary>)
 
     vi.mocked(useHyperliquidPositions).mockReturnValue({
-      data: {
-        positions: [
-          {
-            symbol: "BTC/USDC:USDC",
-            side: "buy",
-            leverage: 2,
-            notional: 600,
-            percentage: 60,
-          },
-          {
-            symbol: "ETH/USDC:USDC",
-            side: "buy",
-            leverage: 3,
-            notional: 400,
-            percentage: 40,
-          },
-        ],
-        totalNotional: 1000,
-      },
+      data: exchangePositions,
       isLoading: false,
+      refetch: refetchPositions,
     } as ReturnType<typeof useHyperliquidPositions>)
 
     vi.mocked(useHyperliquidLeverageLimits).mockReturnValue({
@@ -208,6 +246,61 @@ describe("usePortfolioState", () => {
     expect(result.canSubmit).toBe(true)
   })
 
+  it("allows submitting a full close to cash", async () => {
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(Object.keys(result.targetPortfolio)).toHaveLength(2)
+    })
+
+    result.setManualWeightEntry(true)
+    result.handleWeightChange("BTC/USDC:USDC", 0)
+    result.handleWeightChange("ETH/USDC:USDC", 0)
+
+    expect(result.targetAllocationPercent).toBe(0)
+    expect(result.symbolsBelowMinimum).toEqual([])
+    expect(result.symbolsDeltaBelowMinimum).toEqual([])
+    expect(result.canSubmit).toBe(true)
+
+    result.handleRebalancePositions()
+
+    expect(mutate).toHaveBeenCalledWith(
+      {
+        actions: [
+          { kind: "close", symbol: "BTC/USDC:USDC", side: "buy" },
+          { kind: "close", symbol: "ETH/USDC:USDC", side: "buy" },
+        ],
+      },
+      expect.objectContaining({
+        onSettled: expect.any(Function),
+      }),
+    )
+
+    await waitFor(() => {
+      expect(refetchPositions).toHaveBeenCalled()
+      expect(result.isRebalancing).toBe(false)
+    })
+  })
+
+  it("allows full close when every target position is dust", async () => {
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(Object.keys(result.targetPortfolio)).toHaveLength(2)
+    })
+
+    result.handleNotionalChange("BTC/USDC:USDC", 0.006)
+    result.handleNotionalChange("ETH/USDC:USDC", 0.006)
+
+    expect(result.symbolsBelowMinimum).toEqual([])
+    expect(result.symbolsDeltaBelowMinimum).toEqual([])
+    expect(result.canSubmit).toBe(true)
+  })
+
   it("redistributes other positions when weight redistribution is enabled", async () => {
     const { result } = renderHook(() => usePortfolioState(), {
       wrapper: createWrapper(),
@@ -228,6 +321,34 @@ describe("usePortfolioState", () => {
     )
   })
 
+  it("clears readonly btc addresses when resetting for network change", async () => {
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(Object.keys(result.targetPortfolio)).toHaveLength(2)
+    })
+
+    result.resetPortfolioStateForNetworkChange()
+
+    expect(readonlyPortfolioActions.clearAddresses).toHaveBeenCalledOnce()
+  })
+
+  it("clears readonly btc addresses when disconnecting", async () => {
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(Object.keys(result.targetPortfolio)).toHaveLength(2)
+    })
+
+    result.handleDisconnect()
+
+    expect(readonlyPortfolioActions.clearAddresses).toHaveBeenCalledOnce()
+  })
+
   it("submits rebalance payload with actions; precise toggle shapes diff not the API body", async () => {
     const { result } = renderHook(() => usePortfolioState(), {
       wrapper: createWrapper(),
@@ -243,16 +364,187 @@ describe("usePortfolioState", () => {
     result.handleNotionalChange("BTC/USDC:USDC", 700)
     result.handleRebalancePositions()
 
-    expect(mutate).toHaveBeenCalledWith({
-      actions: [
-        expect.objectContaining({
-          kind: "rebalance",
-          symbol: "BTC/USDC:USDC",
-          signedNotionalDelta: 100,
-          leverage: 2,
-          leverageChanged: false,
-        }),
-      ],
+    expect(mutate).toHaveBeenCalledWith(
+      {
+        actions: [
+          expect.objectContaining({
+            kind: "rebalance",
+            symbol: "BTC/USDC:USDC",
+            signedNotionalDelta: 100,
+            leverage: 2,
+            leverageChanged: false,
+          }),
+        ],
+      },
+      expect.objectContaining({
+        onSettled: expect.any(Function),
+      }),
+    )
+
+    await waitFor(() => {
+      expect(refetchPositions).toHaveBeenCalled()
+      expect(result.isRebalancing).toBe(false)
     })
+  })
+
+  it("populates errorsBySymbol and stagedTrades.orderError on non-filled and timed_out rebalance orders", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(Object.keys(result.targetPortfolio)).toHaveLength(2)
+    })
+
+    // Generate rebalance actions (not close) for both symbols.
+    result.handleNotionalChange("BTC/USDC:USDC", 700)
+    result.handleNotionalChange("ETH/USDC:USDC", 300)
+
+    await waitFor(() => {
+      expect(result.stagedTrades.length).toBeGreaterThan(0)
+    })
+
+    settledOrders = [
+      {
+        symbol: "BTC/USDC:USDC",
+        side: "buy",
+        status: "timed_out",
+      },
+      {
+        symbol: "ETH/USDC:USDC",
+        side: "sell",
+        status: "failed",
+        message: "Order rejected: below minimum notional",
+      },
+    ]
+
+    result.handleRebalancePositions()
+
+    await waitFor(() => {
+      expect(refetchPositions).toHaveBeenCalled()
+      expect(result.isRebalancing).toBe(false)
+    })
+
+    expect(result.errorsBySymbol["BTC/USDC:USDC"]).toBe(
+      "Order did not confirm in time — portfolio was refreshed from the exchange",
+    )
+    expect(result.errorsBySymbol["ETH/USDC:USDC"]).toBe(
+      "Order rejected: below minimum notional",
+    )
+
+    const btcTrade = result.stagedTrades.find(
+      trade => trade.underlying === "BTC/USDC:USDC",
+    )
+    const ethTrade = result.stagedTrades.find(
+      trade => trade.underlying === "ETH/USDC:USDC",
+    )
+
+    expect(btcTrade).toBeDefined()
+    expect(ethTrade).toBeDefined()
+
+    expect(btcTrade?.orderError).toBe(
+      "Order did not confirm in time — portfolio was refreshed from the exchange",
+    )
+    expect(ethTrade?.orderError).toBe("Order rejected: below minimum notional")
+
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "rebalance order watch timed out; portfolio refreshed from exchange",
+    )
+  })
+
+  it("clears an existing symbol rebalance error when handlers change side, leverage, notional, or weight", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(Object.keys(result.targetPortfolio)).toHaveLength(2)
+    })
+
+    // Generate a rebalance action for BTC.
+    result.handleNotionalChange("BTC/USDC:USDC", 700)
+
+    await waitFor(() => {
+      expect(
+        result.stagedTrades.some(t => t.underlying === "BTC/USDC:USDC"),
+      ).toBe(true)
+    })
+
+    const repopulateBtcError = async () => {
+      settledOrders = [
+        {
+          symbol: "BTC/USDC:USDC",
+          side: "buy",
+          status: "failed",
+        },
+      ]
+      result.handleRebalancePositions()
+
+      await waitFor(() => {
+        expect(result.errorsBySymbol["BTC/USDC:USDC"]).toBe(
+          "Order was not filled",
+        )
+        const btcTrade = result.stagedTrades.find(
+          trade => trade.underlying === "BTC/USDC:USDC",
+        )
+        expect(btcTrade).toBeDefined()
+        expect(btcTrade?.orderError).toBe("Order was not filled")
+        expect(result.isRebalancing).toBe(false)
+      })
+    }
+
+    await repopulateBtcError()
+
+    result.handleSideChange("BTC/USDC:USDC", "sell")
+    await waitFor(() => {
+      expect(result.errorsBySymbol["BTC/USDC:USDC"]).toBeUndefined()
+      const btcTrade = result.stagedTrades.find(
+        trade => trade.underlying === "BTC/USDC:USDC",
+      )
+      expect(btcTrade).toBeDefined()
+      expect(btcTrade?.orderError).toBeUndefined()
+    })
+
+    await repopulateBtcError()
+
+    result.handleLeverageChange("BTC/USDC:USDC", 4)
+    await waitFor(() => {
+      expect(result.errorsBySymbol["BTC/USDC:USDC"]).toBeUndefined()
+      const btcTrade = result.stagedTrades.find(
+        trade => trade.underlying === "BTC/USDC:USDC",
+      )
+      expect(btcTrade).toBeDefined()
+      expect(btcTrade?.orderError).toBeUndefined()
+    })
+
+    await repopulateBtcError()
+
+    result.handleNotionalChange("BTC/USDC:USDC", 710)
+    await waitFor(() => {
+      expect(result.errorsBySymbol["BTC/USDC:USDC"]).toBeUndefined()
+      const btcTrade = result.stagedTrades.find(
+        trade => trade.underlying === "BTC/USDC:USDC",
+      )
+      expect(btcTrade).toBeDefined()
+      expect(btcTrade?.orderError).toBeUndefined()
+    })
+
+    await repopulateBtcError()
+
+    result.handleWeightChange("BTC/USDC:USDC", 80)
+    await waitFor(() => {
+      expect(result.errorsBySymbol["BTC/USDC:USDC"]).toBeUndefined()
+      const btcTrade = result.stagedTrades.find(
+        trade => trade.underlying === "BTC/USDC:USDC",
+      )
+      expect(btcTrade).toBeDefined()
+      expect(btcTrade?.orderError).toBeUndefined()
+    })
+
+    expect(consoleWarn).not.toHaveBeenCalled()
   })
 })

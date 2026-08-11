@@ -3,16 +3,150 @@ import { pro } from "ccxt"
 import type { NetworkMode, WalletCredentials } from "@/contexts/wallet-context"
 import type { RebalanceAction } from "@/pages/Portfolio/hooks/portfolioRebalancer"
 
-const MARKETS_CACHE_KEY = "hyperliquid_markets_cache"
-const MARKETS_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-
 const HYPERLIQUID_MAINNET_INFO_URL = "https://api.hyperliquid.xyz/info"
 const HYPERLIQUID_TESTNET_INFO_URL = "https://api.hyperliquid-testnet.xyz/info"
 
-interface MarketsCache {
-  markets: Record<string, unknown>
-  timestamp: number
-  networkMode: NetworkMode
+const hyperliquidInfoUrl = (network: NetworkMode): string =>
+  network === "testnet"
+    ? HYPERLIQUID_TESTNET_INFO_URL
+    : HYPERLIQUID_MAINNET_INFO_URL
+
+const HYPERLIQUID_REQUEST_TIMEOUT_MS = 10_000
+const HYPERLIQUID_WATCH_ORDERS_TIMEOUT_MS = 10_000
+
+type LeverageChangedAction = Extract<
+  RebalanceAction,
+  { kind: "rebalance" } | { kind: "preciseRebalance" }
+> & { leverageChanged: true }
+
+const isLeverageChangedAction = (
+  action: RebalanceAction,
+): action is LeverageChangedAction =>
+  (action.kind === "rebalance" || action.kind === "preciseRebalance") &&
+  action.leverageChanged
+
+interface PerpMarketContext {
+  szDecimals: number
+  markPx: number
+}
+
+/** Matches `finance::hyperliquid_swap_ccxt_symbol` base normalization. */
+const normalizePerpMarketLookupKey = (base: string): string =>
+  base.toUpperCase().replace(/:/g, "-")
+
+/** Matches `finance::hyperliquid_swap_ccxt_symbol`. */
+const hyperliquidSwapCcxtSymbol = (baseName: string): string => {
+  const base = baseName.toUpperCase().replace(/:/g, "-")
+  return `${base}/USDC:USDC`
+}
+
+const lookupPerpMarketContext = (
+  contexts: Map<string, PerpMarketContext>,
+  base: string,
+): PerpMarketContext | undefined =>
+  contexts.get(normalizePerpMarketLookupKey(base))
+
+const decimalStep = (fractionDigits: number): number => {
+  if (fractionDigits <= 0) {
+    return 1
+  }
+
+  return Number(`0.${"0".repeat(fractionDigits - 1)}1`)
+}
+
+const amountPrecisionStepFromSzDecimals = (szDecimals: number): number =>
+  szDecimals <= 0 ? 1 : decimalStep(szDecimals)
+
+/** Mirrors CCXT hyperliquid.calculatePricePrecision for perps (maxDecimals = 6). */
+const calculateHyperliquidPricePrecision = (
+  price: number,
+  szDecimals: number,
+  maxDecimals = 6,
+): number => {
+  if (!Number.isFinite(price) || price < 0) return 0
+
+  const priceText = String(price)
+
+  if (price === 0) {
+    return Math.min(maxDecimals - szDecimals, 5)
+  }
+
+  if (price > 0 && price < 1) {
+    const decimalPart = priceText.split(".")[1] ?? ""
+    let leadingZeros = 0
+    while (
+      leadingZeros < decimalPart.length &&
+      decimalPart.charAt(leadingZeros) === "0"
+    ) {
+      leadingZeros += 1
+    }
+    const pricePrecision = leadingZeros + 5
+    return Math.min(maxDecimals - szDecimals, pricePrecision)
+  }
+
+  const integerPart = priceText.split(".")[0] ?? "0"
+  const significantDigits = Math.max(5, integerPart.length)
+  return Math.min(
+    maxDecimals - szDecimals,
+    significantDigits - integerPart.length,
+  )
+}
+
+const pricePrecisionStepFromDecimals = (priceDecimals: number): number =>
+  priceDecimals <= 0 ? 1 : decimalStep(priceDecimals)
+
+const fetchPerpMarketContexts = async (
+  network: NetworkMode,
+): Promise<Map<string, PerpMarketContext>> => {
+  const response = await fetch(hyperliquidInfoUrl(network), {
+    method: "POST",
+    signal: AbortSignal.timeout(HYPERLIQUID_REQUEST_TIMEOUT_MS),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "metaAndAssetCtxs" }),
+  })
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch perp market contexts: ${response.statusText}`,
+    )
+  }
+
+  const json = (await response.json()) as unknown
+  if (!Array.isArray(json) || json.length < 2) {
+    throw new Error("Unexpected metaAndAssetCtxs payload shape")
+  }
+
+  const meta = json[0] as { universe?: unknown[] } | null
+  const assetContexts = json[1] as Array<
+    { markPx?: string | number } | null | undefined
+  >
+  if (
+    meta === null ||
+    !Array.isArray(meta.universe) ||
+    meta.universe.some(asset => asset === null || typeof asset !== "object") ||
+    !Array.isArray(assetContexts)
+  ) {
+    throw new Error("Unexpected metaAndAssetCtxs payload shape")
+  }
+  const universe = meta.universe as Array<{
+    name?: string
+    szDecimals?: number
+  }>
+  const contexts = new Map<string, PerpMarketContext>()
+
+  universe.forEach((asset, index) => {
+    const name = asset.name
+    if (!name) return
+    const rawMarkPx = assetContexts[index]?.markPx ?? 0
+    const markPx =
+      typeof rawMarkPx === "number" ? rawMarkPx : Number.parseFloat(rawMarkPx)
+    contexts.set(normalizePerpMarketLookupKey(name), {
+      szDecimals: asset.szDecimals ?? 0,
+      markPx: Number.isFinite(markPx) ? markPx : 0,
+    })
+  })
+
+  return contexts
 }
 
 const isDeployed = (): boolean =>
@@ -24,85 +158,16 @@ const applyApiProxy = (
 ): void => {
   if (!isDeployed()) return
   const proxyBase = networkMode === "testnet" ? "/hl-testnet" : "/hl"
+  const existingApi = exchange.urls["api"]
+  if (typeof existingApi === "object") {
+    exchange.urls["api"] = {
+      ...existingApi,
+      public: proxyBase,
+      private: proxyBase,
+    }
+    return
+  }
   exchange.urls["api"] = { public: proxyBase, private: proxyBase }
-}
-
-const createTempExchange = (networkMode: NetworkMode): HyperliquidExchange => {
-  const HyperliquidClass = pro.hyperliquid as unknown as new (
-    config: Record<string, unknown>,
-  ) => HyperliquidExchange
-
-  const exchange = new HyperliquidClass({
-    enableRateLimit: true,
-  })
-
-  if (networkMode === "testnet") {
-    exchange.setSandboxMode(true)
-  }
-
-  applyApiProxy(exchange, networkMode)
-
-  return exchange
-}
-
-const getCachedMarkets = (
-  networkMode: NetworkMode,
-): Record<string, unknown> | null => {
-  try {
-    const cached = localStorage.getItem(MARKETS_CACHE_KEY)
-    if (!cached) {
-      return null
-    }
-
-    const parsed: MarketsCache = JSON.parse(cached) as MarketsCache
-    const { markets, timestamp, networkMode: cachedMode } = parsed
-
-    if (cachedMode !== networkMode) {
-      return null
-    }
-
-    const ageMs = Date.now() - timestamp
-    if (ageMs >= MARKETS_CACHE_TTL_MS) {
-      return null
-    }
-
-    return markets
-  } catch {
-    return null
-  }
-}
-
-const setCachedMarkets = (
-  markets: Record<string, unknown>,
-  networkMode: NetworkMode,
-): void => {
-  const cacheData: MarketsCache = {
-    markets,
-    timestamp: Date.now(),
-    networkMode,
-  }
-  localStorage.setItem(MARKETS_CACHE_KEY, JSON.stringify(cacheData))
-}
-
-export const preloadMarkets = async (
-  networkMode: NetworkMode,
-): Promise<Record<string, unknown> | null> => {
-  const cached = getCachedMarkets(networkMode)
-  if (cached) {
-    return cached
-  }
-
-  try {
-    const tempExchange = createTempExchange(networkMode)
-    const markets = await tempExchange.loadMarkets()
-
-    setCachedMarkets(markets, networkMode)
-    return markets
-  } catch {
-    // Network errors are expected when offline or API is unreachable
-    // Markets will be loaded on-demand when needed
-    return null
-  }
 }
 
 export type OrderSide = "buy" | "sell"
@@ -136,13 +201,225 @@ export interface CurrentPosition {
 export interface OrderResult {
   symbol: string
   side: OrderSide
-  status: "working" | "filled" | "failed"
+  status: "working" | "filled" | "failed" | "timed_out"
   message?: string | null
+}
+
+type TerminalOrderResultStatus = Extract<
+  OrderResult["status"],
+  "filled" | "failed"
+>
+
+type WatchMappedOrderStatus = TerminalOrderResultStatus | "working"
+
+/** User-facing copy for Hyperliquid / CCXT order status strings. */
+const ORDER_STATUS_USER_MESSAGES: Record<string, string> = {
+  open: "Order still open after watch timeout",
+  triggered: "Order still open after watch timeout",
+  canceled: "Order was canceled",
+  cancelled: "Order was canceled",
+  expired: "Order expired",
+  rejected: "Order was rejected",
+  marginCanceled: "Order canceled due to margin",
+  vaultWithdrawalCanceled: "Order canceled due to vault withdrawal",
+  openInterestCapCanceled: "Order canceled due to open interest cap",
+  selfTradeCanceled: "Order canceled due to self-trade prevention",
+  reduceOnlyCanceled: "Reduce-only order was canceled",
+  siblingFilledCanceled: "Order canceled after a sibling fill",
+  delistedCanceled: "Order canceled because the market was delisted",
+  liquidatedCanceled: "Order canceled due to liquidation",
+  scheduledCancel: "Order was scheduled for cancel",
+  tickRejected: "Order rejected: invalid tick size",
+  minTradeNtlRejected: "Order rejected: below minimum notional",
+  perpMarginRejected: "Order rejected: insufficient perp margin",
+  reduceOnlyRejected: "Reduce-only order was rejected",
+  badAloPxRejected: "Order rejected: invalid ALO price",
+  iocCancelRejected: "IOC order was rejected or canceled",
+  badTriggerPxRejected: "Order rejected: invalid trigger price",
+  marketOrderNoLiquidityRejected: "Market order rejected: no liquidity",
+  positionIncreaseAtOpenInterestCapRejected:
+    "Order rejected: position increase at open interest cap",
+  positionFlipAtOpenInterestCapRejected:
+    "Order rejected: position flip at open interest cap",
+  tooAggressiveAtOpenInterestCapRejected:
+    "Order rejected: too aggressive at open interest cap",
+  openInterestIncreaseRejected: "Order rejected: open interest increase",
+  insufficientSpotBalanceRejected: "Order rejected: insufficient spot balance",
+  oracleRejected: "Order rejected by oracle",
+  perpMaxPositionRejected: "Order rejected: perp max position",
+}
+
+const FILLED_STATUSES = new Set(["filled", "closed"])
+const OPEN_STATUSES = new Set(["open", "triggered"])
+
+const readHyperliquidInfoStatus = (order: Order): string | null => {
+  const info: unknown = order.info
+  if (typeof info !== "object" || info === null || !("status" in info)) {
+    return null
+  }
+  const status = (info as { status: unknown }).status
+  return typeof status === "string" && status.length > 0 ? status : null
+}
+
+const hasOrderStatusUserMessage = (status: string): boolean =>
+  Object.prototype.hasOwnProperty.call(ORDER_STATUS_USER_MESSAGES, status)
+
+const normalizeExchangeOrderStatus = (status: string | undefined): string =>
+  (status ?? "").trim()
+
+const userMessageForOrderStatus = (status: string): string =>
+  ORDER_STATUS_USER_MESSAGES[status] ??
+  (status.length > 0 ? status : "Order was not filled")
+
+/**
+ * Maps a CCXT/Hyperliquid order into filled | failed | working for the live
+ * watch loop. Prefer raw info.status for user messages when present.
+ */
+const mapExchangeOrderForWatch = (
+  order: Order,
+): { status: WatchMappedOrderStatus; message: string | null } => {
+  const ccxtStatus = normalizeExchangeOrderStatus(order.status)
+  const infoStatus = readHyperliquidInfoStatus(order)
+
+  if (
+    FILLED_STATUSES.has(ccxtStatus) ||
+    (infoStatus !== null && FILLED_STATUSES.has(infoStatus))
+  ) {
+    return { status: "filled", message: null }
+  }
+
+  if (OPEN_STATUSES.has(ccxtStatus) || OPEN_STATUSES.has(infoStatus ?? "")) {
+    return { status: "working", message: null }
+  }
+
+  if (
+    ccxtStatus === "rejected" ||
+    ccxtStatus === "canceled" ||
+    ccxtStatus === "cancelled" ||
+    ccxtStatus === "expired" ||
+    (infoStatus !== null &&
+      (infoStatus.endsWith("Canceled") ||
+        infoStatus.endsWith("Rejected") ||
+        infoStatus === "rejected" ||
+        infoStatus === "canceled" ||
+        infoStatus === "expired" ||
+        hasOrderStatusUserMessage(infoStatus)))
+  ) {
+    const messageKey = infoStatus ?? ccxtStatus
+    return {
+      status: "failed",
+      message: userMessageForOrderStatus(messageKey),
+    }
+  }
+
+  return { status: "working", message: null }
+}
+
+/**
+ * Maps a fetched order after watch timeout. Open/triggered become failed.
+ */
+const mapExchangeOrderAfterTimeout = (
+  order: Order,
+): { status: TerminalOrderResultStatus; message: string | null } => {
+  const mapped = mapExchangeOrderForWatch(order)
+  if (mapped.status === "filled") {
+    return { status: "filled", message: null }
+  }
+  if (mapped.status === "failed") {
+    return mapped
+  }
+
+  const infoStatus = readHyperliquidInfoStatus(order)
+  const ccxtStatus = normalizeExchangeOrderStatus(order.status)
+  const messageKey =
+    infoStatus ??
+    (OPEN_STATUSES.has(ccxtStatus) ? ccxtStatus : ccxtStatus || "open")
+
+  return {
+    status: "failed",
+    message: userMessageForOrderStatus(
+      OPEN_STATUSES.has(messageKey) ? messageKey : "open",
+    ),
+  }
 }
 
 export interface LeverageLimit {
   symbol: string
   maxLeverage: number
+  assetIndex: number
+  /** `true` when Hyperliquid forbids cross margin; always a boolean from the backend. */
+  onlyIsolated: boolean
+}
+
+export interface HyperliquidMarketsResponse {
+  tickers: string[]
+  leverageLimits: LeverageLimit[]
+  refreshedAt: string | null
+  marketsMaxAgeMs?: number
+}
+
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
+
+export const millisecondsUntilNextUtcMidnight = (
+  now: Date = new Date(),
+): number => {
+  const millisecondsIntoDay = now.getTime() % MILLISECONDS_PER_DAY
+  return Math.max(MILLISECONDS_PER_DAY - millisecondsIntoDay, 1)
+}
+
+const parseCacheMaxAgeMs = (cacheControl: string | null): number | null => {
+  if (!cacheControl) return null
+  const match = cacheControl.match(/max-age=(\d+)/)
+  if (!match) return null
+  const maxAgeSeconds = Number(match[1])
+  return Number.isFinite(maxAgeSeconds) ? maxAgeSeconds * 1000 : null
+}
+
+export const fetchHyperliquidMarkets = async (
+  network: NetworkMode,
+): Promise<HyperliquidMarketsResponse> => {
+  const url = `${import.meta.env.BASE_URL}api/hyperliquid/markets?network=${network}`
+  const response = await fetch(url, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(HYPERLIQUID_REQUEST_TIMEOUT_MS),
+  })
+  if (!response.ok) {
+    throw new Error(
+      `hyperliquid markets request failed: ${String(response.status)}`,
+    )
+  }
+  const markets = (await response.json()) as HyperliquidMarketsResponse
+  const marketsMaxAgeMs =
+    parseCacheMaxAgeMs(response.headers.get("cache-control")) ??
+    millisecondsUntilNextUtcMidnight()
+  return { ...markets, marketsMaxAgeMs }
+}
+
+interface CcxtMarket {
+  id: string
+  baseId: string
+  quoteId: string
+  settleId: string
+  symbol: string
+  base: string
+  quote: string
+  settle: string
+  type: string
+  spot: boolean
+  margin: boolean
+  swap: boolean
+  future: boolean
+  option: boolean
+  active: boolean
+  contract: boolean
+  linear: boolean
+  precision: { amount: number; price: number }
+  limits: {
+    amount: { min?: number; max?: number }
+    price: { min?: number; max?: number }
+    cost: { min?: number; max?: number }
+  }
+  info: Record<string, unknown>
 }
 
 // Minimum order size on Hyperliquid is $10, but we use $11 to guarantee orders will be opened
@@ -153,13 +430,16 @@ interface HyperliquidExchange {
   options: Record<string, unknown>
   urls: Record<string, string | Record<string, string>>
   walletAddress?: string
-  loadMarkets: () => Promise<Record<string, unknown>>
+  markets?: Record<string, CcxtMarket>
+  markets_by_id?: Record<string, CcxtMarket[]>
+  setMarkets: (markets: CcxtMarket[]) => void
   fetchBalance: () => Promise<{
     total: Record<string, unknown>
     info?: Record<string, unknown>
   }>
   fetchTickers: (
     symbols?: string[],
+    params?: { type?: "spot" | "swap" },
   ) => Promise<
     Record<
       string,
@@ -195,38 +475,39 @@ interface HyperliquidExchange {
     orders: OrderRequest[],
     params?: Record<string, unknown>,
   ) => Promise<Order[]>
+  watchOrders: (
+    symbol?: string,
+    since?: number,
+    limit?: number,
+    params?: Record<string, unknown>,
+  ) => Promise<Order[]>
+  unWatchOrders: (
+    symbol?: string,
+    params?: Record<string, unknown>,
+  ) => Promise<unknown>
+  fetchOrders: (
+    symbol?: string,
+    since?: number,
+    limit?: number,
+    params?: Record<string, unknown>,
+  ) => Promise<Order[]>
 }
 
 export class HyperliquidClient {
   private exchange: HyperliquidExchange
   private networkMode: NetworkMode
-  private vaultAddress: string | undefined
 
-  constructor(
-    credentials: WalletCredentials,
-    networkMode: NetworkMode,
-    markets?: Record<string, unknown>,
-  ) {
+  constructor(credentials: WalletCredentials, networkMode: NetworkMode) {
     this.networkMode = networkMode
-    this.vaultAddress = credentials.vaultAddress
 
     const HyperliquidClass = pro.hyperliquid as unknown as new (
       config: Record<string, unknown>,
     ) => HyperliquidExchange
 
-    // walletAddress is used for info requests (fetching positions/balance)
-    // When trading on behalf of a vault, use vault address; otherwise use account address
-    const effectiveWalletAddress =
-      credentials.vaultAddress ?? credentials.accountAddress
-
-    // Use pre-loaded markets if available, otherwise ccxt will load them on first use
-    const cachedMarkets = markets ?? getCachedMarkets(networkMode)
-
     this.exchange = new HyperliquidClass({
-      walletAddress: effectiveWalletAddress,
+      walletAddress: credentials.accountAddress,
       privateKey: credentials.privateKey,
       enableRateLimit: true,
-      ...(cachedMarkets && { markets: cachedMarkets }),
     })
 
     if (networkMode === "testnet") {
@@ -251,7 +532,7 @@ export class HyperliquidClient {
     const response = await fetch(infoUrl, {
       method: "POST",
       // Abort if the info endpoint is unresponsive for too long to avoid hanging the UI.
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(HYPERLIQUID_REQUEST_TIMEOUT_MS),
       headers: {
         "Content-Type": "application/json",
       },
@@ -361,116 +642,371 @@ export class HyperliquidClient {
     return typeof orderError === "string" ? orderError : null
   }
 
-  async listPerpTickers(): Promise<string[]> {
-    const markets = await this.exchange.loadMarkets()
-
-    // Update cache with fresh markets data
-    setCachedMarkets(markets, this.networkMode)
-
-    const perpSymbols = Object.entries(markets)
-      .filter(
-        ([symbol, data]) =>
-          symbol.includes(":") && (data as { swap?: boolean }).swap,
-      )
-      .map(([symbol]) => symbol)
-      .sort()
-    return perpSymbols
+  private hyperliquidStatusEntryToOrder(status: unknown): Order {
+    if (typeof status !== "object" || status === null) {
+      return { info: status } as Order
+    }
+    if ("error" in status) {
+      return { status: "rejected", info: status } as Order
+    }
+    if ("filled" in status) {
+      return { status: "closed", info: status } as Order
+    }
+    if ("resting" in status) {
+      return { status: "open", info: status } as Order
+    }
+    return { info: status } as Order
   }
 
-  async getLeverageLimits(): Promise<LeverageLimit[]> {
-    const tickers = await this.exchange.fetchTickers()
-    const results: LeverageLimit[] = []
+  /**
+   * CCXT hyperliquid handleErrors throws ExchangeError when any order in a batch
+   * statuses[] has { error: "..." }, even if status is "ok" and other orders filled.
+   * The full response JSON is embedded in the error message -- recover per-order results.
+   */
+  private parseOrdersFromPartialBatchExchangeError(
+    error: unknown,
+  ): Order[] | null {
+    const message = error instanceof Error ? error.message : String(error)
+    const jsonStart = message.indexOf("{")
+    if (jsonStart < 0) return null
 
-    for (const [symbol, ticker] of Object.entries(tickers)) {
-      if (!symbol.includes(":")) continue
-
-      let maxLeverage = 1.0
-      if (ticker.info !== undefined && ticker.info !== null) {
-        const info = ticker.info as Record<string, unknown>
-        const rawMaxLeverage = info["maxLeverage"]
-        if (typeof rawMaxLeverage === "number") {
-          maxLeverage = rawMaxLeverage
-        } else if (typeof rawMaxLeverage === "string") {
-          maxLeverage = parseFloat(rawMaxLeverage)
-        }
-      }
-
-      results.push({ symbol, maxLeverage })
+    let payload: unknown
+    try {
+      payload = JSON.parse(message.slice(jsonStart))
+    } catch {
+      return null
     }
 
-    return results.sort((a, b) => a.symbol.localeCompare(b.symbol))
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      (payload as { status?: string }).status !== "ok"
+    ) {
+      return null
+    }
+
+    const statuses = (
+      payload as { response?: { data?: { statuses?: unknown[] } } }
+    ).response?.data?.statuses
+    if (!Array.isArray(statuses)) return null
+
+    const exchange = this.exchange as HyperliquidExchange & {
+      parseOrders?: (orders: unknown[], market?: undefined) => Order[]
+    }
+
+    if (typeof exchange.parseOrders === "function") {
+      return exchange.parseOrders(statuses, undefined)
+    }
+
+    return statuses.map(status => this.hyperliquidStatusEntryToOrder(status))
   }
 
-  async getCurrentPositions(): Promise<CurrentPosition[]> {
-    const positions = await this.exchange.fetchPositions()
+  private async createOrdersWsBatch(orders: OrderRequest[]): Promise<Order[]> {
+    try {
+      return await this.exchange.createOrdersWs(orders)
+    } catch (error: unknown) {
+      const recovered = this.parseOrdersFromPartialBatchExchangeError(error)
+      if (recovered === null) {
+        throw error
+      }
+
+      console.warn(
+        "[HyperliquidClient] createOrdersWs partial batch recovered",
+        {
+          requestCount: orders.length,
+          responseCount: recovered.length,
+          outcomes: recovered.map((response, index) => ({
+            index,
+            symbol: orders[index]?.symbol,
+            side: orders[index]?.side,
+            status: response.status,
+            message: this.parseOrderErrorMessage(response.info),
+          })),
+        },
+      )
+
+      return recovered
+    }
+  }
+
+  private async fetchClearinghouseState(): Promise<Record<string, unknown>> {
+    const userAddress = this.getWalletAddress()
+    if (!userAddress) {
+      throw new Error("Wallet address is required for clearinghouse state")
+    }
+
+    const response = await fetch(hyperliquidInfoUrl(this.networkMode), {
+      method: "POST",
+      signal: AbortSignal.timeout(HYPERLIQUID_REQUEST_TIMEOUT_MS),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "clearinghouseState",
+        user: userAddress,
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch clearinghouse state: ${response.statusText}`,
+      )
+    }
+
+    const json = (await response.json()) as unknown
+    if (typeof json !== "object" || json === null) {
+      throw new Error("Unexpected clearinghouseState payload shape")
+    }
+
+    return json as Record<string, unknown>
+  }
+
+  private parseClearinghouseAssetPositions(
+    assetPositions: unknown,
+  ): CurrentPosition[] {
+    if (!Array.isArray(assetPositions)) {
+      return []
+    }
+
     const processed: CurrentPosition[] = []
 
-    for (const pos of positions) {
-      try {
-        const notionalRaw = pos.notional
-        if (notionalRaw === undefined) continue
-        const notional =
-          typeof notionalRaw === "number"
-            ? notionalRaw
-            : parseFloat(notionalRaw)
-        if (notional <= 0) continue
-
-        const parseNumeric = (value: unknown, fallback: number): number => {
-          if (value === undefined || value === null) return fallback
-          if (typeof value === "number") return value
-          if (typeof value === "string") return parseFloat(value)
-          return fallback
-        }
-
-        processed.push({
-          symbol: pos.symbol,
-          side: pos.side === "long" ? "buy" : "sell",
-          notional,
-          entryPrice: parseNumeric(pos.entryPrice, 0),
-          unrealizedPnl: parseNumeric(pos.unrealizedPnl, 0),
-          leverage: Math.round(parseNumeric(pos.leverage, 1)),
-        })
-      } catch {
+    for (const item of assetPositions) {
+      if (typeof item !== "object" || item === null) {
         continue
       }
+
+      const position = (item as { position?: unknown }).position
+      if (typeof position !== "object" || position === null) {
+        continue
+      }
+
+      const entry = position as Record<string, unknown>
+      const coin = typeof entry.coin === "string" ? entry.coin : ""
+      if (!coin) {
+        continue
+      }
+
+      const notional = Math.abs(this.parseNumericValue(entry.positionValue, 0))
+      if (notional <= 0) {
+        continue
+      }
+
+      const signedSize = this.parseNumericValue(entry.szi, 0)
+      const leverageEntry = entry.leverage
+      const leverageValue =
+        typeof leverageEntry === "object" && leverageEntry !== null
+          ? this.parseNumericValue(
+              (leverageEntry as { value?: unknown }).value,
+              1,
+            )
+          : 1
+
+      processed.push({
+        symbol: hyperliquidSwapCcxtSymbol(coin),
+        side: signedSize >= 0 ? "buy" : "sell",
+        notional,
+        entryPrice: this.parseNumericValue(entry.entryPx, 0),
+        unrealizedPnl: this.parseNumericValue(entry.unrealizedPnl, 0),
+        leverage: Math.round(leverageValue),
+      })
     }
 
     return processed
   }
 
-  private async setLeverage(symbol: string, leverage: number): Promise<void> {
-    await this.exchange.setLeverage(leverage, symbol, this.vaultParams)
+  async getCurrentPositions(): Promise<CurrentPosition[]> {
+    const state = await this.fetchClearinghouseState()
+    return this.parseClearinghouseAssetPositions(state.assetPositions)
   }
 
-  private get vaultParams(): Record<string, unknown> | undefined {
-    return this.vaultAddress ? { vaultAddress: this.vaultAddress } : undefined
-  }
-
-  private mapOrderResults(
-    requests: OrderRequest[],
-    responses: Order[],
-  ): OrderResult[] {
-    return requests.map((request, index): OrderResult => {
-      const res: Order | undefined =
-        index < responses.length ? responses[index] : undefined
-      if (res === undefined) {
-        return {
-          symbol: request.symbol,
-          side: (request.side ?? "buy") as OrderSide,
-          status: "working",
-          message: "order response missing",
+  private parseHyperliquidExchangeErrorMessage(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error)
+    const jsonStart = message.indexOf("{")
+    if (jsonStart >= 0) {
+      try {
+        const payload = JSON.parse(message.slice(jsonStart)) as {
+          response?: unknown
         }
+        if (typeof payload.response === "string") {
+          return payload.response
+        }
+      } catch {
+        // fall through to the raw exchange message
       }
+    }
+
+    return message.replace(/^hyperliquid\s+/i, "")
+  }
+
+  private exchangeOperationError(
+    symbol: string,
+    operation: string,
+    error: unknown,
+  ): Error {
+    const detail = this.parseHyperliquidExchangeErrorMessage(error)
+    return new Error(`Failed to ${operation} for ${symbol}: ${detail}`)
+  }
+
+  private async setLeverage(
+    symbol: string,
+    leverage: number,
+    onlyIsolated: boolean,
+  ): Promise<void> {
+    // Default {} in setLeverage is cross margin
+    const params = onlyIsolated ? { marginMode: "isolated" } : {}
+    try {
+      await this.exchange.setLeverage(leverage, symbol, params)
+    } catch (error: unknown) {
+      throw this.exchangeOperationError(symbol, "set leverage", error)
+    }
+  }
+
+  private parseCcxtPerpSymbolParts(symbol: string): {
+    base: string
+    quote: string
+    settle: string
+  } {
+    const colonIndex = symbol.indexOf(":")
+    const pair = colonIndex === -1 ? symbol : symbol.slice(0, colonIndex)
+    const settle = colonIndex === -1 ? "" : symbol.slice(colonIndex + 1)
+    const slashIndex = pair.indexOf("/")
+    if (slashIndex === -1) {
+      return { base: pair, quote: "USDC", settle: settle || "USDC" }
+    }
+    const base = pair.slice(0, slashIndex)
+    const quote = pair.slice(slashIndex + 1)
+    return { base, quote, settle: settle || quote }
+  }
+
+  private hydrateMarketsFromBackend(
+    leverageLimits: LeverageLimit[],
+    perpContexts: Map<string, PerpMarketContext>,
+  ): void {
+    const markets = leverageLimits.map(entry => {
+      const { base, quote, settle } = this.parseCcxtPerpSymbolParts(
+        entry.symbol,
+      )
+      const baseId = String(entry.assetIndex)
+      const context = lookupPerpMarketContext(perpContexts, base) ?? {
+        szDecimals: 0,
+        markPx: 1,
+      }
+      const amountStep = amountPrecisionStepFromSzDecimals(context.szDecimals)
+      const priceDecimals = calculateHyperliquidPricePrecision(
+        context.markPx,
+        context.szDecimals,
+      )
+      const priceStep = pricePrecisionStepFromDecimals(priceDecimals)
       return {
+        id: baseId,
+        baseId,
+        quoteId: quote,
+        settleId: settle,
+        symbol: entry.symbol,
+        base,
+        quote,
+        settle,
+        type: "swap",
+        spot: false,
+        margin: false,
+        swap: true,
+        future: false,
+        option: false,
+        active: true,
+        contract: true,
+        linear: true,
+        precision: { amount: amountStep, price: priceStep },
+        limits: {
+          amount: { min: undefined, max: undefined },
+          price: { min: undefined, max: undefined },
+          cost: { min: 10, max: undefined },
+        },
+        info: { szDecimals: context.szDecimals },
+      } satisfies CcxtMarket
+    })
+    this.exchange.setMarkets(markets)
+  }
+
+  private workingOrderResultsFromRequests(
+    requests: OrderRequest[],
+  ): OrderResult[] {
+    return requests.map(
+      (request): OrderResult => ({
         symbol: request.symbol,
         side: (request.side ?? "buy") as OrderSide,
-        status:
-          res.status === "closed" || res.status === "filled"
-            ? "filled"
-            : "working",
-        message: this.parseOrderErrorMessage(res.info),
+        status: "working",
+      }),
+    )
+  }
+
+  private mergeWatchUpdatesIntoResults(
+    results: OrderResult[],
+    orders: Order[],
+  ): OrderResult[] {
+    return orders.reduce((updatedResults, order) => {
+      const index = updatedResults.findIndex(
+        result => result.symbol === order.symbol && result.status === "working",
+      )
+      if (index < 0) {
+        return updatedResults
       }
-    })
+
+      const current = updatedResults[index]
+      const mapped = mapExchangeOrderForWatch(order)
+      if (mapped.status === "working") {
+        return updatedResults
+      }
+
+      return updatedResults.map((result, resultIndex) =>
+        resultIndex === index
+          ? {
+              ...current,
+              status: mapped.status,
+              message: mapped.message,
+            }
+          : result,
+      )
+    }, results)
+  }
+
+  private hasWorkingOrderResults(results: OrderResult[]): boolean {
+    return results.some(result => result.status === "working")
+  }
+
+  private markWorkingOrdersTimedOut(results: OrderResult[]): OrderResult[] {
+    return results.map(result =>
+      result.status === "working" ? { ...result, status: "timed_out" } : result,
+    )
+  }
+
+  /**
+   * After watch timeout, reconcile timed_out slots with fetchOrders.
+   * One result per symbol for now (precise multi-leg matching is a follow-up).
+   */
+  private reconcileTimedOutResultsWithFetchedOrders(
+    results: OrderResult[],
+    fetchedOrders: Order[],
+  ): OrderResult[] {
+    return fetchedOrders.reduce((updatedResults, order) => {
+      const index = updatedResults.findIndex(
+        result =>
+          result.symbol === order.symbol && result.status === "timed_out",
+      )
+      if (index < 0) {
+        return updatedResults
+      }
+
+      const current = updatedResults[index]
+      const mapped = mapExchangeOrderAfterTimeout(order)
+
+      return updatedResults.map((result, resultIndex) =>
+        resultIndex === index
+          ? {
+              ...current,
+              status: mapped.status,
+              message: mapped.message,
+            }
+          : result,
+      )
+    }, results)
   }
 
   private positionSideIsBuy(pos: { side: string }): boolean {
@@ -562,10 +1098,8 @@ export class HyperliquidClient {
       type: "market",
       side,
       amount,
-      price: side === "buy" ? price * (1 + SLIPPAGE) : price * (1 - SLIPPAGE),
-      params: reduceOnly
-        ? { reduceOnly: true, ...this.vaultParams }
-        : { ...this.vaultParams },
+      price,
+      params: reduceOnly ? { reduceOnly: true } : {},
     }
   }
 
@@ -658,17 +1192,28 @@ export class HyperliquidClient {
   }
 
   async rebalancePositions(actions: RebalanceAction[]): Promise<OrderResult[]> {
-    await this.exchange.loadMarkets()
+    console.log("rebalancePositions", actions)
     const allSymbols = [...new Set(actions.map(action => action.symbol))]
 
-    for (const action of actions) {
-      if ("leverageChanged" in action && action.leverageChanged) {
-        await this.setLeverage(action.symbol, action.leverage)
-      }
+    const [backendMarkets, perpContexts] = await Promise.all([
+      fetchHyperliquidMarkets(this.networkMode),
+      fetchPerpMarketContexts(this.networkMode),
+    ])
+
+    this.hydrateMarketsFromBackend(backendMarkets.leverageLimits, perpContexts)
+
+    const leverageBySymbol = new Map(
+      backendMarkets.leverageLimits.map(entry => [entry.symbol, entry]),
+    )
+    const leverageActions = actions.filter(isLeverageChangedAction)
+    for (const action of leverageActions) {
+      const onlyIsolated =
+        leverageBySymbol.get(action.symbol)?.onlyIsolated === true
+      await this.setLeverage(action.symbol, action.leverage, onlyIsolated)
     }
 
     const [tickers, positions] = await Promise.all([
-      this.exchange.fetchTickers(allSymbols),
+      this.exchange.fetchTickers(allSymbols, { type: "swap" }),
       this.exchange.fetchPositions(),
     ])
 
@@ -678,20 +1223,93 @@ export class HyperliquidClient {
       positions,
     )
 
-    const results: OrderResult[] = []
-
-    if (reduction.length > 0) {
-      const reductionResponses = await this.exchange.createOrdersWs(reduction)
-      const reductionResults = this.mapOrderResults(
-        reduction,
-        reductionResponses,
-      )
-      results.push(...reductionResults)
+    // Leverage-only / no-op paths never place orders -- skip watch subscription.
+    if (reduction.length === 0 && expansion.length === 0) {
+      return []
     }
 
-    if (expansion.length > 0) {
-      const expansionResponses = await this.exchange.createOrdersWs(expansion)
-      results.push(...this.mapOrderResults(expansion, expansionResponses))
+    let results: OrderResult[] = []
+    let watchTimedOut = false
+
+    // Subscribe to orders before sending them
+    const watchSince = Date.now()
+    let nextWatch = this.exchange.watchOrders(undefined, watchSince)
+
+    try {
+      if (reduction.length > 0) {
+        const responses = await this.createOrdersWsBatch(reduction)
+        console.log("responses", responses)
+        results.push(...this.workingOrderResultsFromRequests(reduction))
+      }
+
+      if (expansion.length > 0) {
+        const responses = await this.createOrdersWsBatch(expansion)
+        console.log("responses", responses)
+        results.push(...this.workingOrderResultsFromRequests(expansion))
+      }
+
+      console.log("results after create orders", results)
+
+      while (this.hasWorkingOrderResults(results)) {
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+        const timeoutPromise: Promise<Error> = new Promise(resolve => {
+          timeoutHandle = setTimeout(() => {
+            resolve(
+              new Error(
+                `Operation timed out after ${HYPERLIQUID_WATCH_ORDERS_TIMEOUT_MS}ms`,
+              ),
+            )
+          }, HYPERLIQUID_WATCH_ORDERS_TIMEOUT_MS)
+        })
+
+        let ordersUpdate: Order[] | Error
+        try {
+          ordersUpdate = await Promise.race([nextWatch, timeoutPromise])
+        } finally {
+          if (timeoutHandle !== undefined) {
+            clearTimeout(timeoutHandle)
+          }
+        }
+
+        console.log("ordersUpdate", ordersUpdate)
+
+        if (ordersUpdate instanceof Error) {
+          console.error(ordersUpdate.message)
+          results = this.markWorkingOrdersTimedOut(results)
+          watchTimedOut = true
+          break
+        }
+
+        results = this.mergeWatchUpdatesIntoResults(results, ordersUpdate)
+
+        if (this.hasWorkingOrderResults(results)) {
+          nextWatch = this.exchange.watchOrders(undefined, watchSince)
+        }
+      }
+    } finally {
+      await this.exchange.unWatchOrders()
+    }
+
+    console.log("unwatching orders")
+    console.log("results after watch", results)
+
+    if (watchTimedOut) {
+      try {
+        const passedOrders = await this.exchange.fetchOrders(
+          undefined,
+          watchSince,
+        )
+        console.log("passedOrders", passedOrders)
+        results = this.reconcileTimedOutResultsWithFetchedOrders(
+          results,
+          passedOrders,
+        )
+      } catch (error: unknown) {
+        console.error(
+          "fetchOrders backup after watch timeout failed",
+          error instanceof Error ? error.message : error,
+        )
+      }
     }
 
     return results

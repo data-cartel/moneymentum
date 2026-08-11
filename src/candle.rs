@@ -12,7 +12,7 @@ use thiserror::Error;
 use tracing::{debug, instrument};
 
 use crate::dataframe::{self, DataFrameError};
-use crate::finance::Symbol;
+use crate::finance::{CcxtSymbol, Symbol};
 use crate::timeframe::Timeframe;
 
 #[derive(Debug, Error)]
@@ -33,10 +33,10 @@ pub(crate) struct Candle {
     pub(crate) low: f64,
     pub(crate) close: f64,
     pub(crate) volume: f64,
-    /// Full market identifier in CCXT format (e.g., "BTC/USDC:USDC")
-    pub(crate) symbol: String,
+    /// CCXT unified swap symbol (e.g., "BTC/USDC:USDC")
+    pub(crate) market: CcxtSymbol,
     /// Normalized base symbol (e.g., "BTC")
-    pub(crate) ticker: Symbol,
+    pub(crate) symbol: Symbol,
 }
 
 #[instrument(skip_all, fields(count = candles.len()))]
@@ -59,13 +59,13 @@ pub(crate) async fn candles_to_dataframe(candles: Vec<Candle>) -> Result<DataFra
         let lows: Vec<f64> = candles.iter().map(|candle| candle.low).collect();
         let closes: Vec<f64> = candles.iter().map(|candle| candle.close).collect();
         let volumes: Vec<f64> = candles.iter().map(|candle| candle.volume).collect();
+        let markets: Vec<&str> = candles
+            .iter()
+            .map(|candle| candle.market.as_str())
+            .collect();
         let symbols: Vec<&str> = candles
             .iter()
             .map(|candle| candle.symbol.as_str())
-            .collect();
-        let tickers: Vec<&str> = candles
-            .iter()
-            .map(|candle| candle.ticker.as_str())
             .collect();
 
         Ok(df! {
@@ -75,8 +75,9 @@ pub(crate) async fn candles_to_dataframe(candles: Vec<Candle>) -> Result<DataFra
             "low" => lows,
             "close" => closes,
             "volume" => volumes,
-            "symbol" => symbols,
-            "ticker" => tickers,
+            // Legacy column names: "symbol" holds the CCXT market id, "ticker" the base.
+            "symbol" => markets,
+            "ticker" => symbols,
         }?)
     })
     .await?
@@ -105,6 +106,7 @@ mod tests {
     use tracing::Level;
     use tracing_test::traced_test;
 
+    use crate::finance;
     use crate::logs_contain_at;
 
     fn sample_candles() -> Vec<Candle> {
@@ -116,8 +118,8 @@ mod tests {
                 low: 95.0,
                 close: 105.0,
                 volume: 1000.0,
-                symbol: "BTC/USDC:USDC".to_string(),
-                ticker: Symbol::from_raw("BTC"),
+                market: finance::hyperliquid_swap_ccxt_symbol("BTC"),
+                symbol: Symbol::from_raw("BTC"),
             },
             Candle {
                 timestamp: Utc.with_ymd_and_hms(2024, 1, 1, 1, 0, 0).unwrap(),
@@ -126,8 +128,8 @@ mod tests {
                 low: 100.0,
                 close: 110.0,
                 volume: 1500.0,
-                symbol: "BTC/USDC:USDC".to_string(),
-                ticker: Symbol::from_raw("BTC"),
+                market: finance::hyperliquid_swap_ccxt_symbol("BTC"),
+                symbol: Symbol::from_raw("BTC"),
             },
         ]
     }
@@ -147,8 +149,8 @@ mod tests {
                             low: 90.0,
                             close: 105.0,
                             volume: 1000.0,
-                            symbol: "BTC/USDC:USDC".to_string(),
-                            ticker: Symbol::from_raw("BTC"),
+                            market: finance::hyperliquid_swap_ccxt_symbol("BTC"),
+                            symbol: Symbol::from_raw("BTC"),
                         }
                     })
                     .collect();

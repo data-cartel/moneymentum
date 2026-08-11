@@ -17,6 +17,7 @@ import {
   type Timeframe,
 } from "@/components/ui/timeframe-select"
 import { buttonVariants } from "@/lib/button-variants"
+import { getErrorMessage } from "@/lib/error-message"
 import { AVAILABLE_METRICS } from "./constants"
 import ChartComponent, { type MetricSelection } from "./ChartComponent"
 import { useTokenData } from "@/hooks/useApi"
@@ -62,7 +63,7 @@ const TokenPage = (props: { timeframe: Timeframe }) => {
               <CardTitle class="text-destructive">Error</CardTitle>
             </CardHeader>
             <CardContent>
-              <p>{tokenQuery.error?.message}</p>
+              <p>{getErrorMessage(tokenQuery.error)}</p>
               <A
                 class={buttonVariants({
                   variant: "link",
@@ -107,7 +108,7 @@ const TokenPage = (props: { timeframe: Timeframe }) => {
                     optionValue="value"
                     optionTextValue="label"
                     value={AVAILABLE_METRICS.find(
-                      m => m.value === selectedMetric(),
+                      metric => metric.value === selectedMetric(),
                     )}
                     onChange={option => {
                       if (option) {

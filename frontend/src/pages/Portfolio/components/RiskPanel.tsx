@@ -1,16 +1,18 @@
 import { For } from "solid-js"
 
+const COMING_SOON = "coming soon..."
+
 const mockRiskMetrics = {
-  var95: "TODO",
-  var99: "TODO",
-  diversificationRatio: "TODO",
-  effectiveBets: "TODO",
+  var95: COMING_SOON,
+  var99: COMING_SOON,
+  diversificationRatio: COMING_SOON,
+  effectiveBets: COMING_SOON,
 }
 
 const mockStressTests = [
-  { scenario: "BTC -20%", portfolioImpact: "TODO" },
-  { scenario: "SPX -10%", portfolioImpact: "TODO" },
-  { scenario: "Rates +200bps", portfolioImpact: "TODO" },
+  { scenario: "BTC -20%", portfolioImpact: COMING_SOON },
+  { scenario: "SPX -10%", portfolioImpact: COMING_SOON },
+  { scenario: "Rates +200bps", portfolioImpact: COMING_SOON },
 ]
 
 const mockMonteCarlo = [
@@ -113,7 +115,7 @@ export const RiskPanel = () => {
         {/* Monte Carlo */}
         <div class="border-t border-border/50 pt-2">
           <div class="text-[10px] text-muted-foreground font-medium mb-1.5">
-            Monte Carlo (1 Year) TODO
+            Monte Carlo (1 Year) — coming soon...
           </div>
           <div class="flex items-end gap-px h-12">
             <For each={mockMonteCarlo}>
@@ -136,7 +138,7 @@ export const RiskPanel = () => {
         {/* Correlation heatmap */}
         <div class="border-t border-border/50 pt-2">
           <div class="text-[10px] text-muted-foreground font-medium mb-1.5">
-            Correlation TODO
+            Correlation — coming soon...
           </div>
           <table class="w-full">
             <thead>

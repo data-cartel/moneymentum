@@ -6,70 +6,86 @@ let
   profileBase = "/nix/var/nix/profiles/per-service";
 
   moneymentumPackage = self.packages.${system}.moneymentum;
-  frontendPackage = self.packages.${system}.frontend;
 
   services = import ./services.nix;
-  enabledServices = builtins.filter (name: services.${name}.enabled)
-    (builtins.attrNames services);
+  enabledServices = builtins.filter (name: services.${name}.enabled) (builtins.attrNames services);
 
-  mkServiceProfile = name:
-    let markerFile = "/run/moneymentum/${name}.ready";
-    in activate.custom moneymentumPackage (builtins.concatStringsSep " && " [
-      "systemctl stop ${name} || true"
-      "rm -f ${markerFile}"
-      "mkdir -p /run/moneymentum"
-      "touch ${markerFile}"
-      "systemctl restart ${name}"
-    ]);
+  mkServiceProfile =
+    name:
+    let
+      markerFile = "/run/moneymentum/${name}.ready";
+    in
+    activate.custom moneymentumPackage (
+      builtins.concatStringsSep " && " [
+        "systemctl stop ${name} || true"
+        "rm -f ${markerFile}"
+        "mkdir -p /run/moneymentum"
+        "touch ${markerFile}"
+        "systemctl restart ${name}"
+      ]
+    );
 
   mkProfile = name: {
     path = mkServiceProfile name;
     profilePath = "${profileBase}/${name}";
   };
 
-in {
+in
+{
   config = {
     nodes.moneymentum = {
       hostname = "MUST_OVERRIDE_HOSTNAME";
       sshUser = "root";
       user = "root";
 
-      profilesOrder = [ "system" "frontend" ] ++ enabledServices;
+      # Failed activations already roll back the profile copy; re-running
+      # switch-to-configuration on the previous generation often hangs while
+      # stopping dbus-broker (nixpkgs#527469) and blocks deploy for the full
+      # activation timeout.
+      autoRollback = false;
+      activationTimeout = 600;
+
+      profilesOrder = [ "system" ] ++ enabledServices;
 
       profiles = {
         system.path = activate.nixos self.nixosConfigurations.moneymentum;
-
-        frontend = {
-          path = activate.custom frontendPackage ''
-            mkdir -p /var/lib/moneymentum
-            rm -rf /var/lib/moneymentum/frontend
-            cp -rL ${frontendPackage} /var/lib/moneymentum/frontend
-            nginx -s reload || true
-          '';
-          profilePath = "${profileBase}/frontend";
-        };
-      } // builtins.listToAttrs (map (name: {
-        inherit name;
-        value = mkProfile name;
-      }) enabledServices);
+      }
+      // builtins.listToAttrs (
+        map (name: {
+          inherit name;
+          value = mkProfile name;
+        }) enabledServices
+      );
     };
   };
 
-  wrappers = { pkgs, infraPkgs, localSystem }:
+  wrappers =
+    {
+      pkgs,
+      infraPkgs,
+      localSystem,
+    }:
     let
       # Only rage (decrypt state) + jq (parse IP) + deploy-rs are needed.
       # infraPkgs.buildInputs also includes terraform and ragenix which
       # deploy scripts never use.
-      deployInputs =
-        [ pkgs.rage pkgs.jq deploy-rs.packages.${localSystem}.deploy-rs ];
+      deployInputs = [
+        pkgs.rage
+        pkgs.jq
+        deploy-rs.packages.${localSystem}.deploy-rs
+      ];
 
-      deployPreamble = ''
+      resolvePreamble = ''
         ${infraPkgs.resolveIp}
 
         if [ -z "$host_ip" ]; then
           echo "ERROR: host_ip not resolved -- check resolveIp or --hostname flag" >&2
           exit 1
         fi
+      '';
+
+      deployPreamble = ''
+        ${resolvePreamble}
 
         ssh_flag=""
         if [ "$identity" != "$HOME/.ssh/id_ed25519" ]; then
@@ -78,15 +94,15 @@ in {
         fi
       '';
 
-      deployFlags = if localSystem == "x86_64-linux" then
-        "--skip-checks"
-      else
-        "--remote-build --skip-checks";
+      deployFlags =
+        if localSystem == "x86_64-linux" then "--skip-checks" else "--remote-build --skip-checks";
 
-      serviceCleanup = builtins.concatStringsSep "; "
-        (map (name: "systemctl reset-failed ${name} || true") enabledServices);
+      serviceResetLines = builtins.concatStringsSep "\n" (
+        map (name: "systemctl reset-failed ${name} || true") enabledServices
+      );
 
-    in {
+    in
+    {
       deployNixos = pkgs.writeShellApplication {
         name = "deploy-nixos";
         runtimeInputs = deployInputs;
@@ -107,15 +123,77 @@ in {
         '';
       };
 
-      deployAll = pkgs.writeShellApplication {
-        name = "deploy-all";
+      deployServer = pkgs.writeShellApplication {
+        name = "deploy-server";
         runtimeInputs = deployInputs ++ [ pkgs.openssh ];
         text = ''
           ${deployPreamble}
 
-          ssh -i "$identity" "root@$host_ip" '${serviceCleanup}'
+          # Preflight runs on the remote host via heredoc so nested quotes do not
+          # break shellcheck or the generated deploy-server script (SC2026).
+          ssh -i "$identity" "root@$host_ip" bash -s <<'REMOTE_PREFLIGHT'
+          set -eu
+          systemctl stop 'nixos-rebuild-switch-to-configuration*' 2>/dev/null || true
+          pkill -9 -f '[s]witch-to-configuration' || true
+          rm -f /run/nixos/switch-to-configuration.lock
+          systemctl stop moneymentum-markets-refresh.timer staging-markets-refresh.timer 2>/dev/null || true
+          systemctl disable moneymentum-markets-refresh.timer staging-markets-refresh.timer 2>/dev/null || true
+          ${serviceResetLines}
+          systemd-run --on-active=3s --collect --unit=moneymentum-deploy-dbus-heal \
+            /bin/sh -c 'systemctl reset-failed dbus-broker systemd-logind || true; systemctl restart dbus-broker; systemctl restart systemd-logind' \
+            || true
+          REMOTE_PREFLIGHT
+
+          # dbus heal is scheduled for +3s after preflight SSH closes; poll logind
+          # before deploy-rs activation so wedged logind fails fast instead of timing
+          # out for the full activation window (nixpkgs#527469).
+          for ((attempt = 1; attempt <= 15; attempt++)); do
+            if ssh -i "$identity" "root@$host_ip" loginctl list-users >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 15 ]; then
+              echo "ERROR: logind still unhealthy after deploy preflight" >&2
+              exit 1
+            fi
+            sleep 2
+          done
 
           deploy ${deployFlags} --hostname "$host_ip" ''${ssh_flag:+"$ssh_flag"} "$@" .#moneymentum
+        '';
+      };
+
+      deployFrontend = pkgs.writeShellApplication {
+        name = "deploy-frontend";
+        runtimeInputs = deployInputs ++ [
+          pkgs.openssh
+          pkgs.rsync
+        ];
+        text = ''
+          if [ "$#" -ne 0 ] && [ "''${1:-}" != "-i" ]; then
+            echo "usage: deploy-frontend [-i identity]" >&2
+            exit 1
+          fi
+
+          if [ "''${1:-}" = "-i" ] && [ "$#" -ne 2 ]; then
+            echo "usage: deploy-frontend [-i identity]" >&2
+            exit 1
+          fi
+
+          if [ ! -f frontend/dist/index.html ]; then
+            echo "ERROR: frontend/dist/index.html missing -- run 'cd frontend && bun run build' first" >&2
+            exit 1
+          fi
+
+          ${resolvePreamble}
+
+          if [ "$#" -ne 0 ]; then
+            echo "usage: deploy-frontend [-i identity]" >&2
+            exit 1
+          fi
+
+          ssh -i "$identity" "root@$host_ip" 'mkdir -p /var/lib/moneymentum/frontend'
+          rsync -az --delete -e "ssh -i $identity" frontend/dist/ "root@$host_ip:/var/lib/moneymentum/frontend/"
+          ssh -i "$identity" "root@$host_ip" 'nginx -s reload || true'
         '';
       };
     };

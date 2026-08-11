@@ -55,7 +55,10 @@ describe("useApi hooks with Timeframe type", () => {
         expect(result.isSuccess).toBe(true)
       })
 
-      expect(global.fetch).toHaveBeenCalledWith("/api/date-range?timeframe=1h")
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/date-range?timeframe=1h",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      )
       expect(result.data).toEqual(mockResponse)
     })
 
@@ -80,7 +83,10 @@ describe("useApi hooks with Timeframe type", () => {
         expect(result.isSuccess).toBe(true)
       })
 
-      expect(global.fetch).toHaveBeenCalledWith("/api/date-range?timeframe=15m")
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/date-range?timeframe=15m",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      )
     })
 
     it("enforces Timeframe type safety", () => {
@@ -188,7 +194,10 @@ describe("useApi hooks with Timeframe type", () => {
         expect(result.isSuccess).toBe(true)
       })
 
-      expect(global.fetch).toHaveBeenCalledWith("/api/token/BTC?timeframe=1h")
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/token/BTC?timeframe=1h",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      )
     })
 
     it("constructs URL correctly with 15m timeframe", async () => {
@@ -220,7 +229,10 @@ describe("useApi hooks with Timeframe type", () => {
         expect(result.isSuccess).toBe(true)
       })
 
-      expect(global.fetch).toHaveBeenCalledWith("/api/token/ETH?timeframe=15m")
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/token/ETH?timeframe=15m",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      )
     })
 
     it("does not query when ticker is undefined", () => {

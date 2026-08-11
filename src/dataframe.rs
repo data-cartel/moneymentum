@@ -5,6 +5,7 @@
 //! ownership of data to safely move it across thread boundaries.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use polars::prelude::{
     CsvReader, CsvWriter, DataFrame, IntoLazy, PlSmallStr, PolarsError, Selector, SerReader,
@@ -46,8 +47,23 @@ pub(crate) async fn write_csv(path: PathBuf, mut df: DataFrame) -> Result<(), Da
             std::fs::create_dir_all(parent)?;
         }
 
-        let file = std::fs::File::create(&path)?;
-        CsvWriter::new(file).finish(&mut df)?;
+        // Write to a unique sibling temp file and rename so readers racing this
+        // write (request-time factor/beta computations) never observe a
+        // truncated or half-written file, and overlapping writers to the same
+        // target never share a temp file; same-directory rename is atomic on
+        // POSIX.
+        let tmp_path = unique_sibling_tmp_path(&path);
+        let file = std::fs::File::create(&tmp_path)?;
+        let written = CsvWriter::new(file)
+            .finish(&mut df)
+            .map_err(DataFrameError::from)
+            .and_then(|()| std::fs::rename(&tmp_path, &path).map_err(DataFrameError::from));
+        if let Err(write_error) = written {
+            // Best-effort cleanup: failed writes must not leak uniquely named
+            // temp files into the data directory forever.
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(write_error);
+        }
         debug!(rows = df.height(), "wrote csv");
         Ok(())
     })
@@ -99,6 +115,24 @@ pub(crate) async fn merge_and_deduplicate(
         Ok(deduped)
     })
     .await?
+}
+
+/// A temp path unique to this write, next to the target so the final rename
+/// stays within one filesystem (a cross-device rename is not atomic).
+///
+/// Uniqueness comes from the process id plus a process-wide counter, so
+/// overlapping writers to the same target never truncate each other's temp
+/// file.
+fn unique_sibling_tmp_path(path: &std::path::Path) -> PathBuf {
+    static WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let write_id = WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let process_id = std::process::id();
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    path.with_file_name(format!("{file_name}.{process_id}.{write_id}.tmp"))
 }
 
 #[cfg(test)]
@@ -153,12 +187,32 @@ mod tests {
         let original_width = original.width();
 
         write_csv(path.clone(), original).await.unwrap();
-        let loaded = read_csv(path).await.unwrap().unwrap();
+        let loaded = read_csv(path.clone()).await.unwrap().unwrap();
 
         assert_eq!(loaded.height(), original_height);
         assert_eq!(loaded.width(), original_width);
         assert!(logs_contain_at(Level::DEBUG, &["wrote csv"]));
         assert!(logs_contain_at(Level::DEBUG, &["loaded csv"]));
+
+        // The atomic write publishes via temp-file-plus-rename: after a
+        // successful write only the target may remain, or a dropped rename
+        // would silently serve stale data to racing readers.
+        let leftover_files: Vec<String> = std::fs::read_dir(temp_dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "test.csv")
+            .collect();
+        assert!(
+            leftover_files.is_empty(),
+            "write must clean up its temp file, found {leftover_files:?}"
+        );
+
+        // Overwriting an existing file goes through the same rename and must
+        // replace the contents, not append or leave the old data.
+        let replacement = create_test_df(&[1_704_074_400_000_i64], &["SOL"], &[150.0]);
+        write_csv(path.clone(), replacement).await.unwrap();
+        let reloaded = read_csv(path).await.unwrap().unwrap();
+        assert_eq!(reloaded.height(), 1, "overwrite must replace the contents");
     }
 
     #[tokio::test]

@@ -2,3 +2,8 @@
 # NEVER commit terraform.tfvars - it contains secrets.
 
 do_token = ""
+
+ssh_key_names = [
+  "moneymentum",
+  "lev-moneymentum",
+]

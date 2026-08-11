@@ -23,8 +23,19 @@ const ALLOCATION_FULL_MIN_PERCENT = 99.95
 export const PositionsPanelAlerts = (
   props: PositionsPanelAlertsProps,
 ): JSX.Element => {
+  const isClosingAllPositions = createMemo(
+    () =>
+      Object.values(props.currentPortfolio).some(
+        position => position !== undefined,
+      ) &&
+      Object.values(props.targetPortfolio).every(
+        position => position === undefined || position.notional <= 0.01,
+      ),
+  )
+
   const hasUnderAllocation = createMemo(
     () =>
+      !isClosingAllPositions() &&
       !props.hasTotalWeightExceeded &&
       props.targetAllocationPercent < ALLOCATION_FULL_MIN_PERCENT,
   )

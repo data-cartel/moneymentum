@@ -6,7 +6,10 @@ let
   commonArgs = {
     version = "0.1.0";
     src = ./.;
-    nativeBuildInputs = [ bun2nix.hook pkgs.bun ];
+    nativeBuildInputs = [
+      bun2nix.hook
+      pkgs.bun
+    ];
     inherit bunDeps;
     dontUseBunBuild = true;
     dontUseBunCheck = true;
@@ -14,45 +17,55 @@ let
     dontRunLifecycleScripts = true;
   };
 
-in {
-  package = pkgs.stdenv.mkDerivation (commonArgs // {
-    pname = "moneymentum-frontend";
+in
+{
+  package = pkgs.stdenv.mkDerivation (
+    commonArgs
+    // {
+      pname = "moneymentum-frontend";
 
-    buildPhase = ''
-      bun run build
-    '';
+      buildPhase = ''
+        bun run build
+      '';
 
-    installPhase = ''
-      cp -r dist $out
-    '';
+      installPhase = ''
+        cp -r dist $out
+      '';
 
-    meta = {
-      description = "moneymentum frontend";
-      homepage = "https://github.com/data-cartel/moneymentum";
-    };
-  });
+      meta = {
+        description = "moneymentum frontend";
+        homepage = "https://github.com/dataclique/moneymentum";
+      };
+    }
+  );
 
-  lint = pkgs.stdenv.mkDerivation (commonArgs // {
-    pname = "moneymentum-frontend-lint";
+  lint = pkgs.stdenv.mkDerivation (
+    commonArgs
+    // {
+      pname = "moneymentum-frontend-lint";
 
-    buildPhase = ''
-      bun run lint
-    '';
+      buildPhase = ''
+        bun run lint
+      '';
 
-    installPhase = ''
-      touch $out
-    '';
-  });
+      installPhase = ''
+        touch $out
+      '';
+    }
+  );
 
-  test = pkgs.stdenv.mkDerivation (commonArgs // {
-    pname = "moneymentum-frontend-test";
+  test = pkgs.stdenv.mkDerivation (
+    commonArgs
+    // {
+      pname = "moneymentum-frontend-test";
 
-    buildPhase = ''
-      bun run test --run
-    '';
+      buildPhase = ''
+        bun run test --run
+      '';
 
-    installPhase = ''
-      touch $out
-    '';
-  });
+      installPhase = ''
+        touch $out
+      '';
+    }
+  );
 }

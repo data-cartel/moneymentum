@@ -10,3 +10,12 @@ log_level = "debug"
 # Ingestion tuning - balance speed vs rate limiting
 max_concurrent_requests = 3
 max_retries = 5
+
+markets_refresh_token = "local-markets-refresh-token"
+
+# Derive (Lyra) options integration.
+# port and connects to the Derive REST and websocket APIs.
+[derive]
+port = 8100
+rest_base_url = "https://api.lyra.finance"
+ws_url = "wss://api.lyra.finance/ws"

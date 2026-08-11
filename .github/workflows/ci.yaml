@@ -8,58 +8,121 @@ on:
 permissions:
   contents: read
 
+# Nix is installed via nix-quick-install-action; the shared `data-cartel-public` Cachix
+# (cachix-action) and the per-runner nix store (cache-nix-action) are warmed
+# before any `nix` build, and built paths are pushed back to the Cachix. This
+# replaces the DeterminateSystems installer + magic-nix-cache, whose hosted
+# cache throttled CI with HTTP 418 responses. cachix-action is continue-on-error
+# so a fork PR (no CACHIX_AUTH_TOKEN) skips the data-cartel-public cache and still
+# builds against cache.nixos.org without failing the job.
+
 jobs:
   hooks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
         with:
-          extra-conf: |
+          nix_version: "2.31.2"
+          nix_conf: |
             accept-flake-config = true
             fallback = true
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            keep-env-derivations = true
+            keep-outputs = true
 
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: cachix/cachix-action@ad2ddac53f961de1989924296a1f236fcfbaa4fc # v15
+        continue-on-error: true
+        with:
+          name: data-cartel-public
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-hooks-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-hooks-
+          gc-max-store-size-linux: 5G
 
       - name: Pre-commit hooks
         # Pure flake check -- runs the same hooks without the heavy devShell
-        run: nix run nixpkgs#nushell -- .github/nix-build-quiet.nu .#checks.x86_64-linux.git-hooks
+        run: nix build -L --log-format raw .#checks.x86_64-linux.git-hooks
 
   backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
         with:
-          extra-conf: |
+          nix_version: "2.31.2"
+          nix_conf: |
             accept-flake-config = true
             fallback = true
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            keep-env-derivations = true
+            keep-outputs = true
 
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: cachix/cachix-action@ad2ddac53f961de1989924296a1f236fcfbaa4fc # v15
+        continue-on-error: true
+        with:
+          name: data-cartel-public
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-backend-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-backend-
+          gc-max-store-size-linux: 5G
 
       - name: Test
-        run: nix run nixpkgs#nushell -- .github/nix-build-quiet.nu .#moneymentum-test
+        run: nix build -L --log-format raw .#moneymentum-test
 
       - name: Clippy
-        run: nix run nixpkgs#nushell -- .github/nix-build-quiet.nu .#moneymentum-clippy
+        run: nix build -L --log-format raw .#moneymentum-clippy
 
   frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
         with:
-          extra-conf: |
+          nix_version: "2.31.2"
+          nix_conf: |
             accept-flake-config = true
             fallback = true
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            keep-env-derivations = true
+            keep-outputs = true
 
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: cachix/cachix-action@ad2ddac53f961de1989924296a1f236fcfbaa4fc # v15
+        continue-on-error: true
+        with:
+          name: data-cartel-public
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-frontend-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-frontend-
+          gc-max-store-size-linux: 5G
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.bun/install/cache
+            frontend/node_modules
+          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/bun.lock', 'frontend/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: nix develop --impure .#frontend --command bash -c 'cd frontend && bun install --frozen-lockfile'
 
       - name: Lint
-        run: nix run nixpkgs#nushell -- .github/nix-build-quiet.nu .#frontend-lint
+        run: nix develop --impure .#frontend --command bash -c 'cd frontend && bun run lint'
 
       - name: Test
-        run: nix run nixpkgs#nushell -- .github/nix-build-quiet.nu .#frontend-test
+        run: nix develop --impure .#frontend --command bash -c 'cd frontend && bun run test --run'

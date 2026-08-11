@@ -48,8 +48,8 @@ export const transformToLineData = (
   const uniqueData: { time: string; value: number }[] = []
   const timeSet = new Set<string>()
 
-  for (let i = processedData.length - 1; i >= 0; i--) {
-    const item = processedData[i]
+  for (let index = processedData.length - 1; index >= 0; index--) {
+    const item = processedData[index]
     if (!timeSet.has(item.time)) {
       timeSet.add(item.time)
       uniqueData.unshift(item)

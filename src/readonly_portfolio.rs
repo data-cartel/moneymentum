@@ -3,23 +3,34 @@ use std::str::FromStr;
 use bitcoin::{Address, Network};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use reqwest::Url;
-use serde::{Deserialize, Deserializer, Serialize};
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
-const DEFAULT_MEMPOOL_BASE_URL: &str = "https://mempool.space/api";
+const DEFAULT_MEMPOOL_BASE_URL: &str = "https://mempool.space/api/";
+const DEFAULT_TESTNET_MEMPOOL_BASE_URL: &str = "https://mempool.space/testnet/api/";
 const DEFAULT_BLOCKCHAIN_INFO_BASE_URL: &str = "https://blockchain.info";
 const DEFAULT_HYPERLIQUID_INFO_BASE_URL: &str = "https://api.hyperliquid.xyz";
-const SATOSHIS_PER_BTC: f64 = 100_000_000.0;
+const SATOSHIS_PER_BTC: i64 = 100_000_000;
 const ADDRESS_FETCH_CONCURRENCY: usize = 8;
+const BECH32_ADDRESS_MAX_LEN: usize = 90;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub(crate) struct BtcAddress(String);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct BtcAddress {
+    value: String,
+    network: Network,
+}
 
 impl BtcAddress {
     pub(crate) fn as_str(&self) -> &str {
-        &self.0
+        &self.value
+    }
+
+    fn network(&self) -> Network {
+        self.network
     }
 }
 
@@ -31,12 +42,34 @@ impl FromStr for BtcAddress {
         if trimmed.is_empty() {
             return Err(ReadonlyPortfolioError::InvalidBtcAddress(value.to_string()));
         }
-        let unchecked_address = Address::from_str(trimmed)
-            .map_err(|_| ReadonlyPortfolioError::InvalidBtcAddress(value.to_string()))?;
-        let checked_address = unchecked_address
-            .require_network(Network::Bitcoin)
-            .map_err(|_| ReadonlyPortfolioError::InvalidBtcAddress(value.to_string()))?;
-        Ok(Self(checked_address.to_string()))
+        if let Ok(unchecked_address) = Address::from_str(trimmed) {
+            if let Ok(checked_address) = unchecked_address.clone().require_network(Network::Bitcoin)
+            {
+                return Ok(Self {
+                    value: checked_address.to_string(),
+                    network: Network::Bitcoin,
+                });
+            }
+            if let Ok(checked_address) = unchecked_address.require_network(Network::Testnet) {
+                return Ok(Self {
+                    value: checked_address.to_string(),
+                    network: Network::Testnet,
+                });
+            }
+        }
+        if let Some(bech32_address) = parse_provider_supported_bech32_address(trimmed) {
+            return Ok(bech32_address);
+        }
+        Err(ReadonlyPortfolioError::InvalidBtcAddress(value.to_string()))
+    }
+}
+
+impl Serialize for BtcAddress {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -48,6 +81,39 @@ impl<'de> Deserialize<'de> for BtcAddress {
         let raw = String::deserialize(deserializer)?;
         Self::from_str(&raw).map_err(serde::de::Error::custom)
     }
+}
+
+fn parse_provider_supported_bech32_address(value: &str) -> Option<BtcAddress> {
+    if value.len() > BECH32_ADDRESS_MAX_LEN {
+        return None;
+    }
+    if value != value.to_lowercase() && value != value.to_uppercase() {
+        return None;
+    }
+
+    let normalized = value.to_lowercase();
+    let (hrp, _data) = match bitcoin::bech32::decode(&normalized) {
+        Ok(decoded) => decoded,
+        Err(error) => {
+            debug!(
+                error = %error,
+                "provider-supported bech32 address rejected"
+            );
+            return None;
+        }
+    };
+    let network = if hrp == bitcoin::bech32::hrp::BC {
+        Network::Bitcoin
+    } else if hrp == bitcoin::bech32::hrp::TB {
+        Network::Testnet
+    } else {
+        return None;
+    };
+
+    Some(BtcAddress {
+        value: normalized,
+        network,
+    })
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -128,14 +194,14 @@ pub(crate) enum Side {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub(crate) struct ReadonlyBtcHolding {
     pub(crate) address: String,
-    pub(crate) confirmed_btc: f64,
-    pub(crate) pending_btc: f64,
+    pub(crate) confirmed_btc: Decimal,
+    pub(crate) pending_btc: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub(crate) struct ReadonlyBtcBalancesResponse {
     pub(crate) holdings: Vec<ReadonlyBtcHolding>,
-    pub(crate) total_confirmed_btc: f64,
+    pub(crate) total_confirmed_btc: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -144,8 +210,8 @@ pub(crate) struct ExposurePosition {
     pub(crate) source_id: Option<String>,
     pub(crate) symbol: String,
     pub(crate) side: Side,
-    pub(crate) notional_usd: f64,
-    pub(crate) quantity_btc: Option<f64>,
+    pub(crate) notional_usd: Decimal,
+    pub(crate) quantity_btc: Option<Decimal>,
     pub(crate) tradability: Tradability,
     pub(crate) include_in_beta: BetaInclusion,
 }
@@ -159,11 +225,11 @@ pub(crate) enum ExposureSource {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub(crate) struct PortfolioExposureResponse {
-    pub(crate) ubtc_price_usd: f64,
+    pub(crate) ubtc_price_usd: Decimal,
     pub(crate) positions: Vec<ExposurePosition>,
-    pub(crate) gross_long_usd: f64,
-    pub(crate) gross_short_usd: f64,
-    pub(crate) net_usd: f64,
+    pub(crate) gross_long_usd: Decimal,
+    pub(crate) gross_short_usd: Decimal,
+    pub(crate) net_usd: Decimal,
 }
 
 #[derive(Debug, Error)]
@@ -190,6 +256,8 @@ pub(crate) enum ReadonlyPortfolioError {
     },
     #[error("negative confirmed sats from provider for {address}: {sats}")]
     NegativeConfirmedSats { address: String, sats: i128 },
+    #[error("satoshi amount out of representable range for {address}: {sats}")]
+    SatsOutOfRange { address: String, sats: i128 },
     #[error(transparent)]
     Request(#[from] reqwest::Error),
     #[error(transparent)]
@@ -212,6 +280,18 @@ pub(crate) fn default_btc_base_url() -> Result<Url, ReadonlyPortfolioError> {
 
 pub(crate) fn default_blockchain_info_base_url() -> Result<Url, ReadonlyPortfolioError> {
     Ok(Url::parse(DEFAULT_BLOCKCHAIN_INFO_BASE_URL)?)
+}
+
+fn btc_base_url_for_address(
+    btc_base_url: &Url,
+    btc_address: &BtcAddress,
+) -> Result<Url, ReadonlyPortfolioError> {
+    if btc_address.network() == Network::Testnet
+        && btc_base_url.as_str() == DEFAULT_MEMPOOL_BASE_URL
+    {
+        return Ok(Url::parse(DEFAULT_TESTNET_MEMPOOL_BASE_URL)?);
+    }
+    Ok(btc_base_url.clone())
 }
 
 pub(crate) async fn load_readonly_btc_balances(
@@ -244,10 +324,11 @@ pub(crate) async fn load_readonly_btc_balances(
     let total_confirmed_btc = holdings
         .iter()
         .map(|holding| holding.confirmed_btc)
-        .sum::<f64>();
+        .sum::<Decimal>();
     debug!(
         addresses = holdings.len(),
-        total_confirmed_btc, "readonly btc balances loaded"
+        total_confirmed_btc = %total_confirmed_btc,
+        "readonly btc balances loaded"
     );
 
     Ok(ReadonlyBtcBalancesResponse {
@@ -266,7 +347,7 @@ pub(crate) async fn load_portfolio_exposure(
     let mut merged_positions = validate_hyperliquid_positions(&request.hyperliquid_positions)?;
 
     let ubtc_price_usd = if request.readonly_btc_entries.is_empty() {
-        0.0
+        Decimal::ZERO
     } else {
         let readonly_balance_request = ReadonlyBtcBalancesRequest {
             addresses: request
@@ -291,7 +372,7 @@ pub(crate) async fn load_portfolio_exposure(
         for (entry, holding) in request
             .readonly_btc_entries
             .iter()
-            .zip(readonly_balances.holdings.into_iter())
+            .zip(readonly_balances.holdings)
         {
             merged_positions.push(ExposurePosition {
                 source: ExposureSource::BtcAddress,
@@ -311,17 +392,20 @@ pub(crate) async fn load_portfolio_exposure(
         .iter()
         .filter(|position| position.side == Side::Buy)
         .map(|position| position.notional_usd)
-        .sum::<f64>();
+        .sum::<Decimal>();
     let gross_short_usd = merged_positions
         .iter()
         .filter(|position| position.side == Side::Sell)
         .map(|position| position.notional_usd)
-        .sum::<f64>();
+        .sum::<Decimal>();
     let net_usd = gross_long_usd - gross_short_usd;
 
     info!(
         positions = merged_positions.len(),
-        gross_long_usd, gross_short_usd, net_usd, "portfolio exposure loaded"
+        gross_long_usd = %gross_long_usd,
+        gross_short_usd = %gross_short_usd,
+        net_usd = %net_usd,
+        "portfolio exposure loaded"
     );
 
     Ok(PortfolioExposureResponse {
@@ -339,17 +423,17 @@ fn validate_hyperliquid_positions(
     positions
         .iter()
         .map(|position| {
-            if !position.notional_usd.is_finite() || position.notional_usd < 0.0 {
-                return Err(ReadonlyPortfolioError::InvalidNotional {
+            let notional_usd = finite_decimal(position.notional_usd)
+                .filter(|notional| *notional >= Decimal::ZERO)
+                .ok_or_else(|| ReadonlyPortfolioError::InvalidNotional {
                     symbol: position.symbol.clone(),
-                });
-            }
+                })?;
             Ok(ExposurePosition {
                 source: ExposureSource::Hyperliquid,
                 source_id: None,
                 symbol: position.symbol.clone(),
                 side: position.side,
-                notional_usd: position.notional_usd,
+                notional_usd,
                 quantity_btc: None,
                 tradability: Tradability::Tradable,
                 include_in_beta: BetaInclusion::Included,
@@ -367,6 +451,14 @@ async fn load_single_address_holding(
     match load_mempool_address_holding(http_client, btc_base_url, btc_address).await {
         Ok(holding) => Ok(holding),
         Err(primary_error) => {
+            if btc_address.network() == Network::Testnet {
+                return Err(ReadonlyPortfolioError::BtcProvidersFailed {
+                    address: btc_address.as_str().to_string(),
+                    primary_error: primary_error.to_string(),
+                    fallback_error: "blockchain.info does not support testnet addresses"
+                        .to_string(),
+                });
+            }
             warn!(
                 address = btc_address.as_str(),
                 error = %primary_error,
@@ -395,7 +487,8 @@ async fn load_mempool_address_holding(
     btc_base_url: &Url,
     btc_address: &BtcAddress,
 ) -> Result<ReadonlyBtcHolding, ReadonlyPortfolioError> {
-    let endpoint = btc_base_url.join(&format!("address/{}", btc_address.as_str()))?;
+    let address_base_url = btc_base_url_for_address(btc_base_url, btc_address)?;
+    let endpoint = address_base_url.join(&format!("address/{}", btc_address.as_str()))?;
     let response_text = http_client
         .get(endpoint)
         .send()
@@ -424,8 +517,8 @@ async fn load_mempool_address_holding(
 
     Ok(ReadonlyBtcHolding {
         address: btc_address.as_str().to_string(),
-        confirmed_btc: sats_to_btc(confirmed_sats),
-        pending_btc: sats_to_btc(pending_sats),
+        confirmed_btc: sats_to_btc(confirmed_sats, btc_address)?,
+        pending_btc: sats_to_btc(pending_sats, btc_address)?,
     })
 }
 
@@ -465,8 +558,8 @@ async fn load_blockchain_info_holding(
     }
     Ok(ReadonlyBtcHolding {
         address: btc_address.as_str().to_string(),
-        confirmed_btc: sats_to_btc(final_balance_sats),
-        pending_btc: 0.0,
+        confirmed_btc: sats_to_btc(final_balance_sats, btc_address)?,
+        pending_btc: Decimal::ZERO,
     })
 }
 
@@ -507,19 +600,36 @@ fn parse_i128_field(value: &Value, field_name: &str) -> Option<i128> {
     }
 }
 
-fn sats_to_btc(satoshis: i128) -> f64 {
-    // f64 here is a known financial-math wart tracked in #220 — the whole
-    // readonly_portfolio pipeline needs to move off floats. Allow the cast
-    // until that refactor lands.
-    #[allow(clippy::cast_precision_loss)]
-    let satoshis_as_f64 = satoshis as f64;
-    satoshis_as_f64 / SATOSHIS_PER_BTC
+/// Converts an exact satoshi count to BTC as a `Decimal`. Errors only when the
+/// count is too large to represent as a `Decimal` (~7.9e28), which no real BTC
+/// balance approaches; the `i128` provider field simply admits the possibility.
+fn sats_to_btc(
+    satoshis: i128,
+    btc_address: &BtcAddress,
+) -> Result<Decimal, ReadonlyPortfolioError> {
+    Decimal::from_i128(satoshis)
+        .map(|sats| sats / Decimal::from(SATOSHIS_PER_BTC))
+        .ok_or_else(|| ReadonlyPortfolioError::SatsOutOfRange {
+            address: btc_address.as_str().to_string(),
+            sats: satoshis,
+        })
+}
+
+/// Maps a finite `f64` from the wire onto an exact `Decimal`; `None` for NaN,
+/// infinities, or values outside `Decimal`'s range. Local to this module so the
+/// readonly-portfolio fix carries no dependency on unmerged work elsewhere.
+fn finite_decimal(value: f64) -> Option<Decimal> {
+    if value.is_finite() {
+        Decimal::from_f64(value)
+    } else {
+        None
+    }
 }
 
 async fn fetch_ubtc_price_usd(
     http_client: &reqwest::Client,
     hyperliquid_base_url: Option<&Url>,
-) -> Result<f64, ReadonlyPortfolioError> {
+) -> Result<Decimal, ReadonlyPortfolioError> {
     let endpoint = resolve_hyperliquid_info_endpoint(hyperliquid_base_url)?;
     let response_text = http_client
         .post(endpoint)
@@ -592,15 +702,15 @@ fn resolve_hyperliquid_info_endpoint(
 
 fn parse_ubtc_price_from_context(
     context: &serde_json::Value,
-) -> Result<f64, ReadonlyPortfolioError> {
+) -> Result<Decimal, ReadonlyPortfolioError> {
     let candidate_keys = ["midPx", "markPx", "oraclePx"];
 
     for candidate_key in candidate_keys {
         let maybe_price = context
             .get(candidate_key)
             .and_then(serde_json::Value::as_str)
-            .and_then(|value| value.parse::<f64>().ok());
-        if let Some(parsed_price) = maybe_price.filter(|price| price.is_finite() && *price > 0.0) {
+            .and_then(|value| Decimal::from_str(value).ok());
+        if let Some(parsed_price) = maybe_price.filter(|price| *price > Decimal::ZERO) {
             return Ok(parsed_price);
         }
     }
@@ -610,6 +720,7 @@ fn parse_ubtc_price_from_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal_macros::dec;
     use tracing::Level;
     use tracing_test::traced_test;
     use wiremock::matchers::{method, path};
@@ -627,17 +738,109 @@ mod tests {
 
     #[test]
     fn btc_address_accepts_common_mainnet_formats() {
-        assert!(BtcAddress::from_str("1FfmbHfnpaZjKFvyi1okTjJJusN455paPH").is_ok());
+        assert!(BtcAddress::from_str("1BoatSLRHtKNngkdXEeobR76b53LETtpyT").is_ok());
         assert!(BtcAddress::from_str("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy").is_ok());
+        assert!(BtcAddress::from_str("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh").is_ok());
     }
 
     #[test]
-    fn btc_address_rejects_non_mainnet_formats() {
-        let result = BtcAddress::from_str("tb1qfm86m4j2fpkq95fkxv7nhxsl0s6z4pfm3a3nrm");
+    fn btc_address_accepts_common_testnet_formats() {
+        assert!(BtcAddress::from_str("mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn").is_ok());
+        assert!(BtcAddress::from_str("2N2JD6wb56AfK4tfmM6PwdVmoYk2dCKf4Br").is_ok());
+        assert!(BtcAddress::from_str("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx").is_ok());
+    }
+
+    #[test]
+    fn btc_address_accepts_testnet_bech32_address_supported_by_provider() {
+        let address =
+            BtcAddress::from_str("tb1qqltm70wyz734t9k8d9w70uuhyxnemyh56d5ra8rtw082ytd7ywmsqudq5e")
+                .unwrap();
+
+        assert_eq!(
+            address.as_str(),
+            "tb1qqltm70wyz734t9k8d9w70uuhyxnemyh56d5ra8rtw082ytd7ywmsqudq5e"
+        );
+        assert_eq!(address.network(), Network::Testnet);
+    }
+
+    #[traced_test]
+    #[test]
+    fn provider_supported_bech32_parser_rejects_invalid_checksum() {
+        assert!(
+            parse_provider_supported_bech32_address(
+                "tb1qqltm70wyz734t9k8d9w70uuhyxnemyh56d5ra8rtw082ytd7ywmsqudq5f"
+            )
+            .is_none()
+        );
+        assert!(logs_contain_at(
+            Level::DEBUG,
+            &["provider-supported bech32 address rejected", "checksum"]
+        ));
+    }
+
+    #[test]
+    fn testnet_mempool_base_url_keeps_api_path_for_address_endpoint() {
+        let base_url = default_btc_base_url().unwrap();
+        let address =
+            BtcAddress::from_str("tb1qqltm70wyz734t9k8d9w70uuhyxnemyh56d5ra8rtw082ytd7ywmsqudq5e")
+                .unwrap();
+
+        let address_base_url = btc_base_url_for_address(&base_url, &address).unwrap();
+        let endpoint = address_base_url
+            .join(&format!("address/{}", address.as_str()))
+            .unwrap();
+
+        assert_eq!(
+            endpoint.as_str(),
+            "https://mempool.space/testnet/api/address/tb1qqltm70wyz734t9k8d9w70uuhyxnemyh56d5ra8rtw082ytd7ywmsqudq5e"
+        );
+    }
+
+    #[tokio::test]
+    async fn testnet_mempool_failure_does_not_fallback_to_blockchain_info() {
+        let mock_server = MockServer::start().await;
+        let address =
+            BtcAddress::from_str("tb1qqltm70wyz734t9k8d9w70uuhyxnemyh56d5ra8rtw082ytd7ywmsqudq5e")
+                .unwrap();
+        let btc_base_url = Url::parse(&format!("{}/testnet/api/", mock_server.uri())).unwrap();
+        let blockchain_info_base_url = Url::parse(&mock_server.uri()).unwrap();
+        let address_base_url = btc_base_url_for_address(&btc_base_url, &address).unwrap();
+        let mempool_path = address_base_url
+            .join(&format!("address/{}", address.as_str()))
+            .unwrap()
+            .path()
+            .to_string();
+
+        Mock::given(method("GET"))
+            .and(path(mempool_path))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/rawaddr/{}", address.as_str())))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "final_balance": 0_u64
+            })))
+            .expect(0)
+            .mount(&mock_server)
+            .await;
+
+        let result = load_single_address_holding(
+            &client(),
+            &btc_base_url,
+            &blockchain_info_base_url,
+            &address,
+        )
+        .await;
+
         assert!(matches!(
             result,
-            Err(ReadonlyPortfolioError::InvalidBtcAddress(_))
+            Err(ReadonlyPortfolioError::BtcProvidersFailed {
+                ref fallback_error,
+                ..
+            }) if fallback_error == "blockchain.info does not support testnet addresses"
         ));
+        mock_server.verify().await;
     }
 
     #[test]
@@ -687,7 +890,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.holdings.len(), 1);
-        assert!((response.total_confirmed_btc - 1.0).abs() < 1e-9);
+        assert_eq!(response.total_confirmed_btc, dec!(1));
         assert!(logs_contain_at(
             Level::DEBUG,
             &["readonly btc balances loaded", "addresses=1"]
@@ -791,18 +994,73 @@ mod tests {
         .unwrap();
 
         assert_eq!(exposure.positions.len(), 2);
+        assert_eq!(exposure.ubtc_price_usd, dec!(80000));
         let btc_position = exposure
             .positions
             .iter()
             .find(|position| position.source == ExposureSource::BtcAddress)
             .unwrap();
-        assert!((btc_position.notional_usd - 80_000.0).abs() < 1e-9);
+        assert_eq!(btc_position.notional_usd, dec!(80000));
+        assert_eq!(btc_position.quantity_btc, Some(dec!(1)));
         assert_eq!(btc_position.tradability, Tradability::ReadOnly);
         assert_eq!(btc_position.include_in_beta, BetaInclusion::Included);
+        assert_eq!(exposure.gross_long_usd, dec!(80000));
+        assert_eq!(exposure.gross_short_usd, dec!(2000));
+        assert_eq!(exposure.net_usd, dec!(78000));
         assert!(logs_contain_at(
             Level::INFO,
             &["portfolio exposure loaded", "positions=2"]
         ));
+    }
+
+    #[tokio::test]
+    async fn load_portfolio_exposure_computes_exact_notional_for_fractional_price() {
+        // 0.1 BTC at 27123.45 is 2712.345 exactly. Both factors are
+        // f64-inexpressible, so the old f64 pipeline produced a value only
+        // approximately equal to 2712.345; the Decimal pipeline is exact.
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/address/1FfmbHfnpaZjKFvyi1okTjJJusN455paPH"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "chain_stats": {"funded_txo_sum": 10_000_000_u64, "spent_txo_sum": 0_u64},
+                "mempool_stats": {"funded_txo_sum": 0_u64, "spent_txo_sum": 0_u64}
+            })))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "universe": [{ "name": "UBTC" }] },
+                [{ "midPx": "27123.45" }]
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let exposure = load_portfolio_exposure(
+            &client(),
+            &Url::parse(&mock_server.uri()).unwrap(),
+            &Url::parse(&mock_server.uri()).unwrap(),
+            Some(&Url::parse(&mock_server.uri()).unwrap()),
+            &PortfolioExposureRequest {
+                hyperliquid_positions: vec![],
+                readonly_btc_entries: vec![ReadonlyBtcEntryRequest {
+                    address: parsed("1FfmbHfnpaZjKFvyi1okTjJJusN455paPH"),
+                    include_in_beta: BetaInclusion::Included,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+
+        let btc_position = exposure
+            .positions
+            .iter()
+            .find(|position| position.source == ExposureSource::BtcAddress)
+            .unwrap();
+        assert_eq!(btc_position.quantity_btc, Some(dec!(0.1)));
+        assert_eq!(btc_position.notional_usd, dec!(2712.345));
+        assert_eq!(exposure.gross_long_usd, dec!(2712.345));
+        assert_eq!(exposure.net_usd, dec!(2712.345));
     }
 
     #[test]

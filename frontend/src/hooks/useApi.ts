@@ -1,5 +1,24 @@
+import * as Data from "effect/Data"
+import * as Effect from "effect/Effect"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query"
 import type { Timeframe } from "@/components/ui/timeframe-select"
+import { fetchJson, postJson, postEmpty, fetchStreamChecked } from "@/lib/http"
+
+export class MissingTickerError extends Data.TaggedError("MissingTickerError")<
+  Record<string, never>
+> {}
+
+export class EmptyStreamError extends Data.TaggedError("EmptyStreamError")<
+  Record<string, never>
+> {}
+
+export class StreamReadError extends Data.TaggedError("StreamReadError")<{
+  readonly cause: unknown
+}> {}
+
+export class ApiMessageError extends Data.TaggedError("ApiMessageError")<{
+  readonly message: string
+}> {}
 
 export type TradingData = {
   timestamp: string
@@ -25,10 +44,6 @@ export type TradingData = {
   sortino: number | null
 }
 
-interface ApiError {
-  detail?: string
-}
-
 export interface DateRange {
   min_date: string
   max_date: string
@@ -41,137 +56,125 @@ export interface AnalysisDataParams {
   timeframe: Timeframe
 }
 
-export const useDateRange = (timeframe: () => Timeframe) => {
-  return useQuery<DateRange>(() => ({
-    queryKey: ["dateRange", timeframe()],
-    queryFn: async () => {
-      const response = await fetch(`/api/date-range?timeframe=${timeframe()}`)
-      if (!response.ok) {
-        const errorData = (await response.json().catch(() => ({}))) as ApiError
-        throw new Error(
-          errorData.detail ?? `HTTP error! status: ${String(response.status)}`,
-        )
-      }
-      return response.json() as Promise<DateRange>
-    },
-  }))
-}
+const fetchDateRange = (timeframe: Timeframe, signal: AbortSignal) =>
+  fetchJson<DateRange>(`/api/date-range?timeframe=${timeframe}`, { signal })
 
-export const useAnalysisData = (params: () => AnalysisDataParams) => {
-  return useQuery<{ data: TradingData[]; message: string | null }>(() => {
+const fetchAnalysisData = (
+  timeframe: Timeframe,
+  startDate: string,
+  endDate: string,
+  signal: AbortSignal,
+) =>
+  postJson<{ data: TradingData[]; message: string | null }>(
+    `/api/data?timeframe=${timeframe}`,
+    {
+      start_date: `${startDate}T00:00:00Z`,
+      end_date: `${endDate}T23:59:59Z`,
+    },
+    { signal },
+  )
+
+const fetchTokenData = (
+  ticker: string | undefined,
+  timeframe: Timeframe,
+  signal: AbortSignal,
+) =>
+  Effect.Do.pipe(
+    Effect.bind("tickerValue", () =>
+      ticker ? Effect.succeed(ticker) : Effect.fail(new MissingTickerError()),
+    ),
+    Effect.flatMap(({ tickerValue }) =>
+      fetchJson<{ data: TradingData[]; message?: string }>(
+        `/api/token/${encodeURIComponent(tickerValue)}?timeframe=${timeframe}`,
+        { signal },
+      ),
+    ),
+    Effect.flatMap(tokenResponse =>
+      tokenResponse.message
+        ? Effect.fail(new ApiMessageError({ message: tokenResponse.message }))
+        : Effect.succeed(tokenResponse),
+    ),
+  )
+
+const streamReload = (mode: string) =>
+  fetchStreamChecked("/api/reload_data/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  }).pipe(
+    Effect.flatMap(response =>
+      response.body
+        ? Effect.succeed(response.body)
+        : Effect.fail(new EmptyStreamError()),
+    ),
+    Effect.flatMap(body =>
+      Effect.tryPromise({
+        try: async () => {
+          const reader = body.getReader()
+          const decoder = new TextDecoder("utf-8")
+          try {
+            let done = false
+            while (!done) {
+              const readResult = await reader.read()
+              done = readResult.done
+              if (readResult.value) {
+                console.log(decoder.decode(readResult.value, { stream: true }))
+              }
+            }
+          } finally {
+            reader.releaseLock()
+          }
+        },
+        catch: cause => new StreamReadError({ cause }),
+      }),
+    ),
+  )
+
+const fetchBudgetPreference = (signal: AbortSignal) =>
+  fetchJson<{ budget: number }>("/api/hyperliquid/budget-preference", {
+    signal,
+  })
+
+const saveBudgetPreference = (payload: { budget: number }) =>
+  postJson("/api/hyperliquid/budget-preference", payload).pipe(Effect.asVoid)
+
+export const useDateRange = (timeframe: () => Timeframe) =>
+  useQuery<DateRange>(() => ({
+    queryKey: ["dateRange", timeframe()],
+    queryFn: ({ signal }) =>
+      Effect.runPromise(fetchDateRange(timeframe(), signal)),
+  }))
+
+export const useAnalysisData = (params: () => AnalysisDataParams) =>
+  useQuery<{ data: TradingData[]; message: string | null }>(() => {
     const { startDate, endDate, timeframe } = params()
     return {
       queryKey: ["analysisData", timeframe, startDate, endDate],
-      queryFn: async () => {
-        const startDateTime = `${startDate}T00:00:00Z`
-        const endDateTime = `${endDate}T23:59:59Z`
-
-        const response = await fetch(`/api/data?timeframe=${timeframe}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            start_date: startDateTime,
-            end_date: endDateTime,
-          }),
-        })
-
-        if (!response.ok) {
-          const errorData = (await response
-            .json()
-            .catch(() => ({}))) as ApiError
-          throw new Error(
-            errorData.detail ??
-              `HTTP error! status: ${String(response.status)}`,
-          )
-        }
-
-        return response.json() as Promise<{
-          data: TradingData[]
-          message: string | null
-        }>
-      },
+      queryFn: ({ signal }) =>
+        Effect.runPromise(
+          fetchAnalysisData(timeframe, startDate, endDate, signal),
+        ),
       enabled: !!startDate && !!endDate,
     }
   })
-}
 
 export const useTokenData = (
   ticker: () => string | undefined,
   timeframe: () => Timeframe,
-) => {
-  return useQuery<{ data: TradingData[]; message?: string }>(() => ({
+) =>
+  useQuery<{ data: TradingData[]; message?: string }>(() => ({
     queryKey: ["tokenData", ticker(), timeframe()],
-    queryFn: async () => {
-      const t = ticker()
-      if (!t) {
-        throw new Error("Ticker is required")
-      }
-
-      const response = await fetch(
-        `/api/token/${encodeURIComponent(t)}?timeframe=${timeframe()}`,
-      )
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${String(response.status)}`)
-      }
-
-      const result = (await response.json()) as {
-        data: TradingData[]
-        message?: string
-      }
-
-      if (result.message) {
-        throw new Error(result.message)
-      }
-
-      return result
-    },
+    queryFn: ({ signal }) =>
+      Effect.runPromise(fetchTokenData(ticker(), timeframe(), signal)),
     enabled: !!ticker(),
   }))
-}
 
 export const useReloadData = () => {
   const queryClient = useQueryClient()
 
   return useMutation(() => ({
-    mutationFn: async ({ mode }: { mode: string }) => {
-      const controller = new AbortController()
-
-      const response = await fetch("/api/reload_data/stream", {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ mode }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${String(response.status)}`)
-      }
-
-      if (!response.body) {
-        throw new Error("No response body received")
-      }
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder("utf-8")
-
-      try {
-        let done = false
-        while (!done) {
-          const readResult = await reader.read()
-          done = readResult.done
-          if (readResult.value) {
-            console.log(decoder.decode(readResult.value, { stream: true }))
-          }
-        }
-      } finally {
-        reader.releaseLock()
-      }
-    },
+    mutationFn: ({ mode }: { mode: string }) =>
+      Effect.runPromise(streamReload(mode)),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["analysisData"] })
       void queryClient.invalidateQueries({ queryKey: ["tokenData"] })
@@ -180,52 +183,23 @@ export const useReloadData = () => {
   }))
 }
 
-export const useStopReload = () => {
-  return useMutation(() => ({
-    mutationFn: async () => {
-      const response = await fetch("/api/stop_reload", {
-        method: "POST",
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${String(response.status)}`)
-      }
-    },
+export const useStopReload = () =>
+  useMutation(() => ({
+    mutationFn: () => Effect.runPromise(postEmpty("/api/stop_reload")),
   }))
-}
 
-export const useBudgetPreference = () => {
-  return useQuery<{ budget: number }>(() => ({
+export const useBudgetPreference = () =>
+  useQuery<{ budget: number }>(() => ({
     queryKey: ["hyperliquid", "budget-preference"],
-    queryFn: async () => {
-      const response = await fetch("/api/hyperliquid/budget-preference")
-      if (!response.ok) {
-        const errorData = (await response.json().catch(() => ({}))) as ApiError
-        throw new Error(errorData.detail ?? "Unable to fetch budget preference")
-      }
-      return response.json() as Promise<{ budget: number }>
-    },
+    queryFn: ({ signal }) => Effect.runPromise(fetchBudgetPreference(signal)),
   }))
-}
 
 export const useSaveBudgetPreference = () => {
   const queryClient = useQueryClient()
 
   return useMutation(() => ({
-    mutationFn: async (payload: { budget: number }) => {
-      const response = await fetch("/api/hyperliquid/budget-preference", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      })
-
-      if (!response.ok) {
-        const errorData = (await response.json().catch(() => ({}))) as ApiError
-        throw new Error(errorData.detail ?? "Unable to save budget preference")
-      }
-    },
+    mutationFn: (payload: { budget: number }) =>
+      Effect.runPromise(saveBudgetPreference(payload)),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: ["hyperliquid", "budget-preference"],

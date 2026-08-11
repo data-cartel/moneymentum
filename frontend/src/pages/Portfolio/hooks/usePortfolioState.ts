@@ -12,8 +12,17 @@ import {
   useHyperliquidLeverageLimits,
   useRebalanceHyperliquidPositions,
   type OrderSide,
+  type OrderResult,
 } from "@/hooks/useTrading"
-import { buildApiPayload, diffPortfolios } from "./portfolioRebalancer"
+import {
+  buildApiPayload,
+  diffPortfolios,
+  portfolioMapFromExchangePositions,
+  targetAndArchiveAfterRebalance,
+  type RebalanceAction,
+} from "./portfolioRebalancer"
+import { getErrorMessage, getExchangeErrorDetail } from "@/lib/error-message"
+import { toast } from "solid-sonner"
 import {
   useReadonlyPortfolioState,
   type ReadonlyBetaPosition,
@@ -39,8 +48,34 @@ const initialManualWeightEntryFromStorage = (): boolean =>
   typeof localStorage.getItem === "function" &&
   localStorage.getItem(MANUAL_WEIGHT_ENTRY_STORAGE_KEY) === "true"
 
+export const writePreciseToggle = (isPrecise: boolean): void => {
+  if (
+    typeof localStorage === "undefined" ||
+    typeof localStorage.setItem !== "function"
+  ) {
+    return
+  }
+
+  localStorage.setItem(PRECISE_TOGGLE_STORAGE_KEY, String(isPrecise))
+}
+
+export const writeManualWeightEntry = (isManualWeightEntry: boolean): void => {
+  if (
+    typeof localStorage === "undefined" ||
+    typeof localStorage.setItem !== "function"
+  ) {
+    return
+  }
+
+  localStorage.setItem(
+    MANUAL_WEIGHT_ENTRY_STORAGE_KEY,
+    String(isManualWeightEntry),
+  )
+}
+
 const MAX_CROSS_ACCOUNT_LEVERAGE = 5
 const DEFAULT_CROSS_ACCOUNT_LEVERAGE = 1
+const POSITION_CLOSE_EPSILON = 0.01
 
 export interface PortfolioInterface {
   symbol: string
@@ -55,6 +90,7 @@ export interface StagedTradeItem {
   notional: number
   previousWeight?: number
   newWeight?: number
+  orderError?: string
 }
 
 const calcLeverage = (totalNotional: number, accountValue: number): number => {
@@ -83,10 +119,6 @@ export const usePortfolioState = () => {
   // Mutations
   const rebalancePositionsMutation = useRebalanceHyperliquidPositions()
 
-  ///////////////////////////
-  ///////START HERE//////////
-  ///////////////////////////
-
   const [currentPortfolio, setCurrentPortfolio] = createStore<
     Record<string, PortfolioInterface | undefined>
   >({})
@@ -99,6 +131,10 @@ export const usePortfolioState = () => {
     Record<string, PortfolioInterface | undefined>
   >({})
 
+  const [errorsBySymbol, setErrorsBySymbol] = createStore<
+    Record<string, string | undefined>
+  >({})
+
   const [currentCrossAccountLeverage, setCurrentCrossAccountLeverage] =
     createSignal(DEFAULT_CROSS_ACCOUNT_LEVERAGE)
   const [targetCrossAccountLeverage, setTargetCrossAccountLeverage] =
@@ -106,10 +142,6 @@ export const usePortfolioState = () => {
 
   const [currentTotalNotional, setCurrentTotalNotional] = createSignal(0)
   const [targetTotalNotional, setTargetTotalNotional] = createSignal(0)
-
-  ///////////////////////////
-  ///////END HERE//////////
-  ///////////////////////////
 
   const [isRebalancingUi, setIsRebalancingUi] = createSignal(false)
 
@@ -124,12 +156,20 @@ export const usePortfolioState = () => {
       setCurrentPortfolio(reconcile({}))
       setTargetPortfolio(reconcile({}))
       setDeletedArchive(reconcile({}))
+      setErrorsBySymbol(reconcile({}))
+      readonlyPortfolio.clearAddresses()
       setCurrentCrossAccountLeverage(DEFAULT_CROSS_ACCOUNT_LEVERAGE)
       setTargetCrossAccountLeverage(DEFAULT_CROSS_ACCOUNT_LEVERAGE)
       setCurrentTotalNotional(0)
       setTargetTotalNotional(0)
       setPositionsLoadedFromExchange(false)
     })
+  }
+
+  const clearRebalanceErrorForSymbol = (symbol: string) => {
+    if (errorsBySymbol[symbol] !== undefined) {
+      setErrorsBySymbol(symbol, undefined)
+    }
   }
 
   const redistributeWeights = (
@@ -178,8 +218,38 @@ export const usePortfolioState = () => {
     })
   }
 
-  const symbolsBelowMinimum = createMemo(() =>
-    Object.keys(targetPortfolio).filter(symbol => {
+  const effectiveTotalNotional = createMemo(() => {
+    return Object.values(targetPortfolio).reduce(
+      (sum, pos) => sum + (pos?.notional ?? 0),
+      0,
+    )
+  })
+
+  const hasCurrentPositions = createMemo(() =>
+    Object.values(currentPortfolio).some(position => position !== undefined),
+  )
+
+  const isClosingAllPositions = createMemo(() => {
+    if (!hasCurrentPositions()) return false
+
+    const symbols = new Set([
+      ...Object.keys(currentPortfolio),
+      ...Object.keys(targetPortfolio),
+    ])
+
+    return [...symbols].every(symbol => {
+      const targetPosition = targetPortfolio[symbol]
+      return (
+        targetPosition === undefined ||
+        targetPosition.notional <= POSITION_CLOSE_EPSILON
+      )
+    })
+  })
+
+  const symbolsBelowMinimum = createMemo(() => {
+    if (isClosingAllPositions()) return []
+
+    return Object.keys(targetPortfolio).filter(symbol => {
       const targetPosition = targetPortfolio[symbol]
       const currentNotional = currentPortfolio[symbol]?.notional ?? 0
 
@@ -190,11 +260,13 @@ export const usePortfolioState = () => {
         Math.abs(targetPosition.notional - currentNotional) < 0.01
 
       return !unchanged
-    }),
-  )
+    })
+  })
 
-  const symbolsDeltaBelowMinimum = createMemo(() =>
-    Object.keys(targetPortfolio).filter(symbol => {
+  const symbolsDeltaBelowMinimum = createMemo(() => {
+    if (isClosingAllPositions()) return []
+
+    return Object.keys(targetPortfolio).filter(symbol => {
       const target = targetPortfolio[symbol]
       if (!target) return false
 
@@ -210,8 +282,8 @@ export const usePortfolioState = () => {
       const delta = Math.abs(targetSignedNotional - currentSignedNotional)
 
       return delta < MIN_USD && delta !== 0
-    }),
-  )
+    })
+  })
 
   // Keep displayed target leverage in sync with planned target notional.
   createEffect(() => {
@@ -255,6 +327,73 @@ export const usePortfolioState = () => {
 
   const readonlyPortfolio = useReadonlyPortfolioState()
 
+  const applyCurrentFromExchange = (
+    portfolioMap: Record<string, PortfolioInterface | undefined>,
+    totalNotional: number,
+  ) => {
+    setCurrentPortfolio(reconcile(portfolioMap))
+    setCurrentTotalNotional(totalNotional)
+  }
+
+  const finalizeRebalance = async (
+    orders: OrderResult[],
+    actions: RebalanceAction[],
+  ) => {
+    if (orders.length === 0) {
+      setIsRebalancingUi(false)
+      return
+    }
+
+    try {
+      const [positionsRefetch] = await Promise.all([
+        positionsQuery.refetch(),
+        accountSummaryQuery.refetch(),
+      ])
+
+      const positionsData = positionsRefetch.data
+      if (!positionsData?.positions) {
+        return
+      }
+
+      const { map, totalNotional } = portfolioMapFromExchangePositions(
+        positionsData.positions,
+      )
+
+      const {
+        nextTarget,
+        nextDeletedArchive,
+        errorsBySymbol: nextErrors,
+      } = targetAndArchiveAfterRebalance(
+        untrack(() => targetPortfolio),
+        untrack(() => deletedArchive),
+        map,
+        actions,
+        orders,
+      )
+
+      const nextTargetTotalNotional = Object.values(nextTarget).reduce(
+        (sum, position) => sum + (position?.notional ?? 0),
+        0,
+      )
+
+      batch(() => {
+        applyCurrentFromExchange(map, totalNotional)
+        setTargetPortfolio(reconcile(nextTarget))
+        setTargetTotalNotional(nextTargetTotalNotional)
+        setDeletedArchive(reconcile(nextDeletedArchive))
+        setErrorsBySymbol(reconcile(nextErrors))
+      })
+
+      if (orders.some(order => order.status === "timed_out")) {
+        console.warn(
+          "rebalance order watch timed out; portfolio refreshed from exchange",
+        )
+      }
+    } finally {
+      setIsRebalancingUi(false)
+    }
+  }
+
   // Wait for positionsQuery data and positive accountValue, then initialize from exchange positions
   createEffect(() => {
     if (positionsLoadedFromExchange()) {
@@ -270,34 +409,18 @@ export const usePortfolioState = () => {
       return
     }
 
-    // Calculate total notional from all exchange positions first
-    const totalExchangeNotional = positionsData.positions.reduce(
-      (sum, pos) => sum + pos.notional,
-      0,
+    const { map, totalNotional } = portfolioMapFromExchangePositions(
+      positionsData.positions,
     )
 
-    const exchangeTokens: PortfolioInterface[] = positionsData.positions.map(
-      pos => ({
-        symbol: pos.symbol,
-        side: pos.side,
-        leverage: pos.leverage || 1,
-        notional: pos.notional,
-      }),
-    )
-
-    const portfolioMap = Object.fromEntries(
-      exchangeTokens.map(token => [token.symbol, token]),
-    ) as Record<string, PortfolioInterface>
-
-    setCurrentPortfolio(reconcile(portfolioMap))
+    applyCurrentFromExchange(map, totalNotional)
 
     // Create a FULLY independent copy for the target
-    setTargetPortfolio(reconcile(structuredClone(portfolioMap)))
+    setTargetPortfolio(reconcile(structuredClone(map)))
 
     // Calculate leverage from the formula: leverage = totalNotional / accountValue
-    const initialLeverage = calcLeverage(totalExchangeNotional, accountValue())
-    setTargetTotalNotional(totalExchangeNotional)
-    setCurrentTotalNotional(totalExchangeNotional)
+    const initialLeverage = calcLeverage(totalNotional, accountValue())
+    setTargetTotalNotional(totalNotional)
     setTargetCrossAccountLeverage(initialLeverage)
     setCurrentCrossAccountLeverage(initialLeverage)
 
@@ -361,6 +484,7 @@ export const usePortfolioState = () => {
         newWeight: totalTarget
           ? (targetPosition?.notional ?? 0) / totalTarget
           : 0,
+        orderError: errorsBySymbol[symbol],
       }
     })
   })
@@ -376,13 +500,6 @@ export const usePortfolioState = () => {
   })
 
   const hasPositionsBelowMinimum = () => symbolsBelowMinimum().length > 0
-  const effectiveTotalNotional = createMemo(() => {
-    return Object.values(targetPortfolio).reduce(
-      (sum, pos) => sum + (pos?.notional ?? 0),
-      0,
-    )
-  })
-
   const targetAllocationPercent = createMemo(() => {
     const total = targetTotalNotional()
     if (total <= 0) return 0
@@ -397,6 +514,7 @@ export const usePortfolioState = () => {
     symbolsDeltaBelowMinimum().length > 0
 
   const handleAddToken = (symbol: string) => {
+    if (!isConnected()) return
     if (symbol in targetPortfolio) return
     if (deletedArchive[symbol] !== undefined) return
 
@@ -449,10 +567,12 @@ export const usePortfolioState = () => {
   }
 
   const handleSideChange = (symbol: string, side: OrderSide) => {
+    clearRebalanceErrorForSymbol(symbol)
     setTargetPortfolio(symbol, "side", side)
   }
 
   const handleLeverageChange = (symbol: string, leverage: number) => {
+    clearRebalanceErrorForSymbol(symbol)
     const maxLeverage = leverageLimitsMap()[symbol] || 1
     const newLeverage = Math.max(1, Math.min(leverage, maxLeverage))
 
@@ -460,6 +580,7 @@ export const usePortfolioState = () => {
   }
 
   const handleNotionalChange = (symbol: string, newNotional: number) => {
+    clearRebalanceErrorForSymbol(symbol)
     const oldNotional = targetPortfolio[symbol]?.notional ?? 0
     const diff = newNotional - oldNotional
 
@@ -471,6 +592,7 @@ export const usePortfolioState = () => {
   }
 
   const handleWeightChange = (changedSymbol: string, newPercentage: number) => {
+    clearRebalanceErrorForSymbol(changedSymbol)
     if (!isManualWeightEntry()) {
       redistributeWeights(changedSymbol, newPercentage)
       return
@@ -524,19 +646,36 @@ export const usePortfolioState = () => {
       setTargetPortfolio(reconcile(nextTarget))
       setTargetTotalNotional(currentTotalNotional())
       setDeletedArchive(reconcile({}))
+      setErrorsBySymbol(reconcile({}))
     })
   }
 
   const handleRebalancePositions = () => {
+    if (isRebalancingUi() || rebalancePositionsMutation.isPending) {
+      return
+    }
+
     const apiPayload = buildApiPayload(
       currentPortfolio,
       targetPortfolio,
       isPrecise(),
     )
 
-    rebalancePositionsMutation.mutate(apiPayload)
-
     setIsRebalancingUi(true)
+    rebalancePositionsMutation.mutate(apiPayload, {
+      onSettled: (data, error) => {
+        if (error || !data) {
+          if (error) {
+            console.error("rebalance failed", getExchangeErrorDetail(error))
+            toast.error(getErrorMessage(error))
+          }
+          setIsRebalancingUi(false)
+          return
+        }
+
+        void finalizeRebalance(data, apiPayload.actions)
+      },
+    })
   }
 
   const canSubmit = () => {
@@ -552,12 +691,21 @@ export const usePortfolioState = () => {
     )
   }
 
-  // // createEffect: clear rebalancing UI state once staged trades are empty
-  // createEffect(() => {
-  //   if (!isRebalancingUi() || !positionsLoadedFromExchange()) {
-  //     return
-  //   }
-  // })
+  const resetPortfolioStateForNetworkChange = () => {
+    batch(() => {
+      setCurrentPortfolio(reconcile({}))
+      setTargetPortfolio(reconcile({}))
+      setDeletedArchive(reconcile({}))
+      setErrorsBySymbol(reconcile({}))
+      readonlyPortfolio.clearAddresses()
+      setCurrentCrossAccountLeverage(DEFAULT_CROSS_ACCOUNT_LEVERAGE)
+      setTargetCrossAccountLeverage(DEFAULT_CROSS_ACCOUNT_LEVERAGE)
+      setCurrentTotalNotional(0)
+      setTargetTotalNotional(0)
+    })
+    setPositionsLoadedFromExchange(false)
+    setIsRebalancingUi(false)
+  }
 
   return {
     get accountValue() {
@@ -586,6 +734,9 @@ export const usePortfolioState = () => {
     },
     get deletedArchive() {
       return deletedArchive
+    },
+    get errorsBySymbol() {
+      return errorsBySymbol
     },
     get leverageLimitsMap() {
       return leverageLimitsMap()
@@ -633,6 +784,10 @@ export const usePortfolioState = () => {
       return readonlyPortfolio.error
     },
 
+    get readonlyBtcValidationError() {
+      return readonlyPortfolio.validationError
+    },
+
     get symbolsBelowMinimum() {
       return symbolsBelowMinimum()
     },
@@ -672,5 +827,6 @@ export const usePortfolioState = () => {
     removeReadonlyBtcAddress: readonlyPortfolio.removeAddress,
     setReadonlyBtcIncludeInBeta: readonlyPortfolio.setIncludeInBeta,
     handleDisconnect,
+    resetPortfolioStateForNetworkChange,
   }
 }

@@ -1,7 +1,3 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-indexing-slicing-in-tests = true
-
-disallowed-methods = [
-  { path = "sqlite_es::sqlite_cqrs", reason = "use wire::CqrsBuilder for type-safe query wiring" },
-]

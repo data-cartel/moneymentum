@@ -17,7 +17,7 @@ AI coding agents working in this repo are expected to:
 - Read [ROADMAP.md](./ROADMAP.md) and the relevant story under
   [stories/](./stories/README.md) before changing code. The story's acceptance
   criteria are the contract.
-- Follow [contributions.md](./contributions.md): types-first, failing test,
+- Follow [CONTRIBUTING.md](./CONTRIBUTING.md): types-first, failing test,
   implementation, review.
 - Honor the rules in this document for code style, testing, and quality gates.
 - Edit code, tests, and configs in this repo. Humans own deploys, secrets, and
@@ -99,6 +99,14 @@ sqlx migrate run                   # Applies pending migrations
 - All dependencies managed through Nix flake - do not use bun install, cargo
   install, or similar
 
+### Version control
+
+All write operations go through the GitButler CLI (`but`) -- never `git add`,
+`git commit`, `git push`, `git checkout`, `git rebase`, or other git writes.
+Read-only git inspection (`git status`, `git log`, `git diff`) is fine. See
+[ai/skills/gitbutler/SKILL.md](./ai/skills/gitbutler/SKILL.md) for the full
+command reference and workflow.
+
 ---
 
 ## Workflow & Policies
@@ -111,9 +119,58 @@ Fix immediately. The user never sends messages just for the sake of it.
 
 Never add "Generated with [Tool Name]" to commits, PRs, or code.
 
-### PR descriptions
+### PR titles and descriptions
 
-Explain WHY the PR exists, not what changed.
+**Titles**: Lowercase, imperative, concise. Describe the outcome, not the
+mechanism. No prefixes like `feat:` or `fix:`.
+
+- Good: `migrate frontend from React to SolidJS`
+- Good: `replace exceptions with typed Effect errors`
+- Bad: `Add Effect library for functional HTTP error handling`
+- Bad: `Refactor API hooks to use Effect-based error handling`
+
+**Descriptions**: Two sections -- `## Why` and `## How`.
+
+- **Why**: The problem or motivation. Why does this PR exist?
+- **How**: High-level approach. Explain the solution, not the file changes --
+  the diff tab handles that. No file paths, no bullet lists of changes.
+
+```
+## Why
+
+<1-3 sentences explaining the problem or motivation>
+
+## How
+
+<1-3 sentences explaining the approach and key decisions>
+```
+
+### Every PR is tracked by an issue and the roadmap
+
+Every PR `Closes` a problem-only GitHub issue, and that issue is a checklist
+item in the relevant [ROADMAP.md](./ROADMAP.md) section linking the issue and
+the PR. Keep the roadmap in lockstep: the entry and its tick land on the feature
+PR itself, so the roadmap always matches what merged. The `pr-tracking` skill
+makes a whole stack conform.
+
+### Every stacked PR carries the GitButler stack footer
+
+Every PR that belongs to a multi-branch stack must carry the GitButler
+stack-navigation footer -- the
+`This is part X of N in a stack made with
+GitButler:` block (between the
+`<!-- GitButler Footer Boundary -->` markers) listing the stack's PRs
+top-to-bottom with the current one marked. It orients reviewers in the stack and
+links the sibling PRs.
+
+GitButler writes this footer when it opens or pushes a PR, but it **drifts**: a
+no-op push does not rewrite it, so after a rebase, a branch add/remove, or a
+merge it goes stale (lists merged PRs, wrong `N`, wrong position) or is missing
+entirely on PRs that were not opened through GitButler. There is no `but`
+command to refresh it. Keep every stacked PR's footer current by running
+`nix run .#pr-stack-footer` (`scripts/pr-stack-footer.nu`), which rebuilds each
+stack's footer from the live workspace and splices it into the PR bodies. Run it
+after any operation that reshapes the stack.
 
 ### Documentation stays in lockstep with the code
 
@@ -132,7 +189,7 @@ Concrete audit checklist:
 - [stories/](./stories/README.md): is the story status frontmatter current, is
   the index entry present, are acceptance criteria reworded to match the shipped
   behavior?
-- [contributions.md](./contributions.md) and `AGENTS.md`: did a rule change in
+- [CONTRIBUTING.md](./CONTRIBUTING.md) and `AGENTS.md`: did a rule change in
   practice? If so, the rule changes here first.
 - Per-file CLAUDE.md / AGENTS.md (e.g. `frontend/CLAUDE.md`): same audit at the
   subtree level.
@@ -152,7 +209,7 @@ applies to:
 
 - Clippy lints (`#[allow(clippy::*)]`)
 - Compiler warnings (`#[allow(dead_code)]`, `#[allow(unused)]`)
-- All linters in all languages (eslint, ruff, etc.)
+- All linters in all languages (eslint, clippy, etc.)
 - Test coverage - should not decrease without permission
 
 Fix the underlying code, don't suppress warnings.
@@ -288,7 +345,8 @@ such a sweep, and never apply it to `*.tsx`, `*.ts`, or to quoted strings inside
   specific case (e.g., conventional loop indices in tight numeric code where a
   longer name would obscure intent).
 - No abbreviations unless universally understood (`id`, `url`, `http`, `msg`,
-  `tx` are fine)
+  `tx` are fine). This includes namespace import aliases: `import * as Hl` is
+  wrong, use `import * as Hyperliquid`
 
 ### Colocate types
 
@@ -454,25 +512,21 @@ impl ApiKey {
 into proper types immediately at the boundary. Never pass raw strings through
 the system.
 
-**Aggregate IDs must be newtypes.** Never use raw `String` or `&str` for
-aggregate identifiers. cqrs-es uses stringly-typed IDs, but we wrap them:
+**Persistent IDs must be newtypes.** Never use raw `String` or `&str` for domain
+identifiers that are persisted or passed between async boundaries:
 
 ```rust
-// Bad: easy to mix up different aggregate IDs (banned by clippy)
-cqrs.execute("perp:hyperliquid", command).await;
-cqrs.execute("user:123", command).await;  // Oops, wrong ID type
+// Bad: easy to mix up different persistent IDs
+enqueue_ingestion("ingestion-123").await;
+load_portfolio("ingestion-123").await;  // Oops, wrong ID type
 
 // Good: type system prevents mixing IDs
-struct IngestionId;
-impl AggregateId<Ingestion> for IngestionId {
-    type Args = ();
-    fn aggregate_id((): ()) -> String { "perp:hyperliquid".into() }
-}
-// Use typed execute: cqrs.execute::<IngestionId>((), command)
+struct IngestionRunId(String);
+struct PortfolioId(String);
 ```
 
-Use `wire::AggregateId` trait and `wire::Cqrs::execute` for type-safe ID
-construction. The stringly-typed version is banned via clippy.
+If a future framework exposes stringly-typed IDs, wrap it at the boundary and
+keep raw strings out of application call sites.
 
 ### Avoid deep nesting
 
@@ -663,6 +717,14 @@ or integration test.
 - Never test language features - test business logic
 - Only cover happy paths in integration/e2e tests; cover edge cases in unit
   tests
+
+**Hands-off: `src/factors/fixture_tests.rs`.** Do not edit this file unless the
+user gives a direct, explicit instruction to do so. These tests pin expected
+factor values calculated by hand in Google Sheets; they are the source of truth
+for factor semantics. When a fixture test fails, fix the production code (or
+update `data_test/` only when the user supplies corrected spreadsheet values) --
+never relax tolerances, rewrite assertions, or delete cases to make broken code
+pass.
 
 **Bug reproduction must exercise real code paths.** When reproducing a bug:
 

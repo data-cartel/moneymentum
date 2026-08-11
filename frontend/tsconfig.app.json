@@ -23,6 +23,7 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
+    "plugins": [{ "name": "@effect/language-service" }],
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]

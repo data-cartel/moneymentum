@@ -7,7 +7,7 @@ import { createEffect, onCleanup } from "solid-js"
 interface LeverageDialogProps {
   symbol: string
   leverage: number
-  maxLeverage: number
+  maxLeverage: number | undefined
   disabled: boolean
   onLeverageChange: (symbol: string, leverage: number) => void
 }
@@ -40,7 +40,7 @@ export const LeverageDialog = (props: LeverageDialogProps): JSX.Element => {
         variant="ghost"
         size="sm"
         class="h-auto px-1.5 py-0 text-[10px] font-mono border border-border rounded pointer-events-auto"
-        disabled={props.disabled}
+        disabled={props.disabled || props.maxLeverage === undefined}
         onClick={() => {
           setOpen(prev => !prev)
         }}
@@ -53,8 +53,8 @@ export const LeverageDialog = (props: LeverageDialogProps): JSX.Element => {
           {/* backdrop */}
           <div
             class="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={event => {
-              event.stopPropagation()
+            onClick={e => {
+              e.stopPropagation()
               setOpen(false)
             }}
           />
@@ -65,7 +65,10 @@ export const LeverageDialog = (props: LeverageDialogProps): JSX.Element => {
                 Leverage {props.symbol}
               </div>
               <div class="text-[11px] text-muted-foreground">
-                Max leverage {props.maxLeverage.toFixed(1)}x
+                Max leverage{" "}
+                {props.maxLeverage !== undefined
+                  ? `${props.maxLeverage.toFixed(1)}x`
+                  : "—"}
               </div>
             </div>
             <div class="flex items-center justify-between gap-3">
@@ -78,7 +81,7 @@ export const LeverageDialog = (props: LeverageDialogProps): JSX.Element => {
                   props.onLeverageChange(props.symbol, leverage)
                 }}
                 minValue={1}
-                maxValue={props.maxLeverage}
+                maxValue={props.maxLeverage ?? 1}
                 step={1}
                 class="w-full"
               />

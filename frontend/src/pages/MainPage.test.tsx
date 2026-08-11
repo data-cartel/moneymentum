@@ -52,8 +52,8 @@ vi.mock("@/hooks/useNetwork", () => ({
   })),
 }))
 
-vi.mock("@/components/ui/data-table", () => ({
-  DataTable: () => <div data-testid="data-table">DataTable</div>,
+vi.mock("@/components/ui/virtualized-data-table", () => ({
+  VirtualizedDataTable: () => <div data-testid="data-table">DataTable</div>,
 }))
 
 vi.mock("@/components/ui/date-picker", () => ({

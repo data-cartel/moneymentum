@@ -60,13 +60,15 @@ export const computeRollingSharpe = (
   const annualizationFactor = Math.sqrt(252)
   const result: TimeSeriesPoint[] = []
 
-  for (let i = windowDays - 1; i < returns.length; i++) {
-    const window = returns.slice(i - windowDays + 1, i + 1).map(p => p.value)
+  for (let index = windowDays - 1; index < returns.length; index++) {
+    const window = returns
+      .slice(index - windowDays + 1, index + 1)
+      .map(point => point.value)
     const mean = computeRollingMean(window)
     const std = computeRollingStd(window, mean)
     const sharpe = std > 0 ? (mean / std) * annualizationFactor : 0
 
-    result.push({ time: returns[i].time, value: sharpe })
+    result.push({ time: returns[index].time, value: sharpe })
   }
 
   return result
@@ -82,14 +84,16 @@ export const computeRollingSortino = (
   const annualizationFactor = Math.sqrt(252)
   const result: TimeSeriesPoint[] = []
 
-  for (let i = windowDays - 1; i < returns.length; i++) {
-    const window = returns.slice(i - windowDays + 1, i + 1).map(p => p.value)
+  for (let index = windowDays - 1; index < returns.length; index++) {
+    const window = returns
+      .slice(index - windowDays + 1, index + 1)
+      .map(point => point.value)
     const mean = computeRollingMean(window)
     const downsideStd = computeRollingDownsideStd(window, 0)
     const sortino =
       downsideStd > 0 ? (mean / downsideStd) * annualizationFactor : 0
 
-    result.push({ time: returns[i].time, value: sortino })
+    result.push({ time: returns[index].time, value: sortino })
   }
 
   return result
@@ -105,12 +109,14 @@ export const computeRollingVolatility = (
   const annualizationFactor = Math.sqrt(252)
   const result: TimeSeriesPoint[] = []
 
-  for (let i = windowDays - 1; i < returns.length; i++) {
-    const window = returns.slice(i - windowDays + 1, i + 1).map(p => p.value)
+  for (let index = windowDays - 1; index < returns.length; index++) {
+    const window = returns
+      .slice(index - windowDays + 1, index + 1)
+      .map(point => point.value)
     const mean = computeRollingMean(window)
     const std = computeRollingStd(window, mean)
 
-    result.push({ time: returns[i].time, value: std * annualizationFactor })
+    result.push({ time: returns[index].time, value: std * annualizationFactor })
   }
 
   return result

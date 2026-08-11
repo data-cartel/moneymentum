@@ -1,0 +1,22 @@
+[package]
+name = "wallet"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+mock = ["dep:tracing"]
+
+[dependencies]
+async-trait = "0.1.89"
+tracing = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Self-referential dev-dependency: enables the `mock` feature for this crate's
+# own tests via feature unification, so MockWallet and its tracing logging
+# compile under `cargo test` without making `mock` a default feature.
+wallet = { path = ".", features = ["mock"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing-test.workspace = true
+
+[lints]
+workspace = true

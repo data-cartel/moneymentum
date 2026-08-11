@@ -87,3 +87,92 @@ Structure code around features and domain concepts, not technical layers.
   metrics code, export it from `metrics/registry.ts`
 
 This keeps related code discoverable and reduces import complexity.
+
+## 7. Effect for Error Handling
+
+All async operations use Effect for typed error channels. Raw `throw`,
+`Promise.reject`, and untyped `catch` blocks are not allowed in production code.
+
+### HTTP layer (`src/lib/http.ts`)
+
+Tagged error types:
+
+- `NetworkError` -- fetch itself failed (offline, DNS, CORS)
+- `HttpStatusError` -- response not ok (carries `status` and optional `detail`)
+- `JsonParseError` -- response body not valid JSON
+- `JsonSerializeError` -- `JSON.stringify` failed (e.g. circular references)
+
+Programs:
+
+- `fetchJson<A>(url, init?)` -- GET/generic request returning parsed JSON
+- `postJson<A>(url, body, init?)` -- POST with JSON body
+- `postEmpty(url, init?)` -- POST expecting no response body
+- `fetchStreamChecked(url, init?)` -- fetch with status check, returns raw
+  `Response` for streaming
+
+### Bridge to TanStack Query
+
+`Effect.runPromise(program)` inside `queryFn`. When the Effect fails,
+`runPromise` rejects with a `FiberFailure` that wraps the typed error in its
+`Cause` -- so `query.error` is the `FiberFailure`, not the tagged error itself.
+
+```ts
+queryFn: (({ signal }) => Effect.runPromise(fetchJson<T>(url, { signal })));
+```
+
+Always forward the `signal` from TanStack Query's context into the HTTP helpers.
+
+### Displaying errors in the UI
+
+Never render `error.message` directly -- the `FiberFailure` message is generic
+("An error has occurred"). Pass `query.error` through `getErrorMessage`
+(`src/lib/error-message.ts`), which unwraps the `FiberFailure` to the tagged
+error and maps each `_tag` to display text:
+
+```tsx
+<Show when={query.error}>
+  <p>{getErrorMessage(query.error)}</p>
+</Show>;
+```
+
+Add a `case` to `getErrorMessage` whenever you introduce a new tagged error so
+every failure surfaces a user-facing message instead of falling back to the raw
+string.
+
+### Hyperliquid service (`src/services/hyperliquid.ts`)
+
+Wraps `HyperliquidClient` methods in Effect programs with typed errors:
+
+- `WalletNotConnected` -- no client available
+- `ExchangeRequestError` -- exchange API call failed
+
+Each function takes `client: HyperliquidClient | null` and returns an Effect.
+The null check is handled by `requireClient` which fails with
+`WalletNotConnected`.
+
+### Rules
+
+- **Import from submodules**: `import * as Effect from "effect/Effect"`, never
+  from the barrel `"effect"` (enforced by `@effect/eslint-plugin`)
+- **No raw fetch**: All HTTP calls go through `src/lib/http.ts`
+- **No throw/Promise.reject**: Use `Effect.fail` with a tagged error
+- **No try/catch**: Use `Effect.tryPromise` or `Effect.try`
+
+### Zero exceptions policy
+
+No new `throw`, `Promise.reject`, or `try/catch` in any code. Every failure must
+flow through Effect's typed error channel. The only permitted exceptions are:
+
+- **SolidJS context hooks** (`useWallet`, `useNetwork`, `useTheme`) -- the
+  framework requires a synchronous throw when a hook is called outside its
+  Provider. These are programmer errors, not runtime failures.
+- **App bootstrap** (`main.tsx`) -- throwing when the root DOM element is
+  missing is a fatal startup error.
+- **Imperative DOM library callbacks** (e.g. lightweight-charts in
+  `ChartComponent`) -- third-party libraries that don't support Effect. Catch at
+  the boundary and log; do not propagate.
+
+`HyperliquidClient` internals still use `throw` and `try/catch`, but these are
+fully contained by `wrapExchange` in the Effect service layer. New code inside
+`HyperliquidClient` must follow the same pattern -- any throw will be caught by
+`Effect.tryPromise` and surfaced as `ExchangeRequestError`.

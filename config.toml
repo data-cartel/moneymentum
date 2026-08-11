@@ -8,7 +8,7 @@ port = 8000
 # - ohlcv_1w.csv
 data_dir = "data"
 
-# SQLite database URL used for ingestion CQRS state and job queue.
+# SQLite database URL used for ingestion runs and job queue.
 # This matches the default used in the Nix/dev environment.
 database_url = "sqlite:./moneymentum.db"
 
@@ -19,3 +19,5 @@ log_level = "info"
 # Concurrency and retry settings for Hyperliquid requests.
 max_concurrent_requests = 1
 max_retries = 5             # so that Rust patiently retries on 429
+
+markets_refresh_token = "local-markets-refresh-token"

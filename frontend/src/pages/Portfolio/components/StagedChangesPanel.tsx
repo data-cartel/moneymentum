@@ -87,6 +87,7 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
           <For each={stagedTrades()}>
             {stagedTrade => {
               const baseSymbol = stagedTrade.underlying.split("/")[0] || "???"
+              const orderError = stagedTrade.orderError
 
               const prevWeight = stagedTrade.previousWeight ?? 0
               const nextWeight = stagedTrade.newWeight ?? prevWeight
@@ -101,37 +102,52 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
                     : "text-muted-foreground"
 
               return (
-                <div class={cn(STAGED_ROW_GRID_TEMPLATE)}>
-                  <span
-                    class={cn(
-                      "text-[10px] font-medium px-1 py-0.5 rounded w-[5ch] text-center",
-                      stagedTrade.side === "buy"
-                        ? "bg-green-500/20 text-green-500"
-                        : "bg-red-500/20 text-red-500",
-                    )}
-                  >
-                    {stagedTrade.side === "buy" ? "BUY" : "SELL"}
-                  </span>
-                  <span class="px-1 truncate font-medium text-[11px] text-left">
-                    {baseSymbol}
-                  </span>
-                  <div
-                    class={cn(
-                      "font-mono mr-2 justify-self-center grid grid-cols-[max-content_2ch_max-content] items-baseline gap-x-1",
-                      deltaClass,
-                    )}
-                  >
-                    <span class="w-[6ch] text-right">
-                      {formatUnsignedPct(prevWeight)}
+                <div class="border-b border-border/30">
+                  <div class={cn(STAGED_ROW_GRID_TEMPLATE)}>
+                    <span
+                      class={cn(
+                        "text-[10px] font-medium px-1 py-0.5 rounded w-[5ch] text-center",
+                        stagedTrade.side === "buy"
+                          ? "bg-green-500/20 text-green-500"
+                          : "bg-red-500/20 text-red-500",
+                      )}
+                    >
+                      {stagedTrade.side === "buy" ? "BUY" : "SELL"}
                     </span>
-                    <span class="w-[2ch] text-center">{arrow}</span>
-                    <span class="w-[6ch] text-right">
-                      {formatUnsignedPct(nextWeight)}
+                    <span
+                      class={cn(
+                        "px-1 truncate font-medium text-[11px] text-left",
+                        orderError && "text-destructive",
+                      )}
+                    >
+                      {baseSymbol}
+                    </span>
+                    <div
+                      class={cn(
+                        "font-mono mr-2 justify-self-center grid grid-cols-[max-content_2ch_max-content] items-baseline gap-x-1",
+                        deltaClass,
+                      )}
+                    >
+                      <span class="w-[6ch] text-right">
+                        {formatUnsignedPct(prevWeight)}
+                      </span>
+                      <span class="w-[2ch] text-center">{arrow}</span>
+                      <span class="w-[6ch] text-right">
+                        {formatUnsignedPct(nextWeight)}
+                      </span>
+                    </div>
+                    <span class="font-mono text-muted-foreground justify-self-end w-full text-right">
+                      {formatUsdPrecise(stagedTrade.notional)}
                     </span>
                   </div>
-                  <span class="font-mono text-muted-foreground justify-self-end w-full text-right">
-                    {formatUsdPrecise(stagedTrade.notional)}
-                  </span>
+                  <Show when={orderError}>
+                    <p
+                      role="alert"
+                      class="px-2 pb-1.5 text-[10px] leading-snug text-destructive"
+                    >
+                      {orderError}
+                    </p>
+                  </Show>
                 </div>
               )
             }}

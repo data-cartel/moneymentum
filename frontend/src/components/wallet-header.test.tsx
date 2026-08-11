@@ -1,15 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { render, screen, waitFor, fireEvent } from "@solidjs/testing-library"
+import { render, screen, waitFor } from "@solidjs/testing-library"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import type { ParentProps } from "solid-js"
 import { WalletHeader } from "./wallet-header"
 import { WalletProvider } from "@/contexts/WalletProvider"
 import { NetworkProvider } from "@/contexts/NetworkContext"
+import { encryptWalletPrivateKey } from "@/services/walletCredentialCrypto"
 
 const mockSwitchNetworkMutate = vi.fn()
 const mockSwitchNetworkMutateAsync = vi.fn()
 const mockUseWalletSettings = vi.fn()
+
+const TEST_PIN = "123456"
 
 vi.mock("@/hooks/useTrading", () => ({
   useWalletSettings: () => mockUseWalletSettings(),
@@ -31,13 +34,10 @@ vi.mock("@/services/hyperliquid-client", () => ({
   HyperliquidClient: class MockHyperliquidClient {
     getBalance = vi.fn()
     getCurrentPositions = vi.fn()
-    listPerpTickers = vi.fn()
-    getLeverageLimits = vi.fn()
     rebalancePositions = vi.fn()
     getNetworkMode = vi.fn()
     getWalletAddress = vi.fn()
   },
-  preloadMarkets: vi.fn().mockResolvedValue(undefined),
 }))
 
 const createWrapper = () => {
@@ -182,286 +182,63 @@ describe("WalletHeader", () => {
     })
   })
 
-  describe("wallet configuration dialog", () => {
-    it("opens dialog when clicking 'No wallet configured'", async () => {
+  describe("disconnected and locked states", () => {
+    it("does not open a dialog when clicking 'No wallet configured'", async () => {
       const user = userEvent.setup()
       render(() => <WalletHeader handleDisconnect={() => {}} />, {
         wrapper: createWrapper(),
       })
 
-      const walletButton = screen.getByText("No wallet configured")
-      await user.click(walletButton)
+      await user.click(screen.getByText("No wallet configured"))
 
-      expect(screen.getByText("Connect Wallet")).toBeInTheDocument()
-      expect(
-        screen.getByText(
-          "Enter your Hyperliquid API wallet credentials to connect.",
-        ),
-      ).toBeInTheDocument()
+      expect(screen.queryByText("Connect Wallet")).not.toBeInTheDocument()
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     })
 
-    it("shows all credential input fields when not connected", async () => {
-      const user = userEvent.setup()
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
-        wrapper: createWrapper(),
-      })
-
-      await user.click(screen.getByText("No wallet configured"))
-
-      expect(
-        screen.getByLabelText("Hyperliquid main wallet address"),
-      ).toBeInTheDocument()
-      expect(
-        screen.getByLabelText("Hyperliquid public API wallet address"),
-      ).toBeInTheDocument()
-      expect(
-        screen.getByLabelText("Hyperliquid private API wallet key"),
-      ).toBeInTheDocument()
-      expect(
-        screen.getByRole("button", { name: "Connect" }),
-      ).toBeInTheDocument()
-    })
-
-    it("shows optional vault address field", async () => {
-      const user = userEvent.setup()
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
-        wrapper: createWrapper(),
-      })
-
-      await user.click(screen.getByText("No wallet configured"))
-
-      expect(
-        screen.getByLabelText("Vault Address (Optional)"),
-      ).toBeInTheDocument()
-    })
-
-    it("shows error toast when trying to connect with empty required fields", async () => {
-      const user = userEvent.setup()
-      const { toast } = await import("solid-sonner")
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
-        wrapper: createWrapper(),
-      })
-
-      await user.click(screen.getByText("No wallet configured"))
-      await user.click(screen.getByRole("button", { name: "Connect" }))
-
-      expect(toast.error).toHaveBeenCalledWith(
-        "Please enter account address, API wallet address, and private key",
+    it("shows formatted address when wallet is locked", async () => {
+      const encrypted = await encryptWalletPrivateKey(
+        "0xMyPrivateKey",
+        TEST_PIN,
       )
-    })
-
-    it("connects wallet when valid credentials are provided", async () => {
-      const user = userEvent.setup()
-      const { toast } = await import("solid-sonner")
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
-        wrapper: createWrapper(),
-      })
-
-      await user.click(screen.getByText("No wallet configured"))
-
-      const accountAddressInput = screen.getByLabelText(
-        "Hyperliquid main wallet address",
-      )
-      const apiWalletAddressInput = screen.getByLabelText(
-        "Hyperliquid public API wallet address",
-      )
-      const privateKeyInput = screen.getByLabelText(
-        "Hyperliquid private API wallet key",
-      )
-
-      await user.type(accountAddressInput, "0xMyAccountAddress")
-      await user.type(apiWalletAddressInput, "0xMyApiWalletAddress")
-      await user.type(privateKeyInput, "0xMyPrivateKey")
-      await user.click(screen.getByRole("button", { name: "Connect" }))
-
-      expect(toast.success).toHaveBeenCalledWith("Wallet connected")
-
-      const stored = localStorage.getItem("hyperliquid-wallet")
-      expect(stored).not.toBeNull()
-      const parsed = JSON.parse(stored ?? "{}")
-      expect(parsed).toEqual({
-        accountAddress: "0xMyAccountAddress",
-        apiWalletAddress: "0xMyApiWalletAddress",
-        privateKey: "0xMyPrivateKey",
-      })
-    }, 15000)
-
-    it("stores vault address when provided", async () => {
-      const user = userEvent.setup()
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
-        wrapper: createWrapper(),
-      })
-
-      await user.click(screen.getByText("No wallet configured"))
-
-      const accountAddressInput = screen.getByLabelText(
-        "Hyperliquid main wallet address",
-      )
-      const apiWalletAddressInput = screen.getByLabelText(
-        "Hyperliquid public API wallet address",
-      )
-      const privateKeyInput = screen.getByLabelText(
-        "Hyperliquid private API wallet key",
-      )
-      const vaultAddressInput = screen.getByLabelText(
-        "Vault Address (Optional)",
-      )
-
-      await user.type(accountAddressInput, "0xMyAccountAddress")
-      await user.type(apiWalletAddressInput, "0xMyApiWalletAddress")
-      await user.type(privateKeyInput, "0xMyPrivateKey")
-      await user.type(vaultAddressInput, "0xMyVaultAddress")
-      await user.click(screen.getByRole("button", { name: "Connect" }))
-
-      const stored = localStorage.getItem("hyperliquid-wallet")
-      expect(stored).not.toBeNull()
-      const parsed = JSON.parse(stored ?? "{}")
-      expect(parsed).toEqual({
-        accountAddress: "0xMyAccountAddress",
-        apiWalletAddress: "0xMyApiWalletAddress",
-        privateKey: "0xMyPrivateKey",
-        vaultAddress: "0xMyVaultAddress",
-      })
-    }, 15000)
-
-    it("connects without vault address when not provided", async () => {
-      const user = userEvent.setup()
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
-        wrapper: createWrapper(),
-      })
-
-      await user.click(screen.getByText("No wallet configured"))
-
-      const accountAddressInput = screen.getByLabelText(
-        "Hyperliquid main wallet address",
-      )
-      const apiWalletAddressInput = screen.getByLabelText(
-        "Hyperliquid public API wallet address",
-      )
-      const privateKeyInput = screen.getByLabelText(
-        "Hyperliquid private API wallet key",
-      )
-
-      await user.type(accountAddressInput, "0xMyAccountAddress")
-      await user.type(apiWalletAddressInput, "0xMyApiWalletAddress")
-      await user.type(privateKeyInput, "0xMyPrivateKey")
-      await user.click(screen.getByRole("button", { name: "Connect" }))
-
-      const stored = localStorage.getItem("hyperliquid-wallet")
-      expect(stored).not.toBeNull()
-      const parsed = JSON.parse(stored ?? "{}")
-      expect(parsed.vaultAddress).toBeUndefined()
-    }, 10000)
-
-    it("closes dialog after successful connection", async () => {
-      const user = userEvent.setup()
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
-        wrapper: createWrapper(),
-      })
-
-      await user.click(screen.getByText("No wallet configured"))
-
-      const accountAddressInput = screen.getByLabelText(
-        "Hyperliquid main wallet address",
-      )
-      const apiWalletAddressInput = screen.getByLabelText(
-        "Hyperliquid public API wallet address",
-      )
-      const privateKeyInput = screen.getByLabelText(
-        "Hyperliquid private API wallet key",
-      )
-
-      await user.type(accountAddressInput, "0xMyAccountAddress")
-      await user.type(apiWalletAddressInput, "0xMyApiWalletAddress")
-      await user.type(privateKeyInput, "0xMyPrivateKey")
-      await user.click(screen.getByRole("button", { name: "Connect" }))
-
-      // Kobalte keeps dialog content mounted during close animation;
-      // jsdom never fires animationend, so check data-closed instead of DOM absence.
-      await waitFor(() => {
-        const dialog = screen.queryByRole("dialog")
-        if (dialog) {
-          expect(dialog).toHaveAttribute("data-closed")
-        }
-      })
-    }, 20000)
-
-    it("clears input fields after successful connection", async () => {
-      const user = userEvent.setup()
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
-        wrapper: createWrapper(),
-      })
-
-      await user.click(screen.getByText("No wallet configured"))
-
-      const accountAddressInput = screen.getByLabelText(
-        "Hyperliquid main wallet address",
-      )
-      const apiWalletAddressInput = screen.getByLabelText(
-        "Hyperliquid public API wallet address",
-      )
-      const privateKeyInput = screen.getByLabelText(
-        "Hyperliquid private API wallet key",
-      )
-
-      await user.type(accountAddressInput, "0xMyAccountAddress")
-      await user.type(apiWalletAddressInput, "0xMyApiWalletAddress")
-      await user.type(privateKeyInput, "0xMyPrivateKey")
-      await user.click(screen.getByRole("button", { name: "Connect" }))
-
-      // Wait for dialog to enter closed state (jsdom: animationend never fires)
-      await waitFor(() => {
-        const dialog = screen.queryByRole("dialog")
-        if (dialog) {
-          expect(dialog).toHaveAttribute("data-closed")
-        }
-      })
-
-      // In jsdom, Kobalte's closed overlay blocks pointer events because CSS
-      // animations never complete. Use fireEvent to bypass this jsdom limitation.
-      fireEvent.click(screen.getByText("No wallet configured"))
-
-      const newAccountAddressInput = screen.getByLabelText(
-        "Hyperliquid main wallet address",
-      )
-      const newApiWalletAddressInput = screen.getByLabelText(
-        "Hyperliquid public API wallet address",
-      )
-      const newPrivateKeyInput = screen.getByLabelText(
-        "Hyperliquid private API wallet key",
-      )
-
-      expect(newAccountAddressInput).toHaveValue("")
-      expect(newApiWalletAddressInput).toHaveValue("")
-      expect(newPrivateKeyInput).toHaveValue("")
-    }, 20000)
-
-    it("auto-opens dialog when autoOpen prop is true and not connected", async () => {
-      render(() => <WalletHeader autoOpen handleDisconnect={() => {}} />, {
-        wrapper: createWrapper(),
-      })
-
-      await waitFor(() => {
-        expect(screen.getByText("Connect Wallet")).toBeInTheDocument()
-      })
-    })
-
-    it("does not auto-open dialog when connected even with autoOpen prop", async () => {
-      mockUseWalletSettings.mockReturnValue({
-        data: () => ({
-          accountAddress: "0xConnectedAccountAddress",
-          isTestnet: true,
+      localStorage.setItem(
+        "hyperliquid-wallet",
+        JSON.stringify({
+          accountAddress: "0xLockedAccountAddress",
+          apiWalletAddress: "0xLockedApiWalletAddress",
+          ...encrypted,
         }),
-        isConnected: () => true,
-      })
+      )
 
-      render(() => <WalletHeader autoOpen handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader handleDisconnect={() => {}} />, {
         wrapper: createWrapper(),
       })
 
-      await waitFor(() => {
-        expect(screen.queryByText("Connect Wallet")).not.toBeInTheDocument()
+      expect(screen.getByText("0xLock...ress")).toBeInTheDocument()
+    })
+
+    it("does not open unlock dialog when clicking locked address", async () => {
+      const user = userEvent.setup()
+      const encrypted = await encryptWalletPrivateKey(
+        "0xMyPrivateKey",
+        TEST_PIN,
+      )
+      localStorage.setItem(
+        "hyperliquid-wallet",
+        JSON.stringify({
+          accountAddress: "0xLockedAccountAddress",
+          apiWalletAddress: "0xLockedApiWalletAddress",
+          ...encrypted,
+        }),
+      )
+
+      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+        wrapper: createWrapper(),
       })
+
+      await user.click(screen.getByText("0xLock...ress"))
+
+      expect(screen.queryByText("Unlock Wallet")).not.toBeInTheDocument()
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     })
   })
 
@@ -595,14 +372,15 @@ describe("WalletHeader", () => {
     })
   })
 
-  describe("wallet button styling", () => {
-    it("has hover styling to indicate clickability", () => {
+  describe("wallet status styling", () => {
+    it("renders disconnected state as non-interactive text", () => {
       render(() => <WalletHeader handleDisconnect={() => {}} />, {
         wrapper: createWrapper(),
       })
 
-      const walletButton = screen.getByText("No wallet configured")
-      expect(walletButton).toHaveClass("cursor-pointer")
+      const walletStatus = screen.getByText("No wallet configured")
+      expect(walletStatus.tagName).toBe("SPAN")
+      expect(walletStatus).not.toHaveClass("cursor-pointer")
     })
   })
 })

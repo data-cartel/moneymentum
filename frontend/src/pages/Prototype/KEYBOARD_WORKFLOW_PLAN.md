@@ -4,14 +4,14 @@
 
 A user should be able to complete this ENTIRE flow using ONLY keyboard:
 
-1. **Open app** → Screener focused by default
-2. **Press `2`** → Focus positions panel
-3. **Press `j`/`k`** → Navigate to an underlying (BTC, ETH, etc.)
-4. **Press `o`** → Expand the underlying to see instruments
-5. **Press `j`/`k`** → Navigate to specific instrument (perp, spot, option)
-6. **Press `w`** → Start editing weight, type value, press Enter
-7. **Press `[` or `]`** → Adjust leverage (GLOBALLY, from any panel)
-8. **Press `x`** → Execute all staged trades
+1. **Open app** -> Screener focused by default
+2. **Press `2`** -> Focus positions panel
+3. **Press `j`/`k`** -> Navigate to an underlying (BTC, ETH, etc.)
+4. **Press `o`** -> Expand the underlying to see instruments
+5. **Press `j`/`k`** -> Navigate to specific instrument (perp, spot, option)
+6. **Press `w`** -> Start editing weight, type value, press Enter
+7. **Press `[` or `]`** -> Adjust leverage (GLOBALLY, from any panel)
+8. **Press `x`** -> Execute all staged trades
 
 NO MOUSE CLICKS ALLOWED.
 
@@ -54,11 +54,11 @@ NO MOUSE CLICKS ALLOWED.
 
 ## Implementation Order (TDD)
 
-1. ✅ Write failing test describing exact workflow
-2. ⏳ Add global `[`/`]` handlers for leverage
-3. ⏳ Add `x` handler for execute
-4. ⏳ Verify weight editing works with `w` key
-5. ⏳ Make test pass
+1. [x] Write failing test describing exact workflow
+2. [ ] Add global `[`/`]` handlers for leverage
+3. [ ] Add `x` handler for execute
+4. [ ] Verify weight editing works with `w` key
+5. [ ] Make test pass
 
 ## Progress Checkpoint
 

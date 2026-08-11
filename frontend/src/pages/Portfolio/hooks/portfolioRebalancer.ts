@@ -1,8 +1,131 @@
 import { type OrderSide, type RebalanceParams } from "@/hooks/useTrading"
+import type { OrderResult } from "@/services/hyperliquid-client"
 
 import type { PortfolioInterface } from "@/pages/Portfolio/hooks/usePortfolioState"
 
 import { MIN_USD } from "@/pages/Portfolio/hooks/usePortfolioState"
+
+const rebalanceOrderUserMessage = (order: OrderResult): string => {
+  if (order.message) {
+    return order.message
+  }
+  if (order.status === "timed_out") {
+    return "Order did not confirm in time — portfolio was refreshed from the exchange"
+  }
+  return "Order was not filled"
+}
+
+export interface ExchangePositionRow {
+  symbol: string
+  side: OrderSide
+  notional: number
+  leverage: number
+}
+
+export const portfolioMapFromExchangePositions = (
+  positions: ExchangePositionRow[],
+): {
+  map: Record<string, PortfolioInterface | undefined>
+  totalNotional: number
+} => {
+  const totalNotional = positions.reduce(
+    (sum, position) => sum + position.notional,
+    0,
+  )
+  const map = Object.fromEntries(
+    positions.map(position => [
+      position.symbol,
+      {
+        symbol: position.symbol,
+        side: position.side,
+        leverage: position.leverage || 1,
+        notional: position.notional,
+      },
+    ]),
+  ) as Record<string, PortfolioInterface | undefined>
+
+  return { map, totalNotional }
+}
+
+export const targetAndArchiveAfterRebalance = (
+  target: Record<string, PortfolioInterface | undefined>,
+  deletedArchive: Record<string, PortfolioInterface | undefined>,
+  current: Record<string, PortfolioInterface | undefined>,
+  actions: RebalanceAction[],
+  orders: OrderResult[],
+): {
+  nextTarget: Record<string, PortfolioInterface | undefined>
+  nextDeletedArchive: Record<string, PortfolioInterface | undefined>
+  errorsBySymbol: Record<string, string>
+} => {
+  const actionBySymbol = new Map(actions.map(action => [action.symbol, action]))
+  const orderBySymbol = new Map(orders.map(order => [order.symbol, order]))
+
+  const nextTarget = Object.fromEntries(
+    Object.entries(current)
+      .filter(
+        (entry): entry is [string, PortfolioInterface] =>
+          entry[1] !== undefined,
+      )
+      .map(([symbol, position]) => [symbol, { ...position }]),
+  ) as Record<string, PortfolioInterface | undefined>
+
+  const symbolsToDropFromTarget = new Set<string>()
+
+  for (const order of orders) {
+    if (order.status === "filled") {
+      continue
+    }
+
+    const action = actionBySymbol.get(order.symbol)
+    const priorTarget = target[order.symbol]
+
+    if (action?.kind === "close") {
+      symbolsToDropFromTarget.add(order.symbol)
+      continue
+    }
+
+    if (priorTarget !== undefined) {
+      nextTarget[order.symbol] = { ...priorTarget }
+    }
+  }
+
+  const filteredNextTarget =
+    symbolsToDropFromTarget.size === 0
+      ? nextTarget
+      : (Object.fromEntries(
+          Object.entries(nextTarget).filter(
+            ([symbol]) => !symbolsToDropFromTarget.has(symbol),
+          ),
+        ) as Record<string, PortfolioInterface | undefined>)
+
+  const nextDeletedArchive = Object.fromEntries(
+    Object.entries(deletedArchive)
+      .filter((entry): entry is [string, PortfolioInterface] => {
+        const [symbol, position] = entry
+        if (position === undefined) {
+          return false
+        }
+
+        const order = orderBySymbol.get(symbol)
+        const action = actionBySymbol.get(symbol)
+        return !(
+          order !== undefined &&
+          action?.kind === "close" &&
+          order.status === "filled"
+        )
+      })
+      .map(([symbol, position]) => [symbol, { ...position }]),
+  ) as Record<string, PortfolioInterface | undefined>
+
+  const errorsBySymbol = Object.fromEntries(
+    orders
+      .filter(order => order.status !== "filled")
+      .map(order => [order.symbol, rebalanceOrderUserMessage(order)]),
+  ) as Record<string, string>
+
+  return { nextTarget: filteredNextTarget, nextDeletedArchive, errorsBySymbol }
+}
 
 export type RebalanceAction =
   | {
@@ -105,6 +228,15 @@ export const diffPortfolios = (
     }
 
     if (!targetPosition) {
+      continue
+    }
+
+    if (currentPosition && targetPosition.notional <= NOTIONAL_EPSILON) {
+      actions.push({
+        kind: "close",
+        symbol,
+        side: currentPosition.side,
+      })
       continue
     }
 

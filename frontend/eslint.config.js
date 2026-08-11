@@ -2,6 +2,7 @@ import js from "@eslint/js"
 import globals from "globals"
 import solid from "eslint-plugin-solid/configs/typescript"
 import tseslint from "typescript-eslint"
+import effectPlugin from "@effect/eslint-plugin"
 
 export default tseslint.config(
   { ignores: ["dist", "node_modules", "coverage"] },
@@ -58,6 +59,15 @@ export default tseslint.config(
       "curly": ["error", "multi-line"],
       "no-throw-literal": "error",
       "func-style": ["error", "expression"],
+
+      // Effect
+      "@effect/no-import-from-barrel-package": [
+        "error",
+        { packageNames: ["effect"] },
+      ],
+    },
+    plugins: {
+      "@effect": effectPlugin,
     },
   },
   // Test files - relax some rules

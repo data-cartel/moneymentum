@@ -232,10 +232,10 @@ const PrototypePage = () => {
     })
 
     const hexToRgba = (hex: string, alpha: number) => {
-      const r = parseInt(hex.slice(1, 3), 16)
-      const g = parseInt(hex.slice(3, 5), 16)
-      const b = parseInt(hex.slice(5, 7), 16)
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`
+      const red = parseInt(hex.slice(1, 3), 16)
+      const green = parseInt(hex.slice(3, 5), 16)
+      const blue = parseInt(hex.slice(5, 7), 16)
+      return `rgba(${red}, ${green}, ${blue}, ${alpha})`
     }
 
     for (const metric of metrics) {
@@ -301,7 +301,7 @@ const PrototypePage = () => {
 
   const greeksMap = createMemo(() => {
     const map = new Map<string, (typeof greeks)[0]>()
-    for (const g of greeks) map.set(g.symbol, g)
+    for (const greek of greeks) map.set(greek.symbol, greek)
     return map
   })
 

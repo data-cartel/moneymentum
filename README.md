@@ -14,9 +14,10 @@ Moneymentum makes those exposures legible and adjustable.
   cross-account leverage, staged trade preview, execution against Hyperliquid
   perps.
 - **Frontend prototype** at `/prototype`: design reference for the target UI.
-- **Backend** (active development): Rust + Rocket API, Polars analytics, cqrs-es
-  event store on SQLite. Ingests Hyperliquid OHLCV and funding rates; computes
-  rolling beta to BTC.
+- **Backend** (active development): Rust + Axum API, Polars analytics,
+  SQLite-backed ingestion runs and job queue. Ingests Hyperliquid
+  open-high-low-close-volume (OHLCV) and funding rates; computes rolling beta to
+  BTC and serves per-asset factor scores via `GET /factors/<timeframe>`.
 - **Vault program** (planned): Anchor program on Solana for non-custodial
   managed deposits with two-phase withdrawal.
 
@@ -24,13 +25,13 @@ See [ROADMAP.md](./ROADMAP.md) for what's next.
 
 ## Documentation
 
-| Doc                                    | Purpose                                    |
-| -------------------------------------- | ------------------------------------------ |
-| [SPEC.md](./SPEC.md)                   | Product vision and target architecture     |
-| [ROADMAP.md](./ROADMAP.md)             | Themed stories ordered by priority         |
-| [stories/](./stories/README.md)        | User and dev stories with acceptance tests |
-| [contributions.md](./contributions.md) | XP workflow for contributors               |
-| [AGENTS.md](./AGENTS.md)               | Per-repo rules for AI coding agents        |
+| Doc                                  | Purpose                                            |
+| ------------------------------------ | -------------------------------------------------- |
+| [SPEC.md](./SPEC.md)                 | Product vision and target architecture             |
+| [ROADMAP.md](./ROADMAP.md)           | Themed stories ordered by priority                 |
+| [stories/](./stories/README.md)      | User and dev stories with acceptance tests         |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Extreme Programming (XP) workflow for contributors |
+| [AGENTS.md](./AGENTS.md)             | Per-repo rules for AI coding agents                |
 
 ## Quick start
 
@@ -42,7 +43,7 @@ See [ROADMAP.md](./ROADMAP.md) for what's next.
 ### Setup
 
 ```bash
-git clone https://github.com/data-cartel/moneymentum.git
+git clone https://github.com/dataclique/moneymentum.git
 cd moneymentum
 direnv allow  # or: nix develop
 ```
@@ -110,15 +111,30 @@ nix run .#remote         # SSH
 nix run .#tfEditVars
 ```
 
-> **DANGER -- destructive: `nix run .#tfDestroy` permanently deletes the
-> environment's infrastructure.** It is not a routine command. Before running,
-> pin the target environment (e.g., `export ENV=staging`) and require an
-> explicit confirmation flag (e.g., `TF_DESTROY_CONFIRM=1` or `--confirm`).
-> Never run against `production` without a separate, written approval.
-
-```bash
-ENV=staging TF_DESTROY_CONFIRM=1 nix run .#tfDestroy -- --confirm
-```
-
 Infrastructure commands use age-encrypted state. The `-i` flag selects a custom
 SSH identity (defaults to `~/.ssh/id_ed25519`).
+
+`master` deploys automatically through the `Deploy` GitHub Actions workflow. The
+workflow pins the SSH host key from `keys.nix`, resolves the host IP from
+encrypted Terraform state, builds the frontend with Bun and cached dependencies,
+runs `nix run .#deployServer` for NixOS and backend services, then runs
+`nix run .#deployFrontend` to publish the static frontend files. The
+`post-deploy-smoke-test` job verifies the public frontend and `/api/health`.
+
+Manual deployment uses the same split flow:
+
+```bash
+nix develop --impure .#frontend --command bash -c 'cd frontend && bun install --frozen-lockfile && bun run build'
+nix run .#deployServer
+nix run .#deployFrontend
+```
+
+Set `DEPLOY_FRONTEND_URL` and `DEPLOY_HEALTH_URL` repository variables when the
+public checks should use a domain or HTTPS instead of the raw droplet IP. Set
+`DEPLOY_SMOKE_HOST` when the post-deploy smoke test needs an explicit `Host`
+header, such as targeting a domain behind a load balancer; set
+`DEPLOY_SMOKE_INSECURE` to `true` only when those frontend and `/api/health`
+checks must skip TLS verification for self-signed certificates.
+
+There is no standalone destroy command. To remove or reprovision resources, edit
+`infra/main.tf`, inspect `nix run .#tfPlan`, then apply the reviewed plan.

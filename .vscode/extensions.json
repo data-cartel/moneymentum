@@ -1,9 +1,3 @@
 {
-  "recommendations": [
-    "mkhl.direnv",
-    "jnoortheen.nix-ide",
-    "ms-python.python",
-    "charliermarsh.ruff",
-    "matangover.mypy"
-  ]
+  "recommendations": ["mkhl.direnv", "jnoortheen.nix-ide"]
 }

@@ -39,53 +39,53 @@ export const PerformancePanel = () => {
           />
           <div class="flex justify-between pb-2 border-b border-border/30">
             <span class="text-muted-foreground">Total Return</span>
-            <span class="font-mono text-muted-foreground">TODO</span>
+            <span class="font-mono text-muted-foreground">coming soon...</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">Sharpe</span>
-            <span class="font-mono">TODO</span>
+            <span class="font-mono">coming soon...</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">Sortino</span>
-            <span class="font-mono">TODO</span>
+            <span class="font-mono">coming soon...</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">Calmar</span>
-            <span class="font-mono">TODO</span>
+            <span class="font-mono">coming soon...</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">Max Drawdown</span>
-            <span class="text-red-400 font-mono">TODO</span>
+            <span class="text-red-400 font-mono">coming soon...</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">Win Rate</span>
-            <span class="font-mono">TODO</span>
+            <span class="font-mono">coming soon...</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">Profit Factor</span>
-            <span class="font-mono">TODO</span>
+            <span class="font-mono">coming soon...</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">Volatility</span>
-            <span class="font-mono">TODO</span>
+            <span class="font-mono">coming soon...</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">Beta</span>
-            <span class="font-mono">TODO</span>
+            <span class="font-mono">coming soon...</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">VaR 95%</span>
-            <span class="text-red-400 font-mono">TODO</span>
+            <span class="text-red-400 font-mono">coming soon...</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">VaR 99%</span>
-            <span class="text-red-400 font-mono">TODO</span>
+            <span class="text-red-400 font-mono">coming soon...</span>
           </div>
         </div>
         {/* Chart placeholder */}
         <div class="flex-1 min-w-0 p-2">
           <div class="w-full h-full border border-dashed border-border/50 rounded flex items-center justify-center text-[10px] text-muted-foreground">
-            TODO: performance chart
+            coming soon...
           </div>
         </div>
       </div>
