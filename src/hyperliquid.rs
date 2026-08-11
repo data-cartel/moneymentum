@@ -10,10 +10,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 use chrono::{DateTime, Duration, Utc};
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::stream::{self, StreamExt};
 use hyperliquid_rust_sdk::InfoClient;
 use thiserror::Error;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 use url::Url;
 
 use rust_decimal::Decimal;
@@ -39,6 +39,8 @@ pub(crate) enum HyperliquidError {
     CandleFetch { market: Market, source: Box<Self> },
     #[error("funding rate fetch for {} failed: {source}", market.as_str())]
     FundingFetch { market: Market, source: Box<Self> },
+    #[error("{} of {total} market fetches failed: [{}]", failures.len(), failures.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))]
+    PartialFetch { total: usize, failures: Vec<Self> },
     #[error(transparent)]
     Candle(#[from] CandleError),
     #[error(transparent)]
@@ -375,7 +377,7 @@ impl<H: ?Sized + Hyperliquid> CandleIngester<H> {
             .map(|market| (market.clone(), start_for_all_markets))
             .collect();
 
-        let candle_batches: Vec<Vec<Candle>> = stream::iter(market_starts)
+        let fetch_results: Vec<Result<Vec<Candle>, HyperliquidError>> = stream::iter(market_starts)
             .map(|(market, start)| {
                 let client = Arc::clone(&self.client);
                 async move {
@@ -396,11 +398,27 @@ impl<H: ?Sized + Hyperliquid> CandleIngester<H> {
                 }
             })
             .buffer_unordered(self.max_concurrent_requests)
-            .try_collect()
-            .await?;
+            .collect()
+            .await;
+
+        let (candle_batches, failures): (Vec<Vec<Candle>>, Vec<HyperliquidError>) =
+            fetch_results.into_iter().fold(
+                (Vec::new(), Vec::new()),
+                |(mut successes, mut failures), fetch_result| {
+                    match fetch_result {
+                        Ok(candles) => successes.push(candles),
+                        Err(failure) => failures.push(failure),
+                    }
+                    (successes, failures)
+                },
+            );
+
+        for failure in &failures {
+            warn!(error = %failure, "market fetch failed; continuing ingestion");
+        }
 
         let all_candles: Vec<Candle> = candle_batches.into_iter().flatten().collect();
-        if all_candles.is_empty() {
+        if all_candles.is_empty() && failures.is_empty() {
             info!("no new candles");
             return Ok(());
         }
@@ -408,13 +426,22 @@ impl<H: ?Sized + Hyperliquid> CandleIngester<H> {
         let market_count = markets.len();
         let candle_count = all_candles.len();
 
-        let new_df = candles_to_dataframe(all_candles).await?;
-        let merged = dataframe::merge_and_deduplicate(existing, new_df).await?;
-        let row_count = merged.height();
+        if !all_candles.is_empty() {
+            let new_df = candles_to_dataframe(all_candles).await?;
+            let merged = dataframe::merge_and_deduplicate(existing, new_df).await?;
+            let row_count = merged.height();
 
-        let csv_path = path.display().to_string();
-        dataframe::write_csv(path, merged).await?;
-        info!(rows = row_count, path = csv_path, "candles csv written");
+            let csv_path = path.display().to_string();
+            dataframe::write_csv(path, merged).await?;
+            info!(rows = row_count, path = csv_path, "candles csv written");
+        }
+
+        if !failures.is_empty() {
+            return Err(HyperliquidError::PartialFetch {
+                total: market_count,
+                failures,
+            });
+        }
 
         info!(
             markets = market_count,
@@ -465,33 +492,50 @@ impl<H: ?Sized + Hyperliquid> FundingRateIngester<H> {
             .map(|market| (market.clone(), start_for_all_markets))
             .collect();
 
-        let rate_batches: Vec<Vec<FundingRate>> = stream::iter(market_starts)
-            .map(|(market, start)| {
-                let client = Arc::clone(&self.client);
-                async move {
-                    debug!(market = market.as_str(), "fetching funding rates");
-                    let rates =
-                        client
-                            .fetch_funding_rates(&market, start)
-                            .await
-                            .map_err(|source| HyperliquidError::FundingFetch {
-                                market: market.clone(),
-                                source: Box::new(source),
-                            })?;
-                    debug!(
-                        market = market.as_str(),
-                        count = rates.len(),
-                        "fetched funding rates"
-                    );
-                    Ok::<_, HyperliquidError>(rates)
-                }
-            })
-            .buffer_unordered(self.max_concurrent_requests)
-            .try_collect()
-            .await?;
+        let fetch_results: Vec<Result<Vec<FundingRate>, HyperliquidError>> =
+            stream::iter(market_starts)
+                .map(|(market, start)| {
+                    let client = Arc::clone(&self.client);
+                    async move {
+                        debug!(market = market.as_str(), "fetching funding rates");
+                        let rates =
+                            client
+                                .fetch_funding_rates(&market, start)
+                                .await
+                                .map_err(|source| HyperliquidError::FundingFetch {
+                                    market: market.clone(),
+                                    source: Box::new(source),
+                                })?;
+                        debug!(
+                            market = market.as_str(),
+                            count = rates.len(),
+                            "fetched funding rates"
+                        );
+                        Ok::<_, HyperliquidError>(rates)
+                    }
+                })
+                .buffer_unordered(self.max_concurrent_requests)
+                .collect()
+                .await;
+
+        let (rate_batches, failures): (Vec<Vec<FundingRate>>, Vec<HyperliquidError>) =
+            fetch_results.into_iter().fold(
+                (Vec::new(), Vec::new()),
+                |(mut successes, mut failures), fetch_result| {
+                    match fetch_result {
+                        Ok(rates) => successes.push(rates),
+                        Err(failure) => failures.push(failure),
+                    }
+                    (successes, failures)
+                },
+            );
+
+        for failure in &failures {
+            warn!(error = %failure, "market fetch failed; continuing ingestion");
+        }
 
         let all_rates: Vec<FundingRate> = rate_batches.into_iter().flatten().collect();
-        if all_rates.is_empty() {
+        if all_rates.is_empty() && failures.is_empty() {
             info!("no new funding rates");
             return Ok(());
         }
@@ -499,17 +543,26 @@ impl<H: ?Sized + Hyperliquid> FundingRateIngester<H> {
         let market_count = markets.len();
         let rate_count = all_rates.len();
 
-        let new_df = funding::funding_rates_to_dataframe(all_rates).await?;
-        let merged = dataframe::merge_and_deduplicate(existing, new_df).await?;
-        let row_count = merged.height();
+        if !all_rates.is_empty() {
+            let new_df = funding::funding_rates_to_dataframe(all_rates).await?;
+            let merged = dataframe::merge_and_deduplicate(existing, new_df).await?;
+            let row_count = merged.height();
 
-        let csv_path = path.display().to_string();
-        dataframe::write_csv(path, merged).await?;
-        info!(
-            rows = row_count,
-            path = csv_path,
-            "funding rates csv written"
-        );
+            let csv_path = path.display().to_string();
+            dataframe::write_csv(path, merged).await?;
+            info!(
+                rows = row_count,
+                path = csv_path,
+                "funding rates csv written"
+            );
+        }
+
+        if !failures.is_empty() {
+            return Err(HyperliquidError::PartialFetch {
+                total: market_count,
+                failures,
+            });
+        }
 
         info!(
             markets = market_count,
@@ -750,6 +803,7 @@ mod tests {
         );
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn candle_ingester_error_names_the_failing_market() {
         let data_dir = TempDir::new().unwrap();
@@ -770,11 +824,34 @@ mod tests {
             "the ingestion error should name the failing market: {error}"
         );
         assert!(
-            matches!(error, HyperliquidError::CandleFetch { ref market, .. } if market.as_str() == "ETH"),
-            "expected CandleFetch for ETH, got: {error:?}"
+            matches!(
+                error,
+                HyperliquidError::PartialFetch { total: 2, ref failures }
+                    if failures.len() == 1
+                        && matches!(
+                            failures[0],
+                            HyperliquidError::CandleFetch { ref market, .. }
+                                if market.as_str() == "ETH"
+                        )
+            ),
+            "expected PartialFetch with a single CandleFetch for ETH, got: {error:?}"
+        );
+
+        let persisted = dataframe::read_csv(data_dir.path().join(Timeframe::OneHour.file_name()))
+            .await
+            .unwrap();
+        assert!(
+            persisted.is_some_and(|df| df.height() > 0),
+            "successful market data must be persisted despite the ETH failure"
+        );
+
+        assert!(
+            logs_contain_at(Level::WARN, &["market fetch failed", "ETH"]),
+            "each failed market must be warned about"
         );
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn funding_ingester_error_names_the_failing_market() {
         let data_dir = TempDir::new().unwrap();
@@ -795,8 +872,30 @@ mod tests {
             "the ingestion error should name the failing market: {error}"
         );
         assert!(
-            matches!(error, HyperliquidError::FundingFetch { ref market, .. } if market.as_str() == "ETH"),
-            "expected FundingFetch for ETH, got: {error:?}"
+            matches!(
+                error,
+                HyperliquidError::PartialFetch { total: 2, ref failures }
+                    if failures.len() == 1
+                        && matches!(
+                            failures[0],
+                            HyperliquidError::FundingFetch { ref market, .. }
+                                if market.as_str() == "ETH"
+                        )
+            ),
+            "expected PartialFetch with a single FundingFetch for ETH, got: {error:?}"
+        );
+
+        let persisted = dataframe::read_csv(data_dir.path().join(funding::file_name()))
+            .await
+            .unwrap();
+        assert!(
+            persisted.is_some_and(|df| df.height() > 0),
+            "successful market data must be persisted despite the ETH failure"
+        );
+
+        assert!(
+            logs_contain_at(Level::WARN, &["market fetch failed", "ETH"]),
+            "each failed market must be warned about"
         );
     }
 
