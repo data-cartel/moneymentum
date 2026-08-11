@@ -6,16 +6,22 @@
 //! always sorted last and tagged with a `missing` flag.
 
 use std::path::Path;
+use std::sync::Arc;
 
+use axum::Json;
+use axum::extract::{Path as AxumPath, State};
+use axum::http::StatusCode;
+use axum::response::Response;
 use polars::prelude::{
     DataFrame, IntoLazy, JsonFormat, JsonWriter, PolarsError, SerWriter, SortMultipleOptions, col,
 };
 use serde::Deserialize;
 use thiserror::Error;
-use tracing::{debug, instrument};
+use tracing::{debug, error, instrument};
 
 use crate::factors::{ReturnsError, compute_factors};
 use crate::timeframe::Timeframe;
+use crate::{AppState, raw_json};
 
 /// A factor the screener can rank the perp universe by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -140,6 +146,24 @@ impl RankFactor {
         match self {
             Self::Beta | Self::Momentum | Self::Carry | Self::Sharpe => SortDirection::Descending,
             Self::Volatility => SortDirection::Ascending,
+        }
+    }
+}
+
+/// `POST /screener/<timeframe>` -- ranks the perp universe by the requested factor.
+pub(crate) async fn post_screener(
+    State(state): State<Arc<AppState>>,
+    AxumPath(timeframe): AxumPath<String>,
+    Json(body): Json<ScreenerRequest>,
+) -> Result<Response, StatusCode> {
+    let timeframe =
+        Timeframe::from_interval_string(&timeframe).ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
+    match screen(&state.config.data_dir, timeframe, &body).await {
+        Ok(json) => Ok(raw_json(json)),
+        Err(ScreenerError::Factors(ReturnsError::NoData { .. })) => Err(StatusCode::NOT_FOUND),
+        Err(err) => {
+            error!(error = %err, "failed to screen perps");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
 }

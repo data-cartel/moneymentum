@@ -15,16 +15,25 @@
 //! aggregate keys or bare strings, so adding a venue or instrument class is one
 //! enum variant plus an adapter with no change to this aggregate.
 
-use event_sorcery::{Column, DomainEvent, EventSourced, JobQueue, Nil, Table};
+use axum::Json;
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::http::StatusCode;
+use event_sorcery::{
+    AggregateError, Column, DomainEvent, EventSourced, JobQueue, LifecycleError, Nil, SendError,
+    Table,
+};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display};
 use std::str::FromStr;
+use std::sync::Arc;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::finance::Symbol;
 use crate::venue::VenueRef;
+use crate::{ApiError, AppState, api_error, bad_request, finite_decimal};
 
 /// Opaque, server-minted identity for a portfolio.
 ///
@@ -479,6 +488,208 @@ impl From<&TargetRevision> for TargetView {
             leverage: target.leverage.0,
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CreatePortfolioRequest {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RenamePortfolioRequest {
+    name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PortfolioCreatedResponse {
+    id: PortfolioId,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReviseTargetRequest {
+    weights: HashMap<String, f64>,
+    leverage: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListPortfoliosQuery {
+    status: Option<String>,
+}
+
+/// `POST /portfolio` -- opens a new portfolio under a freshly minted id.
+pub(crate) async fn post_portfolio_create(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreatePortfolioRequest>,
+) -> Result<(StatusCode, Json<PortfolioCreatedResponse>), ApiError> {
+    let name = PortfolioName::new(&body.name).map_err(|err| bad_request(&err.to_string()))?;
+    let id = PortfolioId::generate();
+
+    state
+        .portfolio_store
+        .send(
+            &id,
+            PortfolioCommand::Open {
+                name,
+                base_currency: BaseCurrency::Usdc,
+            },
+        )
+        .await
+        .map_err(|err| classify_portfolio_send_error(&err, "failed to open portfolio"))?;
+
+    debug!(portfolio_id = %id, "portfolio opened");
+    Ok((StatusCode::CREATED, Json(PortfolioCreatedResponse { id })))
+}
+
+/// `POST /portfolio/<id>/target` -- replaces a portfolio's target with a new
+/// revision of perp weights + leverage.
+pub(crate) async fn post_portfolio_target(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<ReviseTargetRequest>,
+) -> Result<StatusCode, ApiError> {
+    let portfolio_id =
+        PortfolioId::from_str(&id).map_err(|_| bad_request("portfolio id is not a valid uuid"))?;
+
+    let weights = body
+        .weights
+        .iter()
+        .map(|(symbol, weight)| {
+            let weight =
+                finite_decimal(*weight).ok_or_else(|| bad_request("weights must be finite"))?;
+            Ok((Symbol::from_raw(symbol), weight))
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let leverage =
+        finite_decimal(body.leverage).ok_or_else(|| bad_request("leverage must be finite"))?;
+
+    let target = TargetRevision::from_hyperliquid_perp_weights(weights, leverage)
+        .map_err(|err| bad_request(&err.to_string()))?;
+
+    state
+        .portfolio_store
+        .send(&portfolio_id, PortfolioCommand::ReviseTarget { target })
+        .await
+        .map_err(|err| classify_portfolio_send_error(&err, "failed to revise portfolio target"))?;
+
+    debug!(portfolio_id = %id, "portfolio target revised");
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// `GET /portfolio/<id>` -- a portfolio's current state, read from its projection.
+pub(crate) async fn get_portfolio(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<PortfolioView>, StatusCode> {
+    let portfolio_id = PortfolioId::from_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let portfolio = state
+        .portfolio_projection
+        .load(&portfolio_id)
+        .await
+        .map_err(|err| {
+            error!(error = %err, "failed to load portfolio");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(portfolio.to_view(&portfolio_id)))
+}
+
+/// `GET /portfolio` -- lists portfolios, optionally restricted to a single status.
+pub(crate) async fn list_portfolios(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ListPortfoliosQuery>,
+) -> Result<Json<Vec<PortfolioView>>, StatusCode> {
+    let portfolios = match query.status.as_deref() {
+        Some(raw) => {
+            let status = PortfolioStatus::from_query(raw).ok_or(StatusCode::BAD_REQUEST)?;
+            state
+                .portfolio_projection
+                .filter(STATUS, &status)
+                .await
+                .map_err(|err| {
+                    error!(error = %err, "failed to list portfolios by status");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?
+        }
+        None => state.portfolio_projection.load_all().await.map_err(|err| {
+            error!(error = %err, "failed to list portfolios");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?,
+    };
+
+    let views = portfolios
+        .iter()
+        .map(|(id, portfolio)| portfolio.to_view(id))
+        .collect();
+    Ok(Json(views))
+}
+
+/// `POST /portfolio/<id>/rename` -- renames a portfolio.
+pub(crate) async fn post_portfolio_rename(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<RenamePortfolioRequest>,
+) -> Result<StatusCode, ApiError> {
+    let portfolio_id =
+        PortfolioId::from_str(&id).map_err(|_| bad_request("portfolio id is not a valid uuid"))?;
+    let name = PortfolioName::new(&body.name).map_err(|err| bad_request(&err.to_string()))?;
+
+    state
+        .portfolio_store
+        .send(&portfolio_id, PortfolioCommand::Rename { name })
+        .await
+        .map_err(|err| classify_portfolio_send_error(&err, "failed to rename portfolio"))?;
+
+    debug!(portfolio_id = %id, "portfolio renamed");
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// `POST /portfolio/<id>/archive` -- archives a portfolio, retiring it from active
+/// management.
+pub(crate) async fn post_portfolio_archive(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    let portfolio_id =
+        PortfolioId::from_str(&id).map_err(|_| bad_request("portfolio id is not a valid uuid"))?;
+
+    state
+        .portfolio_store
+        .send(&portfolio_id, PortfolioCommand::Archive)
+        .await
+        .map_err(|err| classify_portfolio_send_error(&err, "failed to archive portfolio"))?;
+
+    debug!(portfolio_id = %id, "portfolio archived");
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Translates a portfolio command failure into an HTTP response: domain refusals
+/// map to client errors, everything else is an internal error and is logged.
+fn classify_portfolio_send_error(error: &SendError<Portfolio>, operation: &str) -> ApiError {
+    let (status, message) = match error {
+        AggregateError::UserError(LifecycleError::Apply(PortfolioError::NotOpen)) => {
+            (StatusCode::NOT_FOUND, "portfolio not found")
+        }
+        AggregateError::UserError(LifecycleError::Apply(PortfolioError::Archived)) => {
+            (StatusCode::CONFLICT, "portfolio is archived")
+        }
+        AggregateError::UserError(LifecycleError::Apply(PortfolioError::AlreadyOpen)) => {
+            (StatusCode::CONFLICT, "portfolio already exists")
+        }
+        other => {
+            error!(error = %other, operation, "portfolio command failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "portfolio command failed",
+            )
+        }
+    };
+
+    api_error(status, message)
 }
 
 #[cfg(test)]
