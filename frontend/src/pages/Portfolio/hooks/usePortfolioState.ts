@@ -18,10 +18,13 @@ import {
   type OrderResult,
 } from "@/hooks/useTrading"
 import {
+  captureStagedPortfolioOverlay,
   diffPortfolios,
+  mergeExchangeTargetWithStagedOverlay,
   mergePortfolioMaps,
   portfolioMapFromDerivePositions,
   portfolioMapFromExchangePositions,
+  syncDeletedArchiveWithCurrent,
   targetAndArchiveAfterRebalance,
   type RebalanceAction,
 } from "./portfolioRebalancer"
@@ -442,8 +445,16 @@ export const usePortfolioState = () => {
     portfolioMap: Record<string, PortfolioInterface | undefined>,
     totalNotional: number,
   ) => {
-    setCurrentPortfolio(reconcile(portfolioMap))
-    setCurrentTotalNotional(totalNotional)
+    const syncedArchive = syncDeletedArchiveWithCurrent(
+      untrack(() => ({ ...deletedArchive })),
+      portfolioMap,
+    )
+
+    batch(() => {
+      setCurrentPortfolio(reconcile(portfolioMap))
+      setCurrentTotalNotional(totalNotional)
+      setDeletedArchive(reconcile(syncedArchive))
+    })
   }
 
   const finalizeRebalance = async (
@@ -604,34 +615,43 @@ export const usePortfolioState = () => {
       return
     }
 
+    const beforeCurrent = untrack(() => ({ ...currentPortfolio }))
+    const beforeTarget = untrack(() => ({ ...targetPortfolio }))
+    const beforeArchive = untrack(() => ({ ...deletedArchive }))
+    const stagedOverlay = captureStagedPortfolioOverlay(
+      beforeCurrent,
+      beforeTarget,
+      beforeArchive,
+    )
+
+    if (exchangeSnapshot.venueKey !== lastExchangeVenueKey) {
+      applyCurrentFromExchange(
+        exchangeSnapshot.map,
+        exchangeSnapshot.totalNotional,
+      )
+
+      const mergedTarget = mergeExchangeTargetWithStagedOverlay(
+        exchangeSnapshot.map,
+        stagedOverlay,
+      )
+      const syncedArchive = syncDeletedArchiveWithCurrent(
+        stagedOverlay.deletedArchive,
+        exchangeSnapshot.map,
+      )
+
+      lastExchangeVenueKey = exchangeSnapshot.venueKey
+      batch(() => {
+        setTargetPortfolio(reconcile(mergedTarget.map))
+        setTargetTotalNotional(mergedTarget.totalNotional)
+        setDeletedArchive(reconcile(syncedArchive))
+      })
+      return
+    }
+
     applyCurrentFromExchange(
       exchangeSnapshot.map,
       exchangeSnapshot.totalNotional,
     )
-
-    if (exchangeSnapshot.venueKey === lastExchangeVenueKey) {
-      return
-    }
-
-    lastExchangeVenueKey = exchangeSnapshot.venueKey
-    const nextTargetTotal = { value: untrack(() => targetTotalNotional()) }
-
-    batch(() => {
-      for (const [symbol, position] of Object.entries(exchangeSnapshot.map)) {
-        if (position === undefined) {
-          continue
-        }
-        if (untrack(() => targetPortfolio[symbol]) !== undefined) {
-          continue
-        }
-        if (untrack(() => deletedArchive[symbol]) !== undefined) {
-          continue
-        }
-        setTargetPortfolio(symbol, { ...position })
-        nextTargetTotal.value += position.notional
-      }
-      setTargetTotalNotional(nextTargetTotal.value)
-    })
   })
 
   const actions = createMemo(() =>
@@ -803,11 +823,11 @@ export const usePortfolioState = () => {
     const targetPosition = targetPortfolio[symbol]
     if (!targetPosition) return
 
-    const isPresentInCurrentPortfolio = !!currentPortfolio[symbol]
+    const currentPosition = currentPortfolio[symbol]
 
     batch(() => {
-      if (isPresentInCurrentPortfolio) {
-        setDeletedArchive(symbol, { ...targetPosition })
+      if (currentPosition !== undefined) {
+        setDeletedArchive(symbol, { ...currentPosition })
       }
 
       setTargetPortfolio(symbol, undefined)
@@ -822,6 +842,8 @@ export const usePortfolioState = () => {
     const archivedPosition = deletedArchive[symbol]
     const currentPosition = currentPortfolio[symbol]
 
+    // Archive is kept in sync with live current on exchange refreshes, so undo
+    // restores an up-to-date close snapshot (fallback to current if needed).
     const positionToRestore = archivedPosition ?? currentPosition
 
     if (!positionToRestore) return

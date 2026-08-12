@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  captureStagedPortfolioOverlay,
   diffPortfolios,
   mergePortfolioMaps,
   portfolioMapFromDerivePositions,
   portfolioMapFromExchangePositions,
   preciseRebalanceLegs,
+  syncDeletedArchiveWithCurrent,
   targetAndArchiveAfterRebalance,
 } from "./portfolioRebalancer"
 import { MIN_USD, type PortfolioInterface } from "./usePortfolioState"
@@ -605,5 +607,43 @@ describe("targetAndArchiveAfterRebalance", () => {
 
     expect(result.nextTarget[symBtc]).toEqual(current[symBtc])
     expect(result.nextTarget[instrument]).toEqual(optionTarget)
+  })
+})
+
+describe("syncDeletedArchiveWithCurrent", () => {
+  const symbol = "BABY/USDC:USDC"
+
+  it("refreshes archived closes to live exchange marks", () => {
+    const archived = { ...buy(8.944566), symbol }
+    const live = { ...buy(8.941198), symbol }
+
+    expect(
+      syncDeletedArchiveWithCurrent({ [symbol]: archived }, { [symbol]: live })[
+        symbol
+      ],
+    ).toEqual(live)
+  })
+
+  it("keeps archive when the exchange position is gone", () => {
+    const archived = { ...buy(8.94), symbol }
+
+    expect(
+      syncDeletedArchiveWithCurrent({ [symbol]: archived }, {})[symbol],
+    ).toEqual(archived)
+  })
+})
+
+describe("captureStagedPortfolioOverlay", () => {
+  const symbol = "BABY/USDC:USDC"
+
+  it("stores live current in deletedArchive for staged closes", () => {
+    const live = { ...buy(8.941198), symbol }
+    const overlay = captureStagedPortfolioOverlay(
+      { [symbol]: live },
+      { [symbol]: undefined },
+      { [symbol]: { ...buy(8.944566), symbol } },
+    )
+
+    expect(overlay.deletedArchive[symbol]).toEqual(live)
   })
 })

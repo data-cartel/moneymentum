@@ -110,6 +110,143 @@ export const mergePortfolioMaps = (
   return { map, totalNotional }
 }
 
+/** Mark / dust noise below this is not treated as intentional staging. */
+export const STAGED_NOTIONAL_EPSILON_USD = 0.1
+
+const getSignedNotional = (side: OrderSide, notional: number): number =>
+  side === "buy" ? notional : -notional
+
+const isMeaningfullyStagedPosition = (
+  current: PortfolioInterface,
+  target: PortfolioInterface,
+): boolean => {
+  if (current.side !== target.side) {
+    return true
+  }
+  if (
+    isPerpPosition(current) &&
+    isPerpPosition(target) &&
+    current.leverage !== target.leverage
+  ) {
+    return true
+  }
+
+  return (
+    Math.abs(
+      getSignedNotional(target.side, target.notional) -
+        getSignedNotional(current.side, current.notional),
+    ) > STAGED_NOTIONAL_EPSILON_USD
+  )
+}
+
+/**
+ * Keep staged-close snapshots aligned with live exchange marks so undo restore
+ * does not revive a stale notional after a venue/mark refresh.
+ */
+export const syncDeletedArchiveWithCurrent = (
+  deletedArchive: Record<string, PortfolioInterface | undefined>,
+  current: Record<string, PortfolioInterface | undefined>,
+): Record<string, PortfolioInterface | undefined> => {
+  const next: Record<string, PortfolioInterface | undefined> = {}
+
+  for (const [symbol, archived] of Object.entries(deletedArchive)) {
+    if (archived === undefined) {
+      continue
+    }
+    const livePosition = current[symbol]
+    next[symbol] =
+      livePosition !== undefined ? { ...livePosition } : { ...archived }
+  }
+
+  return next
+}
+
+/**
+ * Intentional target edits relative to current (not dust). Used when venue
+ * composition changes so exchange marks can refresh without dropping staging.
+ */
+export type StagedPortfolioOverlay = {
+  targetOverrides: Record<string, PortfolioInterface>
+  deletedArchive: Record<string, PortfolioInterface | undefined>
+}
+
+export const captureStagedPortfolioOverlay = (
+  current: Record<string, PortfolioInterface | undefined>,
+  target: Record<string, PortfolioInterface | undefined>,
+  deletedArchive: Record<string, PortfolioInterface | undefined>,
+): StagedPortfolioOverlay => {
+  const targetOverrides: Record<string, PortfolioInterface> = {}
+  const nextDeletedArchive: Record<string, PortfolioInterface | undefined> = {
+    ...deletedArchive,
+  }
+
+  const symbols = new Set([...Object.keys(current), ...Object.keys(target)])
+
+  for (const symbol of symbols) {
+    const currentPosition = current[symbol]
+    const targetPosition = target[symbol]
+
+    if (currentPosition !== undefined && targetPosition === undefined) {
+      // Always refresh from live current — archive is "position to close", not
+      // a frozen pre-delete target snapshot.
+      nextDeletedArchive[symbol] = { ...currentPosition }
+      continue
+    }
+
+    if (targetPosition === undefined) {
+      continue
+    }
+
+    if (currentPosition === undefined) {
+      targetOverrides[symbol] = { ...targetPosition }
+      continue
+    }
+
+    if (isMeaningfullyStagedPosition(currentPosition, targetPosition)) {
+      targetOverrides[symbol] = { ...targetPosition }
+    }
+  }
+
+  return {
+    targetOverrides,
+    deletedArchive: syncDeletedArchiveWithCurrent(nextDeletedArchive, current),
+  }
+}
+
+/**
+ * Start from a fresh exchange map, drop symbols staged to close, then reapply
+ * absolute target overrides (including brand-new staged rows).
+ */
+export const mergeExchangeTargetWithStagedOverlay = (
+  exchangeMap: Record<string, PortfolioInterface | undefined>,
+  overlay: StagedPortfolioOverlay,
+): {
+  map: Record<string, PortfolioInterface | undefined>
+  totalNotional: number
+} => {
+  const map: Record<string, PortfolioInterface | undefined> = {}
+
+  for (const [symbol, position] of Object.entries(exchangeMap)) {
+    if (position === undefined) {
+      continue
+    }
+    if (overlay.deletedArchive[symbol] !== undefined) {
+      continue
+    }
+    map[symbol] = { ...position }
+  }
+
+  for (const [symbol, position] of Object.entries(overlay.targetOverrides)) {
+    map[symbol] = { ...position }
+  }
+
+  const totalNotional = Object.values(map).reduce(
+    (sum, position) => sum + (position?.notional ?? 0),
+    0,
+  )
+  return { map, totalNotional }
+}
+
 export const targetAndArchiveAfterRebalance = (
   target: Record<string, PortfolioInterface | undefined>,
   deletedArchive: Record<string, PortfolioInterface | undefined>,
@@ -244,8 +381,6 @@ export const buildApiPayload = (
   return { actions }
 }
 
-const NOTIONAL_EPSILON = 0.1
-
 /** Signed delta: targetSigned - currentSigned (same convention as diffPortfolios). */
 export const preciseRebalanceLegs = (
   positionSide: OrderSide,
@@ -272,9 +407,6 @@ export const preciseRebalanceLegs = (
     openNotional: Math.max(0, openNotional),
   }
 }
-
-const getSignedNotional = (side: OrderSide, notional: number): number =>
-  side === "buy" ? notional : -notional
 
 export const diffPortfolios = (
   current: Record<string, PortfolioInterface | undefined>,
@@ -313,7 +445,10 @@ export const diffPortfolios = (
       continue
     }
 
-    if (currentPosition && targetPosition.notional <= NOTIONAL_EPSILON) {
+    if (
+      currentPosition &&
+      targetPosition.notional <= STAGED_NOTIONAL_EPSILON_USD
+    ) {
       actions.push({
         kind: "close",
         symbol,
@@ -331,7 +466,7 @@ export const diffPortfolios = (
         ? currentPosition.leverage !== targetPosition.leverage
         : false
 
-    const hasSignificantDelta = deltaAbs > NOTIONAL_EPSILON
+    const hasSignificantDelta = deltaAbs > STAGED_NOTIONAL_EPSILON_USD
 
     if (!hasSignificantDelta && !leverageChanged) {
       continue
