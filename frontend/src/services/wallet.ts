@@ -39,6 +39,34 @@ export class WalletDisconnectFailed extends Data.TaggedError(
   readonly cause: unknown
 }> {}
 
+export class WalletAuthorizationAccountChanged extends Data.TaggedError(
+  "WalletAuthorizationAccountChanged",
+)<Record<string, never>> {}
+
+export class WalletAuthorizationNetworkChanged extends Data.TaggedError(
+  "WalletAuthorizationNetworkChanged",
+)<Record<string, never>> {}
+
+export class WalletAuthorizationContextChanged extends Data.TaggedError(
+  "WalletAuthorizationContextChanged",
+)<Record<string, never>> {}
+
+export class WalletConnectionContextChanged extends Data.TaggedError(
+  "WalletConnectionContextChanged",
+)<Record<string, never>> {}
+
+export class WalletOperationContextChanged extends Data.TaggedError(
+  "WalletOperationContextChanged",
+)<{ readonly cause?: unknown }> {}
+
+export class WalletUnlockContextChanged extends Data.TaggedError(
+  "WalletUnlockContextChanged",
+)<Record<string, never>> {}
+
+export class WalletDisconnectContextChanged extends Data.TaggedError(
+  "WalletDisconnectContextChanged",
+)<Record<string, never>> {}
+
 export const copyWalletAddressToClipboard = (
   address: string,
 ): Effect.Effect<void, WalletAddressMissing | ClipboardWriteFailed> =>
@@ -58,6 +86,11 @@ export type WalletUnlockFailure =
   | WalletIncorrectPin
   | WalletUnlockError
   | WalletCredentialCryptoFailure
+  | WalletUnlockContextChanged
+
+export type WalletDisconnectFailure =
+  | WalletDisconnectFailed
+  | WalletDisconnectContextChanged
 
 export type WalletDecryptFailure =
   | WalletIncorrectPin

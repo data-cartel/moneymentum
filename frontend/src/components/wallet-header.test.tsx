@@ -16,6 +16,7 @@ const mockUseSwitchNetwork = vi.fn(() => ({
   mutateAsync: mockSwitchNetworkMutateAsync,
   isPending: false,
 }))
+const mockDisconnect = vi.fn(() => Promise.resolve())
 
 const TEST_PIN = "123456"
 
@@ -43,7 +44,7 @@ vi.mock("@/services/hyperliquid-client", () => ({
 
 vi.mock("@/reown/evmAppKit", () => ({
   getOrCreateEvmAppKit: () => ({
-    disconnect: vi.fn(() => Promise.resolve()),
+    disconnect: mockDisconnect,
     getAddress: () => null,
     subscribeAccount: () => () => {},
   }),
@@ -412,6 +413,7 @@ describe("WalletHeader", () => {
 
     it("disconnects wallet when disconnect button is clicked", async () => {
       const user = userEvent.setup()
+      const handleDisconnect = vi.fn()
       const { toast } = await import("solid-sonner")
 
       await seedEncryptedSession("0xConnectedAccountAddress")
@@ -424,7 +426,7 @@ describe("WalletHeader", () => {
         isConnected: () => true,
       })
 
-      render(() => <WalletHeader handleDisconnect={() => {}} />, {
+      render(() => <WalletHeader handleDisconnect={handleDisconnect} />, {
         wrapper: createWrapper(),
       })
 
@@ -434,7 +436,38 @@ describe("WalletHeader", () => {
       await waitFor(() => {
         expect(toast.success).toHaveBeenCalledWith("Wallet disconnected")
       })
+      expect(handleDisconnect).toHaveBeenCalledOnce()
       expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
+    })
+
+    it("does not notify its parent when Reown disconnect fails", async () => {
+      const user = userEvent.setup()
+      const handleDisconnect = vi.fn()
+      const { toast } = await import("solid-sonner")
+      await seedEncryptedSession("0xConnectedAccountAddress")
+      mockDisconnect.mockRejectedValueOnce(
+        new Error("wallet refused disconnect"),
+      )
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          accountAddress: "0xConnectedAccountAddress",
+          isTestnet: true,
+        }),
+        isConnected: () => true,
+      })
+
+      render(() => <WalletHeader handleDisconnect={handleDisconnect} />, {
+        wrapper: createWrapper(),
+      })
+
+      await user.click(screen.getByText("0xConn...ress"))
+      await user.click(screen.getByRole("button", { name: "Disconnect" }))
+
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalled()
+      })
+      expect(handleDisconnect).not.toHaveBeenCalled()
+      expect(localStorage.getItem("hyperliquid-wallet")).not.toBeNull()
     })
 
     it("closes dialog after disconnect", async () => {

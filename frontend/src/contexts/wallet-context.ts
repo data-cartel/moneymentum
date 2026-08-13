@@ -3,7 +3,7 @@ import type * as Effect from "effect/Effect"
 import type { HyperliquidClient } from "@/services/hyperliquid-client"
 import type {
   WalletConnectError,
-  WalletDisconnectFailed,
+  WalletDisconnectFailure,
   WalletUnlockFailure,
 } from "@/services/wallet"
 
@@ -45,7 +45,7 @@ export interface WalletContextType {
    */
   revokeAgent: () => Effect.Effect<void, WalletConnectError>
   unlock: (pin: string) => Effect.Effect<void, WalletUnlockFailure>
-  disconnect: () => Effect.Effect<void, WalletDisconnectFailed>
+  disconnect: () => Effect.Effect<void, WalletDisconnectFailure>
   setNetworkMode: (mode: NetworkMode) => void
   /** Sync the Reown-connected main address into wallet state (read-only). */
   setMainAddress: (address: string | null) => void

@@ -19,9 +19,17 @@ import {
 import * as Effect from "effect/Effect"
 import * as Either from "effect/Either"
 import {
+  WalletAuthorizationAccountChanged,
+  WalletAuthorizationContextChanged,
+  WalletAuthorizationNetworkChanged,
   WalletConnectError,
+  WalletConnectionContextChanged,
+  WalletDisconnectContextChanged,
   WalletDisconnectFailed,
+  WalletOperationContextChanged,
   WalletSessionMissing,
+  WalletUnlockContextChanged,
+  type WalletDisconnectFailure,
   type WalletUnlockFailure,
 } from "@/services/wallet"
 import { HyperliquidClient } from "@/services/hyperliquid-client"
@@ -32,6 +40,7 @@ import {
 import {
   approveHyperliquidAgent,
   generateHyperliquidAgent,
+  ReownWalletUnavailable,
   revokeHyperliquidAgent,
 } from "@/services/hyperliquidAgent"
 import {
@@ -75,13 +84,10 @@ const sameWalletAddress = (
   left: string | null | undefined,
   right: string | null | undefined,
 ): boolean => {
-  if (
-    left === null ||
-    left === undefined ||
-    right === null ||
-    right === undefined
-  ) {
-    return false
+  const leftMissing = left === null || left === undefined
+  const rightMissing = right === null || right === undefined
+  if (leftMissing || rightMissing) {
+    return leftMissing && rightMissing
   }
 
   return left.toLowerCase() === right.toLowerCase()
@@ -101,6 +107,12 @@ export const WalletProvider = (props: ParentProps) => {
   const [hasStoredSession, setHasStoredSession] = createSignal(
     storedSession !== null,
   )
+  let walletContextRevision = 0
+  let activeWalletOperation: symbol | null = null
+
+  const markWalletContextChanged = () => {
+    walletContextRevision += 1
+  }
 
   const syncStoredSessionState = () => {
     setHasStoredSession(getStoredEncryptedSession() !== null)
@@ -127,6 +139,10 @@ export const WalletProvider = (props: ParentProps) => {
   })
 
   const setMainAddress = (address: string | null) => {
+    if (!sameWalletAddress(mainAddress(), address)) {
+      markWalletContextChanged()
+    }
+
     // Reown account callbacks are not Solid tracked scopes; read unlocked
     // credentials without subscribing so mismatch invalidation still runs.
     const unlocked = untrack(() => credentials())
@@ -149,40 +165,65 @@ export const WalletProvider = (props: ParentProps) => {
   const connect = (
     newCredentials: WalletCredentials,
     pin: string,
-  ): Effect.Effect<void, WalletConnectError> =>
-    Effect.tryPromise({
+  ): Effect.Effect<void, WalletConnectError> => {
+    const contextRevision = walletContextRevision
+
+    return Effect.tryPromise({
       try: () => encryptWalletPrivateKey(newCredentials.privateKey, pin),
       catch: cause => new WalletConnectError({ cause }),
     }).pipe(
-      Effect.tap(encrypted =>
-        Effect.sync(() => {
+      Effect.flatMap(encrypted => {
+        if (walletContextRevision !== contextRevision) {
+          return Effect.fail(
+            new WalletConnectError({
+              cause: new WalletConnectionContextChanged(),
+            }),
+          )
+        }
+
+        return Effect.sync(() => {
+          markWalletContextChanged()
           persistEncryptedSession(newCredentials, encrypted)
           setMainAddressState(newCredentials.accountAddress)
           setCredentials(newCredentials)
           syncStoredSessionState()
-        }),
-      ),
+        })
+      }),
       Effect.asVoid,
     )
+  }
 
   /**
    * PIN -> generate agent -> encrypt in memory -> approveAgent via Reown.
-   * Persists the encrypted session only after approval succeeds.
-   * On approve failure any leftover encrypted session is cleared.
+   * Persists the generated encrypted session only after approval succeeds.
+   * Approval failure never mutates an existing encrypted session.
    */
+  // Called only from UI event handlers; its signal snapshots deliberately bind
+  // one authorization attempt to the account and network that started it.
   const authorizeAgent = (
     pin: string,
   ): Effect.Effect<void, WalletConnectError> => {
-    // Snapshot signals synchronously so Effect.gen is not a reactive scope.
     const address = mainAddress()
     const mode = networkMode()
+    const contextRevision = walletContextRevision
+    const operationToken = Symbol("authorize-agent")
 
+    // Effect.gen executes after an event handler starts this operation, outside
+    // Solid tracking; subsequent reads intentionally detect account changes.
+    // eslint-disable-next-line solid/reactivity
     return Effect.gen(function* () {
-      if (!address) {
+      if (activeWalletOperation !== null) {
         return yield* Effect.fail(
           new WalletConnectError({
-            cause: new Error("Connect a wallet with Reown before authorizing"),
+            cause: new WalletOperationContextChanged(),
           }),
+        )
+      }
+      activeWalletOperation = operationToken
+
+      if (!address) {
+        return yield* Effect.fail(
+          new WalletConnectError({ cause: new ReownWalletUnavailable() }),
         )
       }
 
@@ -190,9 +231,7 @@ export const WalletProvider = (props: ParentProps) => {
       const provider = modal ? readConnectedEip1193Provider(modal) : null
       if (!provider) {
         return yield* Effect.fail(
-          new WalletConnectError({
-            cause: new Error("Reown wallet provider is unavailable"),
-          }),
+          new WalletConnectError({ cause: new ReownWalletUnavailable() }),
         )
       }
 
@@ -208,23 +247,61 @@ export const WalletProvider = (props: ParentProps) => {
         catch: cause => new WalletConnectError({ cause }),
       })
 
+      if (walletContextRevision !== contextRevision) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletAuthorizationContextChanged(),
+          }),
+        )
+      }
+
       const approveResult = yield* Effect.either(
         approveHyperliquidAgent(provider, address, agent.agentAddress, mode),
       )
 
       if (Either.isLeft(approveResult)) {
-        clearEncryptedSession()
-        syncStoredSessionState()
-        setCredentials(null)
         return yield* Effect.fail(
           new WalletConnectError({ cause: approveResult.left }),
         )
       }
 
+      if (!sameWalletAddress(mainAddress(), address)) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletAuthorizationAccountChanged(),
+          }),
+        )
+      }
+
+      if (networkMode() !== mode) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletAuthorizationNetworkChanged(),
+          }),
+        )
+      }
+
+      if (walletContextRevision !== contextRevision) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletAuthorizationContextChanged(),
+          }),
+        )
+      }
+
+      markWalletContextChanged()
       persistEncryptedSession(pendingCredentials, encrypted)
       syncStoredSessionState()
       setCredentials(pendingCredentials)
-    })
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (activeWalletOperation === operationToken) {
+            activeWalletOperation = null
+          }
+        }),
+      ),
+    )
   }
 
   /**
@@ -235,13 +312,22 @@ export const WalletProvider = (props: ParentProps) => {
     // Snapshot signals synchronously so Effect.gen is not a reactive scope.
     const address = mainAddress()
     const mode = networkMode()
+    const contextRevision = walletContextRevision
+    const operationToken = Symbol("revoke-agent")
 
     return Effect.gen(function* () {
-      if (!address) {
+      if (activeWalletOperation !== null) {
         return yield* Effect.fail(
           new WalletConnectError({
-            cause: new Error("Connect a wallet with Reown before revoking"),
+            cause: new WalletOperationContextChanged(),
           }),
+        )
+      }
+      activeWalletOperation = operationToken
+
+      if (!address) {
+        return yield* Effect.fail(
+          new WalletConnectError({ cause: new ReownWalletUnavailable() }),
         )
       }
 
@@ -249,9 +335,7 @@ export const WalletProvider = (props: ParentProps) => {
       const provider = modal ? readConnectedEip1193Provider(modal) : null
       if (!provider) {
         return yield* Effect.fail(
-          new WalletConnectError({
-            cause: new Error("Reown wallet provider is unavailable"),
-          }),
+          new WalletConnectError({ cause: new ReownWalletUnavailable() }),
         )
       }
 
@@ -265,10 +349,27 @@ export const WalletProvider = (props: ParentProps) => {
         )
       }
 
+      if (walletContextRevision !== contextRevision) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletOperationContextChanged(),
+          }),
+        )
+      }
+
+      markWalletContextChanged()
       setCredentials(null)
       clearEncryptedSession()
       syncStoredSessionState()
-    })
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (activeWalletOperation === operationToken) {
+            activeWalletOperation = null
+          }
+        }),
+      ),
+    )
   }
 
   const unlock = (pin: string): Effect.Effect<void, WalletUnlockFailure> => {
@@ -276,6 +377,7 @@ export const WalletProvider = (props: ParentProps) => {
     if (!session) {
       return Effect.fail(new WalletSessionMissing())
     }
+    const contextRevision = walletContextRevision
 
     return decryptWalletPrivateKey(
       session.encryptedPrivateKey,
@@ -283,41 +385,75 @@ export const WalletProvider = (props: ParentProps) => {
       session.salt,
       session.iv,
     ).pipe(
-      Effect.tap(privateKey =>
-        Effect.sync(() => {
+      Effect.flatMap(privateKey => {
+        if (walletContextRevision !== contextRevision) {
+          return Effect.fail(new WalletUnlockContextChanged())
+        }
+
+        return Effect.sync(() => {
+          markWalletContextChanged()
           setMainAddressState(session.accountAddress)
           setCredentials(credentialsFromSession(session, privateKey))
-        }),
-      ),
+        })
+      }),
       Effect.asVoid,
     )
   }
 
-  const disconnect = (): Effect.Effect<void, WalletDisconnectFailed> =>
-    Effect.gen(function* () {
+  const disconnect = (): Effect.Effect<void, WalletDisconnectFailure> => {
+    const contextRevision = walletContextRevision
+    const operationToken = Symbol("disconnect")
+
+    // Invoked from UI handlers; post-await signal reads validate AppKit events.
+    // eslint-disable-next-line solid/reactivity
+    return Effect.gen(function* () {
+      if (activeWalletOperation !== null) {
+        return yield* Effect.fail(new WalletDisconnectContextChanged())
+      }
+      activeWalletOperation = operationToken
+
+      const modal = getOrCreateEvmAppKit()
+      if (modal) {
+        yield* Effect.tryPromise({
+          try: () => modal.disconnect("eip155"),
+          catch: cause => new WalletDisconnectFailed({ cause }),
+        })
+      }
+
+      const revisionUnchanged = walletContextRevision === contextRevision
+      const expectedDisconnectCallback =
+        walletContextRevision === contextRevision + 1 && mainAddress() === null
+      if (!revisionUnchanged && !expectedDisconnectCallback) {
+        return yield* Effect.fail(new WalletDisconnectContextChanged())
+      }
+
+      markWalletContextChanged()
       setCredentials(null)
       setMainAddressState(null)
       clearEncryptedSession()
       syncStoredSessionState()
-
-      const modal = getOrCreateEvmAppKit()
-      if (!modal) {
-        return
-      }
-
-      yield* Effect.tryPromise({
-        try: () => modal.disconnect("eip155"),
-        catch: cause => new WalletDisconnectFailed({ cause }),
-      })
-    })
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (activeWalletOperation === operationToken) {
+            activeWalletOperation = null
+          }
+        }),
+      ),
+    )
+  }
 
   const setNetworkMode = (mode: NetworkMode) => {
+    if (networkMode() !== mode) {
+      markWalletContextChanged()
+    }
     setNetworkModeState(mode)
     localStorage.setItem(NETWORK_STORAGE_KEY, mode)
   }
 
   const handleStorageChange = (event: StorageEvent) => {
     if (event.key === WALLET_STORAGE_KEY) {
+      markWalletContextChanged()
       setCredentials(null)
       const nextSession = getStoredEncryptedSession()
       syncStoredSessionState()
@@ -326,7 +462,11 @@ export const WalletProvider = (props: ParentProps) => {
       }
     }
     if (event.key === NETWORK_STORAGE_KEY) {
-      setNetworkModeState(getStoredNetworkMode())
+      const storedNetworkMode = getStoredNetworkMode()
+      if (networkMode() !== storedNetworkMode) {
+        markWalletContextChanged()
+      }
+      setNetworkModeState(storedNetworkMode)
     }
   }
 
@@ -342,6 +482,9 @@ export const WalletProvider = (props: ParentProps) => {
         setMainAddress(existingAddress)
       }
 
+      // AppKit invokes this external callback; signal reads intentionally use
+      // the current wallet context when each account event arrives.
+      // eslint-disable-next-line solid/reactivity
       unsubscribeAccount = modal.subscribeAccount(accountState => {
         const nextAddress = readEvmAddressFromAccountState(accountState)
         const connected =
@@ -353,8 +496,13 @@ export const WalletProvider = (props: ParentProps) => {
           return
         }
 
-        const stored = getStoredEncryptedSession()
-        setMainAddress(stored?.accountAddress ?? null)
+        const currentProviderAddress = modal.getAddress("eip155") ?? null
+        if (currentProviderAddress !== null) {
+          setMainAddress(currentProviderAddress)
+          return
+        }
+
+        setMainAddress(null)
       }, "eip155")
     }
 
