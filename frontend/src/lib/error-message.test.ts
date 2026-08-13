@@ -5,6 +5,25 @@ import { getErrorMessage, getExchangeErrorDetail } from "./error-message"
 import { HttpStatusError, NetworkError } from "./http"
 import { ApiMessageError, MissingTickerError } from "@/hooks/useApi"
 import { ExchangeRequestError } from "@/services/hyperliquid"
+import {
+  ClipboardWriteFailed,
+  WalletAddressMissing,
+  WalletAuthorizationAccountChanged,
+  WalletAuthorizationContextChanged,
+  WalletAuthorizationNetworkChanged,
+  WalletConnectError,
+  WalletConnectionContextChanged,
+  WalletDisconnectContextChanged,
+  WalletDisconnectFailed,
+  WalletOperationContextChanged,
+  WalletUnlockContextChanged,
+} from "@/services/wallet"
+import {
+  ApproveAgentFailed,
+  ReownWalletRejected,
+  ReownWalletUnavailable,
+  RevokeAgentFailed,
+} from "@/services/hyperliquidAgent"
 
 const asFiberFailure = async (error: unknown): Promise<unknown> => {
   try {
@@ -89,6 +108,103 @@ describe("getErrorMessage", () => {
     )
     expect(getExchangeErrorDetail(failure)).toBe(
       "The exchange rejected the request. Please try again.",
+    )
+  })
+
+  it("maps WalletAddressMissing to a copy prompt", async () => {
+    const failure = await asFiberFailure(new WalletAddressMissing())
+    expect(getErrorMessage(failure)).toBe("No wallet address to copy.")
+  })
+
+  it("maps ClipboardWriteFailed to a permissions message", async () => {
+    const failure = await asFiberFailure(
+      new ClipboardWriteFailed({ cause: new Error("denied") }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Failed to copy address. Check clipboard permissions.",
+    )
+  })
+
+  it("maps WalletDisconnectFailed to a disconnect message", async () => {
+    const failure = await asFiberFailure(
+      new WalletDisconnectFailed({ cause: new Error("reown failed") }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Failed to disconnect wallet. Please try again.",
+    )
+  })
+
+  it("unwraps RevokeAgentFailed from WalletConnectError", async () => {
+    const failure = await asFiberFailure(
+      new WalletConnectError({
+        cause: new RevokeAgentFailed({ cause: new Error("revoke rejected") }),
+      }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Failed to revoke Hyperliquid agent. Please try again.",
+    )
+  })
+
+  it.each([
+    [
+      new ApproveAgentFailed({ cause: new Error("approval rejected") }),
+      "Hyperliquid agent approval failed. Please try again.",
+    ],
+    [new ReownWalletUnavailable(), "Connect a wallet with Reown first."],
+    [
+      new ReownWalletRejected({ cause: new Error("wallet rejected") }),
+      "Wallet request was rejected.",
+    ],
+    [
+      new WalletAuthorizationAccountChanged(),
+      "Wallet changed during agent authorization. Please try again.",
+    ],
+    [
+      new WalletAuthorizationNetworkChanged(),
+      "Network changed during agent authorization. Please try again.",
+    ],
+    [
+      new WalletAuthorizationContextChanged(),
+      "Wallet context changed during agent authorization. Please try again.",
+    ],
+    [
+      new WalletConnectionContextChanged(),
+      "Wallet changed while credentials were connecting. Please try again.",
+    ],
+    [
+      new WalletOperationContextChanged(),
+      "Wallet changed before the operation completed. Please try again.",
+    ],
+  ])(
+    "unwraps authorization failures from WalletConnectError",
+    async (cause, expected) => {
+      const failure = await asFiberFailure(new WalletConnectError({ cause }))
+
+      expect(getErrorMessage(failure)).toBe(expected)
+    },
+  )
+
+  it.each([
+    [
+      new WalletUnlockContextChanged(),
+      "Wallet changed while unlocking. Please try again.",
+    ],
+    [
+      new WalletDisconnectContextChanged(),
+      "Wallet changed while disconnecting. Please try again.",
+    ],
+  ])("maps stale wallet operation failures", async (error, expected) => {
+    const failure = await asFiberFailure(error)
+
+    expect(getErrorMessage(failure)).toBe(expected)
+  })
+
+  it("keeps the generic WalletConnectError message for other causes", async () => {
+    const failure = await asFiberFailure(
+      new WalletConnectError({ cause: new Error("encrypt failed") }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Failed to connect Hyperliquid agent. Please try again.",
     )
   })
 

@@ -1,155 +1,125 @@
-import { createMemo, createSignal, onMount, type JSX } from "solid-js"
+import { createSignal, onCleanup, onMount, Show, type JSX } from "solid-js"
 import * as Effect from "effect/Effect"
+import * as Data from "effect/Data"
 import { toast } from "solid-sonner"
 
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { getStoredWalletAddresses } from "@/contexts/wallet-context"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
 import {
-  normalizeWalletPinInput,
-  WALLET_PIN_LENGTH,
-} from "@/services/walletCredentialCrypto"
+  getOrCreateEvmAppKit,
+  readEvmAddressFromAccountState,
+  readEvmWalletConnectedFromAccountState,
+  readReownProjectId,
+} from "@/reown/evmAppKit"
 
+class ReownModalOpenFailed extends Data.TaggedError("ReownModalOpenFailed")<{
+  readonly cause: unknown
+}> {}
+
+/**
+ * Connects the user's main EVM wallet via Reown AppKit. Sets mainAddress for
+ * read-only Hyperliquid balance/position loads -- no private keys involved.
+ */
 export const WalletInlineConnect = (): JSX.Element => {
-  const { connect } = useWallet()
-  const [accountAddress, setAccountAddress] = createSignal("")
-  const [apiWalletAddress, setApiWalletAddress] = createSignal("")
-  const [privateKey, setPrivateKey] = createSignal("")
-  const [pin, setPin] = createSignal("")
-  const [isConnecting, setIsConnecting] = createSignal(false)
+  const { setMainAddress, mainAddress } = useWallet()
+  const [modalReady, setModalReady] = createSignal(false)
+  const [isOpening, setIsOpening] = createSignal(false)
+
+  const projectIdConfigured = () => readReownProjectId() !== null
 
   onMount(() => {
-    const stored = getStoredWalletAddresses()
-    if (!stored) {
+    const modal = getOrCreateEvmAppKit()
+    if (!modal) {
+      setModalReady(false)
       return
     }
 
-    setAccountAddress(stored.accountAddress)
-    setApiWalletAddress(stored.apiWalletAddress)
+    setModalReady(true)
+
+    const existingAddress = modal.getAddress("eip155")
+    if (existingAddress) {
+      setMainAddress(existingAddress)
+    }
+
+    const unsubscribeAccount = modal.subscribeAccount(accountState => {
+      const nextAddress = readEvmAddressFromAccountState(accountState)
+      const connected =
+        readEvmWalletConnectedFromAccountState(accountState) ||
+        nextAddress !== null
+
+      if (connected && nextAddress) {
+        setMainAddress(nextAddress)
+        return
+      }
+
+      const stored = getStoredWalletAddresses()
+      setMainAddress(stored?.accountAddress ?? null)
+    }, "eip155")
+
+    onCleanup(() => {
+      unsubscribeAccount()
+    })
   })
 
-  const canConnect = createMemo(
-    () =>
-      accountAddress().trim() !== "" &&
-      apiWalletAddress().trim() !== "" &&
-      privateKey().trim() !== "" &&
-      pin().length === WALLET_PIN_LENGTH,
-  )
-
-  const handleConnect = async () => {
-    if (!canConnect()) {
+  const openConnectModal = () => {
+    const modal = getOrCreateEvmAppKit()
+    if (!modal) {
+      toast.error("Set VITE_REOWN_PROJECT_ID in .env to connect a wallet.")
       return
     }
-    const credentials = {
-      accountAddress: accountAddress().trim(),
-      apiWalletAddress: apiWalletAddress().trim(),
-      privateKey: privateKey().trim(),
-    }
 
-    setIsConnecting(true)
-    try {
-      await Effect.runPromise(connect(credentials, pin()))
-      setPrivateKey("")
-      setPin("")
-      toast.success("Wallet connected")
-    } catch (error) {
-      console.error("Failed to encrypt and store wallet credentials:", error)
-      toast.error(getErrorMessage(error))
-    } finally {
-      setIsConnecting(false)
-    }
+    setIsOpening(true)
+    void Effect.runPromise(
+      Effect.tryPromise({
+        try: () => modal.open({ view: "Connect", namespace: "eip155" }),
+        catch: cause => new ReownModalOpenFailed({ cause }),
+      }).pipe(
+        Effect.catchAll(error =>
+          Effect.sync(() => {
+            console.error("Failed to open Reown AppKit:", error)
+            toast.error(getErrorMessage(error))
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => setIsOpening(false))),
+      ),
+    )
   }
 
   return (
     <div class="flex h-full flex-col items-center justify-center gap-4 overflow-auto p-4 text-[16px] text-muted-foreground">
       <p class="max-w-[45ch] text-center font-medium text-foreground">
-        Connect Hyperliquid wallet to rebalance your portfolio
+        Connect wallet to load your Hyperliquid portfolio
       </p>
-      <div class="flex w-full max-w-[45ch] flex-col gap-3 text-left">
-        <div class="space-y-1.5">
-          <label for="portfolioAccountAddress" class="font-medium">
-            Hyperliquid main wallet address
-          </label>
-          <Input
-            id="portfolioAccountAddress"
-            placeholder="0x..."
-            value={accountAddress()}
-            disabled={isConnecting()}
-            class="h-8 text-[12px]"
-            onInput={event => {
-              setAccountAddress(event.currentTarget.value)
-            }}
-          />
-        </div>
-        <div class="space-y-1.5">
-          <label for="portfolioApiWalletAddress" class="font-medium">
-            Hyperliquid public API wallet address
-          </label>
-          <Input
-            id="portfolioApiWalletAddress"
-            placeholder="0x..."
-            value={apiWalletAddress()}
-            disabled={isConnecting()}
-            class="h-8 text-[12px]"
-            onInput={event => {
-              setApiWalletAddress(event.currentTarget.value)
-            }}
-          />
-        </div>
-        <div class="space-y-1.5">
-          <label for="portfolioPrivateKey" class="font-medium">
-            Hyperliquid private API wallet key
-          </label>
-          <Input
-            id="portfolioPrivateKey"
-            type="password"
-            placeholder="0x..."
-            value={privateKey()}
-            disabled={isConnecting()}
-            class="h-8 text-[12px]"
-            onInput={event => {
-              setPrivateKey(event.currentTarget.value)
-            }}
-          />
-        </div>
-        <div class="space-y-1.5">
-          <label for="portfolioConnectPin" class="font-medium">
-            Local PIN ({String(WALLET_PIN_LENGTH)} characters)
-          </label>
-          <Input
-            id="portfolioConnectPin"
-            type="password"
-            inputmode="numeric"
-            autocomplete="new-password"
-            placeholder="6-digit PIN"
-            maxlength={WALLET_PIN_LENGTH}
-            value={pin()}
-            disabled={isConnecting()}
-            class="h-8 text-[12px] font-mono tracking-[0.3em]"
-            onInput={event => {
-              setPin(normalizeWalletPinInput(event.currentTarget.value))
-            }}
-            onKeyDown={event => {
-              if (event.key === "Enter" && canConnect()) {
-                event.preventDefault()
-                void handleConnect()
-              }
-            }}
-          />
-        </div>
-        <Button
-          type="button"
-          class="h-8 text-[12px]"
-          disabled={isConnecting() || !canConnect()}
-          onClick={() => {
-            void handleConnect()
-          }}
+      <p class="max-w-[45ch] text-center text-[12px] leading-snug">
+        Connect your main EVM wallet with Reown. Positions load read-only. Use
+        Connect to Hyperliquid on staged changes to authorize a trading agent.
+      </p>
+      <Show
+        when={projectIdConfigured() && modalReady()}
+        fallback={
+          <p class="max-w-[45ch] text-center text-[12px] text-destructive">
+            Set VITE_REOWN_PROJECT_ID in frontend/.env to enable wallet connect.
+          </p>
+        }
+      >
+        <Show
+          when={!mainAddress()}
+          fallback={
+            <p class="font-mono text-[12px] text-foreground">{mainAddress()}</p>
+          }
         >
-          Connect
-        </Button>
-      </div>
+          <Button
+            type="button"
+            class="h-8 w-full max-w-[45ch] text-[12px]"
+            disabled={isOpening()}
+            onClick={openConnectModal}
+          >
+            {isOpening() ? "Opening..." : "Connect wallet"}
+          </Button>
+        </Show>
+      </Show>
     </div>
   )
 }
