@@ -3,6 +3,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Slider } from "@/components/ui/slider"
 import { cn } from "@/lib/cn"
 import { useNetwork } from "@/hooks/useNetwork"
+import { useWallet } from "@/hooks/useWallet"
 import { WalletHeader } from "@/components/wallet-header"
 import { ModeToggle } from "@/components/ui/mode-toggle"
 
@@ -18,9 +19,13 @@ import {
 } from "@/hooks/useTrading"
 import { PositionsPanel } from "@/pages/Portfolio/components/PositionsPanel/PositionsPanel"
 import { PerformancePanel } from "@/pages/Portfolio/components/PerformancePanel"
-import { StagedChangesPanel } from "@/pages/Portfolio/components/StagedChangesPanel"
+import {
+  StagedChangesPanel,
+  type StagedConnectionState,
+} from "@/pages/Portfolio/components/StagedChangesPanel"
 import { FactorsPanel } from "@/pages/Portfolio/components/FactorsPanel"
 import { RiskPanel } from "@/pages/Portfolio/components/RiskPanel"
+import { WalletPinDialog } from "@/pages/Portfolio/components/WalletPinDialog"
 
 const LEVERAGE_MIN = 0.001
 const LEVERAGE_MAX = 5
@@ -35,7 +40,49 @@ const bitcoinBetaBenchmark: BetaBenchmark = {
 
 const PortfolioPage = () => {
   const { isNetworkSwitching } = useNetwork()
+  const { hasStoredSession, isLocked, canTrade, isConnected } = useWallet()
   const portfolio = usePortfolioState()
+
+  const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
+
+  const stagedConnectionState = (): StagedConnectionState => {
+    if (!isConnected()) {
+      return "walletDisconnected"
+    }
+    if (!hasStoredSession()) {
+      return "agentMissing"
+    }
+    if (isLocked()) {
+      return "agentLocked"
+    }
+    return "ready"
+  }
+
+  const handlePrimaryStagedAction = () => {
+    switch (stagedConnectionState()) {
+      case "walletDisconnected":
+      case "agentLocked":
+        return
+      case "agentMissing":
+        setPinDialogOpen(true)
+        return
+      case "ready":
+        if (!canTrade()) {
+          return
+        }
+        portfolio.handleRebalancePositions()
+    }
+  }
+
+  const handleAgentUnlocked = () => {
+    if (!canTrade()) {
+      return
+    }
+    if (!portfolio.canSubmit) {
+      return
+    }
+    portfolio.handleRebalancePositions()
+  }
 
   // createEffect: persist precise toggle to localStorage when it changes
   createEffect(() => {
@@ -253,9 +300,11 @@ const PortfolioPage = () => {
                   targetCrossAccountLeverage={
                     portfolio.targetCrossAccountLeverage
                   }
-                  onRebalance={portfolio.handleRebalancePositions}
+                  onPrimaryAction={handlePrimaryStagedAction}
+                  onUnlocked={handleAgentUnlocked}
                   isRebalancing={portfolio.isRebalancing}
                   canSubmit={portfolio.canSubmit}
+                  connectionState={stagedConnectionState()}
                   onClearAll={portfolio.handleResetToCurrent}
                 />
               </div>
@@ -277,6 +326,12 @@ const PortfolioPage = () => {
           </div>
         </div>
       </div>
+
+      <WalletPinDialog
+        open={pinDialogOpen()}
+        mode="authorize"
+        onOpenChange={setPinDialogOpen}
+      />
     </>
   )
 }
