@@ -1,6 +1,6 @@
 # Moneymentum
 
-[![His name is Yang](https://img.youtube.com/vi/FoYC_8cutb0/0.jpg)](https://www.youtube.com/watch?v=FoYC_8cutb0)
+![Moneymentum prototype](./docs/prototype-screenshot.png)
 
 Moneymentum is an institutional-grade quant toolkit for crypto portfolio
 management. Define portfolios as proportions, not positions. Stage and simulate
