@@ -99,6 +99,56 @@ impl Hyperliquid for MockHyperliquid {
     }
 }
 
+/// Serves a two-market universe but fails every candle fetch for one of them,
+/// mirroring a prod run where a single market's fetch exhausts its retries.
+pub(crate) struct MarketFailingMockHyperliquid {
+    pub(crate) failing_market: &'static str,
+}
+
+#[async_trait]
+impl Hyperliquid for MarketFailingMockHyperliquid {
+    async fn fetch_market_metadata(&self) -> Result<Vec<MarketMetadata>, HyperliquidError> {
+        Ok(vec![
+            MarketMetadata {
+                symbol: Market::new("BTC".into()),
+                max_leverage: 50,
+                asset_index: 0,
+                only_isolated: false,
+            },
+            MarketMetadata {
+                symbol: Market::new(self.failing_market.into()),
+                max_leverage: 25,
+                asset_index: 1,
+                only_isolated: false,
+            },
+        ])
+    }
+
+    async fn fetch_candles(
+        &self,
+        market: &Market,
+        timeframe: Timeframe,
+        start: DateTime<Utc>,
+    ) -> Result<Vec<Candle>, HyperliquidError> {
+        if market.as_str() == self.failing_market {
+            return Err(HyperliquidError::Url(url::ParseError::EmptyHost));
+        }
+        MockHyperliquid::without_call_counter()
+            .fetch_candles(market, timeframe, start)
+            .await
+    }
+
+    async fn fetch_funding_rates(
+        &self,
+        market: &Market,
+        start: DateTime<Utc>,
+    ) -> Result<Vec<FundingRate>, HyperliquidError> {
+        MockHyperliquid::without_call_counter()
+            .fetch_funding_rates(market, start)
+            .await
+    }
+}
+
 #[async_trait]
 impl Hyperliquid for FailingMockHyperliquid {
     async fn fetch_market_metadata(&self) -> Result<Vec<MarketMetadata>, HyperliquidError> {

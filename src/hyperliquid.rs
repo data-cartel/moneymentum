@@ -35,6 +35,10 @@ pub(crate) const MAX_HISTORY_ENTRIES: i64 = 5000;
 
 #[derive(Debug, Error)]
 pub(crate) enum HyperliquidError {
+    #[error("candle fetch for {} failed: {source}", market.as_str())]
+    CandleFetch { market: Market, source: Box<Self> },
+    #[error("funding rate fetch for {} failed: {source}", market.as_str())]
+    FundingFetch { market: Market, source: Box<Self> },
     #[error(transparent)]
     Candle(#[from] CandleError),
     #[error(transparent)]
@@ -376,7 +380,13 @@ impl<H: ?Sized + Hyperliquid> CandleIngester<H> {
                 let client = Arc::clone(&self.client);
                 async move {
                     debug!(market = market.as_str(), "fetching candles");
-                    let candles = client.fetch_candles(&market, timeframe, start).await?;
+                    let candles = client
+                        .fetch_candles(&market, timeframe, start)
+                        .await
+                        .map_err(|source| HyperliquidError::CandleFetch {
+                            market: market.clone(),
+                            source: Box::new(source),
+                        })?;
                     debug!(
                         market = market.as_str(),
                         count = candles.len(),
@@ -460,7 +470,14 @@ impl<H: ?Sized + Hyperliquid> FundingRateIngester<H> {
                 let client = Arc::clone(&self.client);
                 async move {
                     debug!(market = market.as_str(), "fetching funding rates");
-                    let rates = client.fetch_funding_rates(&market, start).await?;
+                    let rates =
+                        client
+                            .fetch_funding_rates(&market, start)
+                            .await
+                            .map_err(|source| HyperliquidError::FundingFetch {
+                                market: market.clone(),
+                                source: Box::new(source),
+                            })?;
                     debug!(
                         market = market.as_str(),
                         count = rates.len(),
@@ -520,6 +537,7 @@ mod tests {
         market_metadata: Vec<MarketMetadata>,
         candles: Vec<Candle>,
         funding_rates: Vec<FundingRate>,
+        failing_market: Option<Market>,
         fetch_candles_calls: AtomicUsize,
         fetch_funding_calls: AtomicUsize,
     }
@@ -552,6 +570,7 @@ mod tests {
                     rate: dec!(0.0001),
                     symbol: Symbol::from_raw("BTC"),
                 }],
+                failing_market: None,
                 fetch_candles_calls: AtomicUsize::new(0),
                 fetch_funding_calls: AtomicUsize::new(0),
             }
@@ -561,6 +580,15 @@ mod tests {
             self.candles = vec![];
             self.funding_rates = vec![];
             self
+        }
+
+        fn failing_for(mut self, market: &str) -> Self {
+            self.failing_market = Some(Market::new(market.to_string()));
+            self
+        }
+
+        fn upstream_error() -> HyperliquidError {
+            HyperliquidError::IntConversion(u32::try_from(u64::MAX).unwrap_err())
         }
     }
 
@@ -572,20 +600,26 @@ mod tests {
 
         async fn fetch_candles(
             &self,
-            _market: &Market,
+            market: &Market,
             _timeframe: Timeframe,
             _start: DateTime<Utc>,
         ) -> Result<Vec<Candle>, HyperliquidError> {
             self.fetch_candles_calls.fetch_add(1, Ordering::Relaxed);
+            if self.failing_market.as_ref() == Some(market) {
+                return Err(Self::upstream_error());
+            }
             Ok(self.candles.clone())
         }
 
         async fn fetch_funding_rates(
             &self,
-            _market: &Market,
+            market: &Market,
             _start: DateTime<Utc>,
         ) -> Result<Vec<FundingRate>, HyperliquidError> {
             self.fetch_funding_calls.fetch_add(1, Ordering::Relaxed);
+            if self.failing_market.as_ref() == Some(market) {
+                return Err(Self::upstream_error());
+            }
             Ok(self.funding_rates.clone())
         }
     }
@@ -713,6 +747,56 @@ mod tests {
             call_count.fetch_funding_calls.load(Ordering::Relaxed),
             2,
             "should fetch funding rates for each market"
+        );
+    }
+
+    #[tokio::test]
+    async fn candle_ingester_error_names_the_failing_market() {
+        let data_dir = TempDir::new().unwrap();
+        let markets = vec![
+            Market::new("BTC".to_string()),
+            Market::new("ETH".to_string()),
+        ];
+        let mock = Arc::new(MockHyperliquid::new().failing_for("ETH"));
+        let ingester = CandleIngester::new(mock, 10);
+
+        let error = ingester
+            .ingest_with_markets(Timeframe::OneHour, data_dir.path(), &markets)
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("ETH"),
+            "the ingestion error should name the failing market: {error}"
+        );
+        assert!(
+            matches!(error, HyperliquidError::CandleFetch { ref market, .. } if market.as_str() == "ETH"),
+            "expected CandleFetch for ETH, got: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn funding_ingester_error_names_the_failing_market() {
+        let data_dir = TempDir::new().unwrap();
+        let markets = vec![
+            Market::new("BTC".to_string()),
+            Market::new("ETH".to_string()),
+        ];
+        let mock = Arc::new(MockHyperliquid::new().failing_for("ETH"));
+        let ingester = FundingRateIngester::new(mock, 10);
+
+        let error = ingester
+            .ingest_with_markets(data_dir.path(), &markets)
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("ETH"),
+            "the ingestion error should name the failing market: {error}"
+        );
+        assert!(
+            matches!(error, HyperliquidError::FundingFetch { ref market, .. } if market.as_str() == "ETH"),
+            "expected FundingFetch for ETH, got: {error:?}"
         );
     }
 
