@@ -284,6 +284,9 @@ provides the component library. Converted page by page -- same logic, different
 primitives.
 
 - [x] Project setup: Vite + solid-js, TypeScript config, dev server
+- [x] Vite watches runtime-managed environment trees --
+      [#467](https://github.com/dataclique/moneymentum/issues/467) /
+      [#468](https://github.com/dataclique/moneymentum/pull/468)
 - [x] Routing: migrate from react-router to @solidjs/router
 - [x] State & data fetching: migrate from @tanstack/react-query to
       @tanstack/solid-query
