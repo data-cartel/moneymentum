@@ -8,6 +8,7 @@ mod ingestion;
 mod market_catalog;
 mod market_enablement;
 mod market_metadata;
+mod persistence;
 mod portfolio;
 mod readonly_portfolio;
 mod screener;
@@ -279,6 +280,8 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
         .busy_timeout(std::time::Duration::from_secs(5));
     let pool = SqlitePool::connect_with(database_options).await?;
     debug!("database connected");
+
+    persistence::reconcile_known_migration_history(&pool).await?;
 
     // We own the apalis `Jobs`/`Workers` tables as consumer migrations rather
     // than calling apalis-sqlite's own migrator, which would compete with ours
