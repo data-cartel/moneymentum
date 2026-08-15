@@ -20,8 +20,12 @@ vi.mock("ccxt/derive", () => ({
   }),
 }))
 
+import derive from "ccxt/derive"
+
 import {
+  DERIVE_REQUEST_TIMEOUT_MS,
   deriveRestBaseUrl,
+  integerForAbiEncode,
   mapDerivePosition,
   parseOptionalSubaccountId,
   parseSessionPrivateKey,
@@ -277,6 +281,9 @@ describe("fetchDeriveBalance", () => {
     expect(mockExchange.options["deriveWalletAddress"]).toBe(
       sampleCredentials().deriveWallet,
     )
+    expect(vi.mocked(derive)).toHaveBeenCalledWith(
+      expect.objectContaining({ timeout: DERIVE_REQUEST_TIMEOUT_MS }),
+    )
     expect(mockExchange.urls.api).toEqual({
       public: "/derive-api-demo/public",
       private: "/derive-api-demo/private",
@@ -347,6 +354,26 @@ describe("parseSessionPrivateKey", () => {
       "0x3333333333333333333333333333333333333333333333333333333333333333",
     )
     expect(parsed.sessionAddress.startsWith("0x")).toBe(true)
+  })
+})
+
+describe("integerForAbiEncode", () => {
+  it("keeps option base_asset_sub_id as BigInt", () => {
+    expect(integerForAbiEncode("39614108744922863198558842368")).toBe(
+      39614108744922863198558842368n,
+    )
+  })
+
+  it("leaves safe integers to CCXT parseToNumeric", () => {
+    expect(integerForAbiEncode("0")).toBeNull()
+    expect(integerForAbiEncode("144457")).toBeNull()
+    expect(integerForAbiEncode(144457)).toBeNull()
+  })
+
+  it("ignores non-integers and already-lossy numbers", () => {
+    expect(integerForAbiEncode("3.96e+28")).toBeNull()
+    expect(integerForAbiEncode(3.961410874492286e28)).toBeNull()
+    expect(integerForAbiEncode(undefined)).toBeNull()
   })
 })
 

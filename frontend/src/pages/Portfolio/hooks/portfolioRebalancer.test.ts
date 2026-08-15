@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 
 import {
   captureStagedPortfolioOverlay,
+  deriveActionsToOrderRequests,
+  deriveLimitPriceForSide,
   diffPortfolios,
   mergePortfolioMaps,
   portfolioMapFromDerivePositions,
@@ -645,5 +647,99 @@ describe("captureStagedPortfolioOverlay", () => {
     )
 
     expect(overlay.deletedArchive[symbol]).toEqual(live)
+  })
+})
+
+describe("deriveActionsToOrderRequests", () => {
+  const instrument = "ETH-20260925-2000-C"
+
+  it("builds a reduce-only close from current notional sized on mark", () => {
+    const current = {
+      [instrument]: option(instrument, 100),
+    }
+    const requests = deriveActionsToOrderRequests(
+      [
+        {
+          kind: "close",
+          symbol: instrument,
+          side: "buy",
+          positionKind: "option",
+          venue: "derive",
+        },
+      ],
+      current,
+      {
+        [instrument]: {
+          symbol: instrument,
+          bid: 50,
+          ask: 52,
+          last: 51,
+          mark: 50,
+        },
+      },
+    )
+
+    expect(requests).toEqual([
+      {
+        symbol: instrument,
+        side: "sell",
+        amount: 2,
+        price: 50,
+        type: "limit",
+        reduceOnly: true,
+      },
+    ])
+  })
+
+  it("builds an expansion rebalance at the ask, sized on mark", () => {
+    const requests = deriveActionsToOrderRequests(
+      [
+        {
+          kind: "rebalance",
+          symbol: instrument,
+          signedNotionalDelta: 110,
+          leverage: 1,
+          leverageChanged: false,
+          positionKind: "option",
+          venue: "derive",
+        },
+      ],
+      {},
+      {
+        [instrument]: {
+          symbol: instrument,
+          bid: 50,
+          ask: 55,
+          last: 52,
+          mark: 55,
+        },
+      },
+    )
+
+    expect(requests).toEqual([
+      {
+        symbol: instrument,
+        side: "buy",
+        amount: 2,
+        price: 55,
+        type: "limit",
+        reduceOnly: false,
+      },
+    ])
+  })
+
+  it("deriveLimitPriceForSide prefers book then mark", () => {
+    expect(
+      deriveLimitPriceForSide(
+        { symbol: "x", bid: null, ask: 10, last: 9, mark: 8 },
+        "buy",
+      ),
+    ).toBe(10)
+    expect(
+      deriveLimitPriceForSide(
+        { symbol: "x", bid: null, ask: null, last: 9, mark: 8 },
+        "buy",
+      ),
+    ).toBe(8)
   })
 })

@@ -1,5 +1,9 @@
 import { type OrderSide, type RebalanceParams } from "@/hooks/useTrading"
 import type { OrderResult } from "@/services/hyperliquid-client"
+import type {
+  DeriveBatchOrderRequest,
+  DeriveTickerQuote,
+} from "@/services/derive-client"
 
 import {
   isPerpPosition,
@@ -515,4 +519,157 @@ export const diffPortfolios = (
   }
 
   return actions
+}
+
+/**
+ * Aggressive limit for rebalance fills: buy at ask, sell at bid, fall back to
+ * mark/last when the book side is missing.
+ */
+export const deriveLimitPriceForSide = (
+  ticker: DeriveTickerQuote,
+  side: OrderSide,
+): number | null => {
+  const preferred =
+    side === "buy"
+      ? (ticker.ask ?? ticker.mark ?? ticker.last)
+      : (ticker.bid ?? ticker.mark ?? ticker.last)
+
+  if (preferred === null || !(preferred > 0)) {
+    return null
+  }
+
+  return preferred
+}
+
+const isReduceOnlyOrder = (
+  current: PortfolioInterface | undefined,
+  orderSide: OrderSide,
+): boolean => {
+  if (current === undefined) {
+    return false
+  }
+  return (
+    (current.side === "buy" && orderSide === "sell") ||
+    (current.side === "sell" && orderSide === "buy")
+  )
+}
+
+const contractsFromPremiumNotional = (
+  notionalUsd: number,
+  limitPrice: number,
+): number => {
+  if (!(notionalUsd > 0) || !(limitPrice > 0)) {
+    return 0
+  }
+  return notionalUsd / limitPrice
+}
+
+/** Prefer mark for converting premium USD <-> contracts; fall back to last. */
+const deriveSizingPrice = (ticker: DeriveTickerQuote): number | null => {
+  const preferred = ticker.mark ?? ticker.last
+  if (preferred === null || !(preferred > 0)) {
+    return null
+  }
+  return preferred
+}
+
+const requireDeriveTicker = (
+  tickers: Record<string, DeriveTickerQuote>,
+  symbol: string,
+  actionLabel: string,
+): DeriveTickerQuote => {
+  const entry = Object.entries(tickers).find(
+    ([tickerSymbol]) => tickerSymbol === symbol,
+  )
+  if (entry === undefined) {
+    throw new Error(`Missing Derive ticker for ${actionLabel} of ${symbol}`)
+  }
+  return entry[1]
+}
+
+/**
+ * Maps Derive portfolio actions to limit order requests. Premium notionals
+ * convert to contracts as `notional / mark` (same as the Test page /
+ * order ticket). Limit price is aggressive book (ask/bid). Throws if a
+ * required ticker or price is missing.
+ */
+export const deriveActionsToOrderRequests = (
+  actions: RebalanceAction[],
+  current: Record<string, PortfolioInterface | undefined>,
+  tickers: Record<string, DeriveTickerQuote>,
+): DeriveBatchOrderRequest[] => {
+  const deriveActions = actions.filter(action => action.venue === "derive")
+  const requests: DeriveBatchOrderRequest[] = []
+
+  for (const action of deriveActions) {
+    const currentPosition = current[action.symbol]
+
+    switch (action.kind) {
+      case "close": {
+        if (currentPosition === undefined) {
+          continue
+        }
+        const orderSide: OrderSide = action.side === "buy" ? "sell" : "buy"
+        const ticker = requireDeriveTicker(tickers, action.symbol, "close")
+        const price = deriveLimitPriceForSide(ticker, orderSide)
+        const sizingPrice = deriveSizingPrice(ticker) ?? price
+        if (price === null || sizingPrice === null) {
+          throw new Error(
+            `No usable Derive price for close of ${action.symbol}`,
+          )
+        }
+        const amount = contractsFromPremiumNotional(
+          currentPosition.notional,
+          sizingPrice,
+        )
+        if (!(amount > 0)) {
+          continue
+        }
+        requests.push({
+          symbol: action.symbol,
+          side: orderSide,
+          amount,
+          price,
+          type: "limit",
+          reduceOnly: true,
+        })
+        break
+      }
+      case "rebalance": {
+        const orderSide: OrderSide =
+          action.signedNotionalDelta > 0 ? "buy" : "sell"
+        const ticker = requireDeriveTicker(tickers, action.symbol, "rebalance")
+        const price = deriveLimitPriceForSide(ticker, orderSide)
+        const sizingPrice = deriveSizingPrice(ticker) ?? price
+        if (price === null || sizingPrice === null) {
+          throw new Error(
+            `No usable Derive price for rebalance of ${action.symbol}`,
+          )
+        }
+        const amount = contractsFromPremiumNotional(
+          Math.abs(action.signedNotionalDelta),
+          sizingPrice,
+        )
+        if (!(amount > 0)) {
+          continue
+        }
+        requests.push({
+          symbol: action.symbol,
+          side: orderSide,
+          amount,
+          price,
+          type: "limit",
+          reduceOnly: isReduceOnlyOrder(currentPosition, orderSide),
+        })
+        break
+      }
+      case "preciseRebalance": {
+        throw new Error(
+          `Derive does not support preciseRebalance (${action.symbol})`,
+        )
+      }
+    }
+  }
+
+  return requests
 }

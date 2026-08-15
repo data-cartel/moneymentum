@@ -557,6 +557,7 @@ export interface DeriveCcxtExchange {
   publicPostGetInstrument: (params: {
     instrument_name: string
   }) => Promise<{ result?: unknown }>
+  timeout?: number
   fetchBalance: () => Promise<{
     total?: Record<string, number | string | undefined>
     info?: unknown
@@ -605,6 +606,10 @@ export interface DeriveCcxtMarket {
   symbol: string
   option?: boolean
   swap?: boolean
+  precision?: {
+    amount?: number
+    price?: number
+  }
   info?: Record<string, unknown>
 }
 
@@ -657,6 +662,51 @@ const applyDeriveApiProxy = (
 }
 
 /**
+ * Option `base_asset_sub_id` is a uint256 that does not fit in a JS number.
+ * CCXT `parseToNumeric` uses `parseInt`, then ethers.encode overflows
+ * (`INVALID_ARGUMENT` with value ~3.96e28). Keep full precision as BigInt.
+ */
+export const integerForAbiEncode = (value: unknown): bigint | null => {
+  if (typeof value !== "string") {
+    return null
+  }
+  const digits = value.trim()
+  if (!/^-?\d+$/.test(digits)) {
+    return null
+  }
+  const asBigInt = BigInt(digits)
+  if (
+    asBigInt <= BigInt(Number.MAX_SAFE_INTEGER) &&
+    asBigInt >= BigInt(Number.MIN_SAFE_INTEGER)
+  ) {
+    return null
+  }
+  return asBigInt
+}
+
+const patchParseToNumericForOptionSubIds = (
+  exchange: DeriveCcxtExchange,
+): void => {
+  const patchable = exchange as DeriveCcxtExchange & {
+    parseToNumeric?: (value: unknown) => number | bigint
+  }
+  if (typeof patchable.parseToNumeric !== "function") {
+    return
+  }
+  const originalParseToNumeric = patchable.parseToNumeric.bind(patchable)
+  patchable.parseToNumeric = (value: unknown): number | bigint => {
+    const encoded = integerForAbiEncode(value)
+    if (encoded !== null) {
+      return encoded
+    }
+    return originalParseToNumeric(value)
+  }
+}
+
+/** CCXT default is 10s; private/order through the Vite proxy often needs longer. */
+export const DERIVE_REQUEST_TIMEOUT_MS = 30_000
+
+/**
  * Shared CCXT Derive exchange (REST + WS when aliased to pro/derive).
  * Auth is the Developers session key; `deriveWalletAddress` is the SCW.
  */
@@ -671,6 +721,7 @@ export const createDeriveExchange = (
     walletAddress: credentials.sessionAddress,
     privateKey: credentials.sessionPrivateKey,
     enableRateLimit: true,
+    timeout: DERIVE_REQUEST_TIMEOUT_MS,
   })
 
   if (credentials.networkMode === "testnet") {
@@ -683,6 +734,7 @@ export const createDeriveExchange = (
   }
 
   applyDeriveApiProxy(exchange, credentials.networkMode)
+  patchParseToNumericForOptionSubIds(exchange)
   return exchange
 }
 

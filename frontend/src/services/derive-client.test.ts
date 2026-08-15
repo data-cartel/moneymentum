@@ -16,6 +16,9 @@ vi.mock("ccxt/derive", () => ({
 import {
   mapDeriveOrderForWatch,
   DeriveTradingClient,
+  isCcxtRequestTimeout,
+  snapToDeriveStep,
+  DEFAULT_DERIVE_AMOUNT_STEP,
   type DeriveBatchOrderRequest,
 } from "./derive-client"
 import type { DeriveSessionCredentials } from "./deriveAccount"
@@ -27,6 +30,30 @@ const credentials = (): DeriveSessionCredentials => ({
     "0x5b47181e772213c58ba3880a6e63a4458df76b3642209f95a817c697d5bf4548",
   networkMode: "testnet",
   subaccountId: 144457,
+})
+
+describe("isCcxtRequestTimeout", () => {
+  it("matches CCXT RequestTimeout by name or message", () => {
+    const named = new Error("boom")
+    named.name = "RequestTimeout"
+    expect(isCcxtRequestTimeout(named)).toBe(true)
+    expect(
+      isCcxtRequestTimeout(
+        new Error("derive POST /private/order request timed out (10000 ms)"),
+      ),
+    ).toBe(true)
+    expect(isCcxtRequestTimeout(new Error("insufficient margin"))).toBe(false)
+  })
+})
+
+describe("snapToDeriveStep", () => {
+  it("rounds contracts onto the venue amount_step", () => {
+    expect(snapToDeriveStep(0.011866234, DEFAULT_DERIVE_AMOUNT_STEP)).toBe(
+      0.01187,
+    )
+    expect(snapToDeriveStep(2, DEFAULT_DERIVE_AMOUNT_STEP)).toBe(2)
+    expect(snapToDeriveStep(0, DEFAULT_DERIVE_AMOUNT_STEP)).toBe(0)
+  })
 })
 
 describe("mapDeriveOrderForWatch", () => {
@@ -130,6 +157,99 @@ describe("DeriveTradingClient.createOrdersBatch", () => {
       2100,
       { subaccount_id: 144457, max_fee: 50 },
     ])
+  })
+
+  it("recovers a timed-out createOrder from a matching open order", async () => {
+    const timeout = new Error(
+      "derive POST /derive-api-demo/private/order request timed out (10000 ms)",
+    )
+    timeout.name = "RequestTimeout"
+    const createOrder = vi.fn().mockRejectedValue(timeout)
+    const fetchOpenOrders = vi.fn().mockResolvedValue([
+      {
+        id: "recovered",
+        symbol: "ETH/USD:USDC",
+        side: "buy",
+        amount: 0.01,
+        price: 2000,
+        status: "open",
+      },
+    ])
+
+    const client = new DeriveTradingClient(credentials())
+    const exchange = (
+      client as unknown as {
+        exchange: {
+          createOrder: typeof createOrder
+          fetchOpenOrders: typeof fetchOpenOrders
+        }
+      }
+    ).exchange
+    exchange.createOrder = createOrder
+    exchange.fetchOpenOrders = fetchOpenOrders
+    vi.spyOn(client, "resolveSymbol").mockResolvedValue("ETH/USD:USDC")
+
+    const orders = await client.createOrdersBatch([
+      { symbol: "ETH-PERP", side: "buy", amount: 0.01, price: 2000 },
+    ])
+
+    expect(orders).toEqual([
+      expect.objectContaining({ id: "recovered", status: "open" }),
+    ])
+    expect(fetchOpenOrders).toHaveBeenCalled()
+  })
+
+  it("snaps amount and price to market steps before createOrder", async () => {
+    const createOrder = vi.fn().mockResolvedValue({
+      id: "snapped",
+      symbol: "BTC/USD:USDC-260816-64000-C",
+      side: "buy",
+    })
+    const client = new DeriveTradingClient(credentials())
+    const exchange = (
+      client as unknown as {
+        exchange: {
+          createOrder: typeof createOrder
+          market: (symbol: string) => {
+            symbol: string
+            option: boolean
+            precision: { amount: number; price: number }
+            info: { amount_step: string; tick_size: string }
+          }
+        }
+      }
+    ).exchange
+    exchange.createOrder = createOrder
+    exchange.market = () => ({
+      symbol: "BTC/USD:USDC-260816-64000-C",
+      option: true,
+      precision: { amount: 0.00001, price: 0.1 },
+      info: { amount_step: "0.00001", tick_size: "0.1" },
+    })
+    vi.spyOn(client, "resolveSymbol").mockResolvedValue(
+      "BTC/USD:USDC-260816-64000-C",
+    )
+
+    await client.createOrdersBatch([
+      {
+        symbol: "BTC-20260816-64000-C",
+        side: "buy",
+        amount: 0.011866234,
+        price: 927.04,
+      },
+    ])
+
+    expect(createOrder).toHaveBeenCalledWith(
+      "BTC/USD:USDC-260816-64000-C",
+      "limit",
+      "buy",
+      0.01187,
+      927,
+      {
+        subaccount_id: 144457,
+        max_fee: 927 * 0.01187 * 2,
+      },
+    )
   })
 
   it("rejects trading when subaccount id is missing", async () => {

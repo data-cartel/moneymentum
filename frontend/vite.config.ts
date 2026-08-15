@@ -245,9 +245,27 @@ export default defineConfig({
       ],
     },
     proxy: {
+      "/hl-testnet": {
+        target: "https://api.hyperliquid-testnet.xyz",
+        changeOrigin: true,
+        secure: true,
+        timeout: 60_000,
+        proxyTimeout: 60_000,
+        rewrite: (proxyPath: string) => proxyPath.replace(/^\/hl-testnet/, ""),
+      },
+      "/hl": {
+        target: "https://api.hyperliquid.xyz",
+        changeOrigin: true,
+        secure: true,
+        timeout: 60_000,
+        proxyTimeout: 60_000,
+        rewrite: (proxyPath: string) => proxyPath.replace(/^\/hl/, ""),
+      },
       "/derive-api-demo": {
         target: "https://api-demo.lyra.finance",
         changeOrigin: true,
+        timeout: 60_000,
+        proxyTimeout: 60_000,
         rewrite: (proxyPath: string) =>
           proxyPath.replace(/^\/derive-api-demo/, ""),
         secure: true,
@@ -255,6 +273,8 @@ export default defineConfig({
       "/derive-api": {
         target: "https://api.lyra.finance",
         changeOrigin: true,
+        timeout: 60_000,
+        proxyTimeout: 60_000,
         rewrite: (proxyPath: string) => proxyPath.replace(/^\/derive-api/, ""),
         secure: true,
       },

@@ -1,6 +1,7 @@
 import type { Order } from "ccxt"
 import * as Effect from "effect/Effect"
 
+import { getErrorMessage } from "@/lib/error-message"
 import { ExchangeRequestError } from "@/services/hyperliquid"
 import type { OrderResult, OrderSide } from "@/services/hyperliquid-client"
 import {
@@ -17,6 +18,8 @@ const DERIVE_WATCH_ORDERS_TIMEOUT_MS = 10_000
 const DERIVE_ORDER_NONCE_GAP_MS = 2
 /** Derive always requires max_fee; ~2x notional matches the UI default for options. */
 const DEFAULT_MAX_FEE_NOTIONAL_MULTIPLIER = 2
+/** Venue error 11012: amount must be a multiple of this step when market metadata is missing. */
+export const DEFAULT_DERIVE_AMOUNT_STEP = 0.00001
 
 const FILLED_STATUSES = new Set(["filled", "closed"])
 const OPEN_STATUSES = new Set(["open", "triggered", "untriggered", "working"])
@@ -50,6 +53,52 @@ const sleep = (milliseconds: number): Promise<void> =>
     setTimeout(resolve, milliseconds)
   })
 
+export const isCcxtRequestTimeout = (error: unknown): boolean => {
+  if (typeof error !== "object" || error === null) {
+    return false
+  }
+  const name =
+    "name" in error && typeof error.name === "string" ? error.name : ""
+  const message = error instanceof Error ? error.message : ""
+  return (
+    name === "RequestTimeout" ||
+    message.includes("timed out") ||
+    message.includes("request timed out")
+  )
+}
+
+const amountsMatch = (left: number, right: number): boolean =>
+  Math.abs(left - right) <= Math.max(1e-8, Math.abs(right) * 1e-8)
+
+const pricesMatch = (left: number, right: number): boolean =>
+  Math.abs(left - right) <= Math.max(1e-6, Math.abs(right) * 1e-6)
+
+const orderMatchesRequest = (
+  order: DeriveCcxtOrder,
+  symbol: string,
+  request: DeriveBatchOrderRequest,
+): boolean => {
+  const orderSymbol = typeof order.symbol === "string" ? order.symbol : ""
+  const sameSymbol =
+    orderSymbol === symbol ||
+    orderSymbol === request.symbol ||
+    orderSymbol.includes(request.symbol) ||
+    request.symbol.includes(orderSymbol)
+  if (!sameSymbol || order.side !== request.side) {
+    return false
+  }
+  if (
+    order.amount !== undefined &&
+    !amountsMatch(order.amount, request.amount)
+  ) {
+    return false
+  }
+  if (order.price !== undefined && !pricesMatch(order.price, request.price)) {
+    return false
+  }
+  return true
+}
+
 const parseNumeric = (value: unknown, fallback: number): number => {
   if (typeof value === "number" && Number.isFinite(value)) return value
   if (typeof value === "string") {
@@ -57,6 +106,53 @@ const parseNumeric = (value: unknown, fallback: number): number => {
     return Number.isFinite(parsed) ? parsed : fallback
   }
   return fallback
+}
+
+const positivePriceOrNull = (
+  value: number | null | undefined,
+): number | null =>
+  typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null
+
+const decimalPlacesFromStep = (step: number): number => {
+  const exponential = step.toExponential()
+  const scientific = /e-(\d+)$/i.exec(exponential)
+  if (scientific !== null) {
+    const digits = Number(scientific[1])
+    return Number.isFinite(digits) ? digits : 8
+  }
+  const fraction = String(step).split(".")
+  return fraction.length < 2 ? 0 : (fraction[1] ?? "").length
+}
+
+/** Round `value` to the nearest multiple of `step` (Derive amount_step / tick). */
+export const snapToDeriveStep = (value: number, step: number): number => {
+  if (!(value > 0) || !(step > 0)) {
+    return 0
+  }
+  const units = Math.round(value / step)
+  return Number((units * step).toFixed(decimalPlacesFromStep(step)))
+}
+
+const readMarketAmountStep = (market: DeriveCcxtMarket | undefined): number => {
+  const fromPrecision = market?.precision?.amount
+  if (typeof fromPrecision === "number" && fromPrecision > 0) {
+    return fromPrecision
+  }
+  const fromInfo = parseNumeric(market?.info?.amount_step, Number.NaN)
+  return fromInfo > 0 ? fromInfo : DEFAULT_DERIVE_AMOUNT_STEP
+}
+
+const readMarketPriceStep = (
+  market: DeriveCcxtMarket | undefined,
+): number | null => {
+  const fromPrecision = market?.precision?.price
+  if (typeof fromPrecision === "number" && fromPrecision > 0) {
+    return fromPrecision
+  }
+  const fromInfo = parseNumeric(market?.info?.tick_size, Number.NaN)
+  return fromInfo > 0 ? fromInfo : null
 }
 
 const readOrderStatus = (order: DeriveCcxtOrder | Order): string => {
@@ -188,18 +284,26 @@ export class DeriveTradingClient {
       unique.map(async instrumentOrSymbol => {
         const symbol = await this.resolveSymbol(instrumentOrSymbol)
         const ticker: DeriveCcxtTicker = await this.exchange.fetchTicker(symbol)
-        const markFromInfo = parseNumeric(
-          (ticker.info as { mark_price?: unknown } | undefined)?.mark_price,
+        const info = ticker.info as
+          | {
+              mark_price?: unknown
+              option_pricing?: { m?: unknown; mark_price?: unknown }
+            }
+          | undefined
+        const markFromInfo = parseNumeric(info?.mark_price, Number.NaN)
+        const modelMark = parseNumeric(
+          info?.option_pricing?.m ?? info?.option_pricing?.mark_price,
           Number.NaN,
         )
         const quote: DeriveTickerQuote = {
           symbol,
-          bid: ticker.bid ?? null,
-          ask: ticker.ask ?? null,
-          last: ticker.last ?? ticker.close ?? null,
+          bid: positivePriceOrNull(ticker.bid),
+          ask: positivePriceOrNull(ticker.ask),
+          last: positivePriceOrNull(ticker.last ?? ticker.close ?? null),
           mark:
-            ticker.mark ??
-            (Number.isFinite(markFromInfo) ? markFromInfo : null),
+            positivePriceOrNull(ticker.mark) ??
+            positivePriceOrNull(markFromInfo) ??
+            positivePriceOrNull(modelMark),
         }
         return [instrumentOrSymbol, quote] as const
       }),
@@ -238,25 +342,138 @@ export class DeriveTradingClient {
     )
   }
 
+  private lookupMarket(symbol: string): DeriveCcxtMarket | undefined {
+    if (typeof this.exchange.market !== "function") {
+      return undefined
+    }
+    try {
+      return this.exchange.market(symbol)
+    } catch {
+      return undefined
+    }
+  }
+
   private async createOne(
     request: DeriveBatchOrderRequest,
+    index: number,
+    total: number,
   ): Promise<DeriveCcxtOrder> {
-    const symbol = await this.resolveSymbol(request.symbol)
-    const maxFee =
-      request.maxFee ?? defaultMaxFee(request.price, request.amount)
+    const stepLabel = `[derive] order ${String(index + 1)}/${String(total)}`
+    console.info(`${stepLabel} request`, {
+      symbol: request.symbol,
+      side: request.side,
+      type: request.type ?? "limit",
+      rawAmount: request.amount,
+      rawPrice: request.price,
+      reduceOnly: request.reduceOnly === true,
+      maxFeeOverride: request.maxFee ?? null,
+    })
 
-    return this.exchange.createOrder(
+    const symbol = await this.resolveSymbol(request.symbol)
+    const market = this.lookupMarket(symbol)
+    console.info(`${stepLabel} symbol resolved`, {
+      requested: request.symbol,
+      ccxtSymbol: symbol,
+      marketId: market?.id ?? null,
+      option: market?.option === true,
+    })
+
+    const amountStep = readMarketAmountStep(market)
+    const amount = snapToDeriveStep(request.amount, amountStep)
+    const priceStep = readMarketPriceStep(market)
+    const price =
+      priceStep === null
+        ? request.price
+        : snapToDeriveStep(request.price, priceStep)
+    console.info(`${stepLabel} size snapped`, {
+      rawAmount: request.amount,
+      amountStep,
+      amount,
+      rawPrice: request.price,
+      priceStep,
+      price,
+    })
+
+    if (!(amount > 0) || !(price > 0)) {
+      throw new Error(
+        `Derive amount/price snapped to zero for ${request.symbol} (amount=${String(request.amount)} step=${String(amountStep)})`,
+      )
+    }
+
+    const maxFee = request.maxFee ?? defaultMaxFee(price, amount)
+    const params = {
+      ...this.subaccountParams(),
+      max_fee: maxFee,
+      ...(request.reduceOnly === true ? { reduceOnly: true } : {}),
+    }
+    const sent: DeriveBatchOrderRequest = {
+      ...request,
       symbol,
-      request.type ?? "limit",
-      request.side,
-      request.amount,
-      request.price,
-      {
-        ...this.subaccountParams(),
-        max_fee: maxFee,
-        ...(request.reduceOnly === true ? { reduceOnly: true } : {}),
-      },
+      amount,
+      price,
+      maxFee,
+    }
+    console.info(`${stepLabel} createOrder payload`, {
+      symbol,
+      type: request.type ?? "limit",
+      side: request.side,
+      amount,
+      price,
+      premium: amount * price,
+      params,
+    })
+
+    try {
+      const created = await this.exchange.createOrder(
+        symbol,
+        request.type ?? "limit",
+        request.side,
+        amount,
+        price,
+        params,
+      )
+      console.info(`${stepLabel} createOrder accepted`, {
+        id: created.id ?? null,
+        symbol: created.symbol ?? symbol,
+        side: created.side ?? request.side,
+        status: readOrderStatus(created) || null,
+        amount: created.amount ?? amount,
+        price: created.price ?? price,
+      })
+      return created
+    } catch (error) {
+      console.error(`${stepLabel} createOrder rejected`, {
+        symbol,
+        amount,
+        price,
+        params,
+        error: getErrorMessage(error),
+      })
+      if (!isCcxtRequestTimeout(error)) {
+        throw error
+      }
+      console.info(`${stepLabel} createOrder timed out, checking open orders`)
+      const recovered = await this.recoverTimedOutOrder(symbol, sent)
+      if (recovered !== null) {
+        console.info(`${stepLabel} recovered open order after timeout`, {
+          id: recovered.id ?? null,
+          status: recovered.status ?? null,
+        })
+        return recovered
+      }
+      throw error
+    }
+  }
+
+  private async recoverTimedOutOrder(
+    symbol: string,
+    request: DeriveBatchOrderRequest,
+  ): Promise<DeriveCcxtOrder | null> {
+    const openOrders = await this.fetchOpenOrders()
+    const match = openOrders.find(order =>
+      orderMatchesRequest(order, symbol, request),
     )
+    return match ?? null
   }
 
   /**
@@ -271,15 +488,25 @@ export class DeriveTradingClient {
     }
 
     requireSubaccountId(this.credentials)
+    console.info("[derive] createOrdersBatch start", {
+      count: requests.length,
+      subaccountId: this.credentials.subaccountId,
+      networkMode: this.credentials.networkMode,
+      requests,
+    })
     const created: DeriveCcxtOrder[] = []
 
     for (const [index, request] of requests.entries()) {
       if (index > 0) {
         await sleep(DERIVE_ORDER_NONCE_GAP_MS)
       }
-      created.push(await this.createOne(request))
+      created.push(await this.createOne(request, index, requests.length))
     }
 
+    console.info("[derive] createOrdersBatch done", {
+      count: created.length,
+      ids: created.map(order => order.id ?? null),
+    })
     return created
   }
 
@@ -369,14 +596,23 @@ export class DeriveTradingClient {
       return []
     }
 
+    console.info("[derive] placeAndMonitorOrders start", {
+      count: requests.length,
+      requests,
+    })
+
     const subaccountParams = this.subaccountParams()
     const watchSince = Date.now()
-    let nextWatch = this.exchange.watchOrders(
-      undefined,
-      watchSince,
-      undefined,
-      subaccountParams,
-    )
+    const watchOrdersSafe = (): Promise<DeriveCcxtOrder[] | Error> =>
+      this.exchange
+        .watchOrders(undefined, watchSince, undefined, subaccountParams)
+        .then(
+          orders => orders,
+          (cause: unknown) =>
+            cause instanceof Error ? cause : new Error(String(cause)),
+        )
+
+    let nextWatch = watchOrdersSafe()
 
     let results: OrderResult[] = []
     let watchTimedOut = false
@@ -415,12 +651,7 @@ export class DeriveTradingClient {
         results = this.mergeWatchUpdates(results, ordersUpdate)
 
         if (this.hasWorking(results)) {
-          nextWatch = this.exchange.watchOrders(
-            undefined,
-            watchSince,
-            undefined,
-            subaccountParams,
-          )
+          nextWatch = watchOrdersSafe()
         }
       }
     } finally {
@@ -455,6 +686,10 @@ export class DeriveTradingClient {
       )
     }
 
+    console.info("[derive] placeAndMonitorOrders done", {
+      watchTimedOut,
+      results,
+    })
     return results
   }
 

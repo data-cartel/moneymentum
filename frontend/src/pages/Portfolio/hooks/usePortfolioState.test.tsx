@@ -11,6 +11,7 @@ import {
   useHyperliquidAccountSummary,
   useHyperliquidLeverageLimits,
   useHyperliquidPositions,
+  useRebalanceDerivePositions,
   useRebalanceHyperliquidPositions,
 } from "@/hooks/useTrading"
 import { useWallet } from "@/hooks/useWallet"
@@ -20,6 +21,7 @@ vi.mock("@/hooks/useTrading", () => ({
   useHyperliquidPositions: vi.fn(),
   useHyperliquidLeverageLimits: vi.fn(),
   useRebalanceHyperliquidPositions: vi.fn(),
+  useRebalanceDerivePositions: vi.fn(),
   useDeriveBalance: vi.fn(() => ({ data: undefined, isLoading: false })),
   useDeriveAccountSnapshot: vi.fn(() => ({
     data: undefined,
@@ -72,7 +74,7 @@ const createWrapper = () => {
 }
 
 describe("usePortfolioState", () => {
-  const mutate = vi.fn()
+  const mutateAsync = vi.fn()
   const refetchPositions = vi.fn()
   const refetchAccountSummary = vi.fn()
   let settledOrders: Array<{
@@ -117,9 +119,7 @@ describe("usePortfolioState", () => {
         crossAccountLeverage: 1,
       },
     })
-    mutate.mockImplementation((_payload, options) => {
-      options?.onSettled?.(settledOrders, null)
-    })
+    mutateAsync.mockImplementation(async () => settledOrders)
 
     vi.mocked(useWallet).mockReturnValue({
       networkMode: () => "testnet",
@@ -172,9 +172,14 @@ describe("usePortfolioState", () => {
     } as ReturnType<typeof useHyperliquidLeverageLimits>)
 
     vi.mocked(useRebalanceHyperliquidPositions).mockReturnValue({
-      mutate,
+      mutateAsync,
       isPending: false,
     } as unknown as ReturnType<typeof useRebalanceHyperliquidPositions>)
+
+    vi.mocked(useRebalanceDerivePositions).mockReturnValue({
+      mutateAsync: vi.fn(async () => []),
+      isPending: false,
+    } as unknown as ReturnType<typeof useRebalanceDerivePositions>)
   })
 
   afterEach(() => {
@@ -464,29 +469,24 @@ describe("usePortfolioState", () => {
 
     result.handleRebalancePositions()
 
-    expect(mutate).toHaveBeenCalledWith(
-      {
-        actions: [
-          {
-            kind: "close",
-            symbol: "BTC/USDC:USDC",
-            side: "buy",
-            positionKind: "perp",
-            venue: "hyperliquid",
-          },
-          {
-            kind: "close",
-            symbol: "ETH/USDC:USDC",
-            side: "buy",
-            positionKind: "perp",
-            venue: "hyperliquid",
-          },
-        ],
-      },
-      expect.objectContaining({
-        onSettled: expect.any(Function),
-      }),
-    )
+    expect(mutateAsync).toHaveBeenCalledWith({
+      actions: [
+        {
+          kind: "close",
+          symbol: "BTC/USDC:USDC",
+          side: "buy",
+          positionKind: "perp",
+          venue: "hyperliquid",
+        },
+        {
+          kind: "close",
+          symbol: "ETH/USDC:USDC",
+          side: "buy",
+          positionKind: "perp",
+          venue: "hyperliquid",
+        },
+      ],
+    })
 
     await waitFor(() => {
       expect(refetchPositions).toHaveBeenCalled()
@@ -574,24 +574,19 @@ describe("usePortfolioState", () => {
     result.handleNotionalChange("BTC/USDC:USDC", 700)
     result.handleRebalancePositions()
 
-    expect(mutate).toHaveBeenCalledWith(
-      {
-        actions: [
-          expect.objectContaining({
-            kind: "rebalance",
-            symbol: "BTC/USDC:USDC",
-            signedNotionalDelta: 100,
-            leverage: 2,
-            leverageChanged: false,
-            positionKind: "perp",
-            venue: "hyperliquid",
-          }),
-        ],
-      },
-      expect.objectContaining({
-        onSettled: expect.any(Function),
-      }),
-    )
+    expect(mutateAsync).toHaveBeenCalledWith({
+      actions: [
+        expect.objectContaining({
+          kind: "rebalance",
+          symbol: "BTC/USDC:USDC",
+          signedNotionalDelta: 100,
+          leverage: 2,
+          leverageChanged: false,
+          positionKind: "perp",
+          venue: "hyperliquid",
+        }),
+      ],
+    })
 
     await waitFor(() => {
       expect(refetchPositions).toHaveBeenCalled()

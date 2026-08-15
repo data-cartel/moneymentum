@@ -21,13 +21,9 @@ export {
   millisecondsUntilNextUtcMidnight,
 } from "@/services/hyperliquid-markets"
 
-const HYPERLIQUID_MAINNET_INFO_URL = "https://api.hyperliquid.xyz/info"
-const HYPERLIQUID_TESTNET_INFO_URL = "https://api.hyperliquid-testnet.xyz/info"
-
-const hyperliquidInfoUrl = (network: NetworkMode): string =>
-  network === "testnet"
-    ? HYPERLIQUID_TESTNET_INFO_URL
-    : HYPERLIQUID_MAINNET_INFO_URL
+/** Same-origin Vite/nginx proxy. Direct api.hyperliquid*.xyz hits CORS from the browser. */
+export const hyperliquidInfoUrl = (network: NetworkMode): string =>
+  network === "testnet" ? "/hl-testnet/info" : "/hl/info"
 
 const HYPERLIQUID_REQUEST_TIMEOUT_MS = 10_000
 const HYPERLIQUID_WATCH_ORDERS_TIMEOUT_MS = 10_000
@@ -167,14 +163,10 @@ const fetchPerpMarketContexts = async (
   return contexts
 }
 
-const isDeployed = (): boolean =>
-  typeof window !== "undefined" && window.location.hostname !== "localhost"
-
 const applyApiProxy = (
   exchange: HyperliquidExchange,
   networkMode: NetworkMode,
 ): void => {
-  if (!isDeployed()) return
   const proxyBase = networkMode === "testnet" ? "/hl-testnet" : "/hl"
   const existingApi = exchange.urls["api"]
   if (typeof existingApi === "object") {
@@ -504,12 +496,7 @@ export class HyperliquidClient {
   }
 
   async getFundingRates(): Promise<Record<string, number>> {
-    const infoUrl =
-      this.networkMode === "testnet"
-        ? HYPERLIQUID_TESTNET_INFO_URL
-        : HYPERLIQUID_MAINNET_INFO_URL
-
-    const response = await fetch(infoUrl, {
+    const response = await fetch(hyperliquidInfoUrl(this.networkMode), {
       method: "POST",
       // Abort if the info endpoint is unresponsive for too long to avoid hanging the UI.
       signal: AbortSignal.timeout(HYPERLIQUID_REQUEST_TIMEOUT_MS),

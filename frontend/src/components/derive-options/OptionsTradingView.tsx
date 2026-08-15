@@ -1361,8 +1361,16 @@ export const OptionsTradingView = (
             return
           }
           expirySwitchInFlightRef.blockStreamUntilExpiryUnix = null
-        } else if (next.active_expiry_unix !== selectedExpiryUnix()) {
-          return
+        } else {
+          const selected = selectedExpiryUnix()
+          const selectedStillListed =
+            selected !== null && next.expiry_unixes.includes(selected)
+          if (next.active_expiry_unix !== selected && selectedStillListed) {
+            return
+          }
+          if (next.active_expiry_unix !== selected) {
+            setSelectedExpiryUnix(next.active_expiry_unix)
+          }
         }
         batch(() => {
           pushOptionsSnapshot(next)

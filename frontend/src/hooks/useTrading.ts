@@ -23,6 +23,8 @@ import {
 import {
   cancelDeriveOrder,
   fetchDeriveOpenOrders,
+  placeAndMonitorDeriveOrders,
+  type DeriveBatchOrderRequest,
 } from "@/services/derive-client"
 import { DeriveSessionMissing } from "@/services/deriveAccount"
 import type { RebalanceAction } from "@/pages/Portfolio/hooks/portfolioRebalancer"
@@ -231,6 +233,49 @@ export const useRebalanceHyperliquidPositions = () => {
       ),
     // Portfolio `finalizeRebalance` owns post-trade refresh. Invalidating here
     // races that settle and can briefly reapply a stale snapshot.
+  }))
+}
+
+export interface DeriveRebalanceParams {
+  requests: DeriveBatchOrderRequest[]
+}
+
+/**
+ * Place + monitor Derive limit orders (same path as the Derive Test trading
+ * tab). Callers map portfolio actions to requests before mutate.
+ */
+export const useRebalanceDerivePositions = () => {
+  const session = useDeriveSessionCredentials()
+  const queryClient = useQueryClient()
+
+  return useMutation(() => ({
+    mutationFn: (params: DeriveRebalanceParams) => {
+      const credentials = session()
+      if (credentials === null) {
+        return Effect.runPromise(Effect.fail(new DeriveSessionMissing()))
+      }
+      if (credentials.subaccountId === null) {
+        return Effect.runPromise(
+          Effect.fail(
+            new Error(
+              "Select a Derive subaccount before rebalancing Derive positions",
+            ),
+          ),
+        )
+      }
+      if (params.requests.length === 0) {
+        return Promise.resolve([] as OrderResult[])
+      }
+
+      return Effect.runPromise(
+        placeAndMonitorDeriveOrders(credentials, params.requests),
+      )
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: QUERY_KEYS.deriveOpenOrders,
+      })
+    },
   }))
 }
 

@@ -6,19 +6,23 @@ import {
   untrack,
 } from "solid-js"
 import Decimal from "decimal.js"
+import * as Effect from "effect/Effect"
 import {
   useHyperliquidAccountSummary,
   useHyperliquidPositions,
   useHyperliquidLeverageLimits,
   useRebalanceHyperliquidPositions,
+  useRebalanceDerivePositions,
   useDeriveBalance,
   useDeriveAccountSnapshot,
   useDeriveSessionCredentials,
   type OrderSide,
   type OrderResult,
 } from "@/hooks/useTrading"
+import { fetchDeriveTickers } from "@/services/derive-client"
 import {
   captureStagedPortfolioOverlay,
+  deriveActionsToOrderRequests,
   diffPortfolios,
   mergeExchangeTargetWithStagedOverlay,
   mergePortfolioMaps,
@@ -167,7 +171,8 @@ export const usePortfolioState = () => {
   const positionsQuery = useHyperliquidPositions()
   const leverageLimitsQuery = useHyperliquidLeverageLimits()
   // Mutations
-  const rebalancePositionsMutation = useRebalanceHyperliquidPositions()
+  const rebalanceHyperliquidMutation = useRebalanceHyperliquidPositions()
+  const rebalanceDeriveMutation = useRebalanceDerivePositions()
 
   const [currentPortfolio, setCurrentPortfolio] = createStore<
     Record<string, PortfolioInterface | undefined>
@@ -947,7 +952,11 @@ export const usePortfolioState = () => {
   }
 
   const handleRebalancePositions = () => {
-    if (isRebalancingUi() || rebalancePositionsMutation.isPending) {
+    if (
+      isRebalancingUi() ||
+      rebalanceHyperliquidMutation.isPending ||
+      rebalanceDeriveMutation.isPending
+    ) {
       return
     }
 
@@ -961,33 +970,101 @@ export const usePortfolioState = () => {
     )
     const deriveActions = allActions.filter(action => action.venue === "derive")
 
-    if (deriveActions.length > 0) {
-      toast.message(
-        `${String(deriveActions.length)} Derive action(s) staged — execution not wired yet`,
-      )
-    }
-
-    if (hyperliquidActions.length === 0) {
+    if (hyperliquidActions.length === 0 && deriveActions.length === 0) {
       return
     }
 
-    const apiPayload = { actions: hyperliquidActions }
+    if (deriveActions.length > 0) {
+      const credentials = deriveSession()
+      if (credentials === null) {
+        toast.error("Unlock Derive before rebalancing Derive positions")
+        return
+      }
+      if (credentials.subaccountId === null) {
+        toast.error("Select a Derive subaccount before rebalancing")
+        return
+      }
+    }
+
+    const currentSnapshot = untrack(() => ({ ...currentPortfolio }))
 
     setIsRebalancingUi(true)
-    rebalancePositionsMutation.mutate(apiPayload, {
-      onSettled: (data, error) => {
-        if (error || !data) {
-          if (error) {
-            console.error("rebalance failed", getExchangeErrorDetail(error))
-            toast.error(getErrorMessage(error))
-          }
-          setIsRebalancingUi(false)
-          return
-        }
 
-        void finalizeRebalance(data, apiPayload.actions)
-      },
-    })
+    void (async () => {
+      const submittedOrders: OrderResult[] = []
+      const submittedActions: RebalanceAction[] = []
+      let failureMessage: string | undefined
+
+      if (hyperliquidActions.length > 0) {
+        try {
+          const orders = await rebalanceHyperliquidMutation.mutateAsync({
+            actions: hyperliquidActions,
+          })
+          submittedOrders.push(...orders)
+          submittedActions.push(...hyperliquidActions)
+        } catch (error) {
+          console.error(
+            "hyperliquid rebalance failed",
+            getExchangeErrorDetail(error),
+          )
+          failureMessage = getErrorMessage(error)
+        }
+      }
+
+      if (deriveActions.length > 0 && failureMessage === undefined) {
+        try {
+          const credentials = deriveSession()
+          if (credentials === null) {
+            throw new Error("Unlock Derive before rebalancing Derive positions")
+          }
+          const symbols = [
+            ...new Set(deriveActions.map(action => action.symbol)),
+          ]
+          const tickers = await Effect.runPromise(
+            fetchDeriveTickers(credentials, symbols),
+          )
+          console.info("[derive] rebalance tickers", tickers)
+          const requests = deriveActionsToOrderRequests(
+            deriveActions,
+            currentSnapshot,
+            tickers,
+          )
+          console.info("[derive] rebalance mapped requests", {
+            actions: deriveActions,
+            requests,
+          })
+          const orders = await rebalanceDeriveMutation.mutateAsync({
+            requests,
+          })
+          submittedOrders.push(...orders)
+          submittedActions.push(...deriveActions)
+        } catch (error) {
+          console.error(
+            "derive rebalance failed",
+            getExchangeErrorDetail(error),
+          )
+          failureMessage = getErrorMessage(error)
+        }
+      } else if (deriveActions.length > 0 && failureMessage !== undefined) {
+        toast.message(
+          `${String(deriveActions.length)} Derive action(s) skipped after Hyperliquid failure`,
+        )
+      }
+
+      if (submittedOrders.length === 0) {
+        if (failureMessage !== undefined) {
+          toast.error(failureMessage)
+        }
+        setIsRebalancingUi(false)
+        return
+      }
+
+      if (failureMessage !== undefined) {
+        toast.error(failureMessage)
+      }
+
+      await finalizeRebalance(submittedOrders, submittedActions)
+    })()
   }
 
   const canSubmit = () => {
