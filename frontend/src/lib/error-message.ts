@@ -107,8 +107,24 @@ const messageForTag = (error: TaggedError): string | null => {
       const cause = "cause" in error ? error.cause : undefined
       return messageFromExchangeCause(cause) ?? EXCHANGE_REJECTED_MESSAGE
     }
-    case "WalletConnectError":
-      return "Failed to save wallet credentials. Please try again."
+    case "WalletConnectError": {
+      const cause = "cause" in error ? error.cause : undefined
+      if (
+        hasTag(cause) &&
+        (cause._tag === "ApproveAgentFailed" ||
+          cause._tag === "ReownWalletUnavailable" ||
+          cause._tag === "ReownWalletRejected" ||
+          cause._tag === "RevokeAgentFailed" ||
+          cause._tag === "WalletAuthorizationAccountChanged" ||
+          cause._tag === "WalletAuthorizationNetworkChanged" ||
+          cause._tag === "WalletAuthorizationContextChanged" ||
+          cause._tag === "WalletConnectionContextChanged" ||
+          cause._tag === "WalletOperationContextChanged")
+      ) {
+        return messageForTag(cause)
+      }
+      return "Failed to connect Hyperliquid agent. Please try again."
+    }
     case "WalletUnlockError":
       return "Failed to unlock wallet. Please try again."
     case "WalletIncorrectPin":
@@ -117,6 +133,36 @@ const messageForTag = (error: TaggedError): string | null => {
       return "Failed to unlock wallet. Please try again."
     case "WalletSessionMissing":
       return "No saved wallet session found."
+    case "WalletAddressMissing":
+      return "No wallet address to copy."
+    case "ClipboardWriteFailed":
+      return "Failed to copy address. Check clipboard permissions."
+    case "WalletDisconnectFailed":
+      return "Failed to disconnect wallet. Please try again."
+    case "WalletAuthorizationAccountChanged":
+      return "Wallet changed during agent authorization. Please try again."
+    case "WalletAuthorizationNetworkChanged":
+      return "Network changed during agent authorization. Please try again."
+    case "WalletAuthorizationContextChanged":
+      return "Wallet context changed during agent authorization. Please try again."
+    case "WalletConnectionContextChanged":
+      return "Wallet changed while credentials were connecting. Please try again."
+    case "WalletOperationContextChanged":
+      return "Wallet changed before the operation completed. Please try again."
+    case "WalletUnlockContextChanged":
+      return "Wallet changed while unlocking. Please try again."
+    case "WalletDisconnectContextChanged":
+      return "Wallet changed while disconnecting. Please try again."
+    case "ReownWalletUnavailable":
+      return "Connect a wallet with Reown first."
+    case "ReownWalletRejected":
+      return "Wallet request was rejected."
+    case "ApproveAgentFailed":
+      return "Hyperliquid agent approval failed. Please try again."
+    case "RevokeAgentFailed":
+      return "Failed to revoke Hyperliquid agent. Please try again."
+    case "ReownModalOpenFailed":
+      return "Could not open wallet connect."
     default:
       return null
   }

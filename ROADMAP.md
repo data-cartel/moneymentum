@@ -40,6 +40,9 @@ Design: [adrs/0001](./adrs/0001-event-sorcery-persistence-foundation.md).
 - [x] Serve per-market max leverage limits from the catalog --
       [#379](https://github.com/dataclique/moneymentum/issues/379) /
       [#380](https://github.com/dataclique/moneymentum/pull/380)
+- [x] K-prefixed Hyperliquid markets fail ingestion --
+      [#465](https://github.com/dataclique/moneymentum/issues/465) /
+      [#466](https://github.com/dataclique/moneymentum/pull/466)
 - [x] Schedule candle and funding ingestion on independent cadences --
       [#411](https://github.com/dataclique/moneymentum/issues/411) /
       [#412](https://github.com/dataclique/moneymentum/pull/412)

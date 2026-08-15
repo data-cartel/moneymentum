@@ -32,7 +32,16 @@ vi.mock("@tanstack/solid-virtual", () => ({
 vi.mock("@/hooks/useWallet", () => ({
   useWallet: () => ({
     isConnected: () => true,
+    mainAddress: () => null,
+    setMainAddress: vi.fn(),
   }),
+}))
+
+vi.mock("@/reown/evmAppKit", () => ({
+  getOrCreateEvmAppKit: () => null,
+  readEvmAddressFromAccountState: () => null,
+  readEvmWalletConnectedFromAccountState: () => false,
+  readReownProjectId: () => null,
 }))
 
 vi.mock("../../hooks/useFactorScores", () => ({

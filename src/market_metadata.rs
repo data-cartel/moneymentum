@@ -112,7 +112,8 @@ pub(crate) enum RefreshError {
 }
 
 /// Refreshes the Hyperliquid universe from the live exchange and returns the
-/// tradable markets: every listed market the operator has not disabled.
+/// tradable markets with their exchange-native identifiers: every listed
+/// market the operator has not disabled.
 pub(crate) async fn refresh_markets(
     client: &dyn Hyperliquid,
     catalog: &Store<MarketCatalog>,
@@ -140,12 +141,20 @@ pub(crate) async fn refresh_markets(
         )
         .await?;
 
-    let tradable = tradable_markets(
+    let tradable_symbols: BTreeSet<Symbol> = tradable_markets(
         VenueRef::Hyperliquid,
         catalog_projection,
         enablement_projection,
     )
-    .await?;
+    .await?
+    .iter()
+    .map(|market| Symbol::from_raw(market.as_str()))
+    .collect();
+    let tradable = fetched
+        .iter()
+        .filter(|market| tradable_symbols.contains(&Symbol::from_raw(market.symbol.as_str())))
+        .map(|market| market.symbol.clone())
+        .collect();
     let observed_at = catalog_projection
         .load(&VenueRef::Hyperliquid)
         .await?
@@ -372,6 +381,34 @@ mod tests {
         assert!(crate::logs_contain_at(
             Level::INFO,
             &["markets metadata refreshed"]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn refresh_preserves_exchange_native_market_case_for_ingestion() {
+        let (catalog, catalog_projection, _enablement, enablement_projection) =
+            market_stores().await;
+        // Recorded from Hyperliquid mainnet `meta` on 2026-08-15. The
+        // `candleSnapshot` endpoint accepts this exact identifier and returns
+        // `null` for the uppercased `KPEPE` variant.
+        let client = StubClient {
+            metadata: vec![metadata("kPEPE", 10, 0)],
+        };
+
+        let tradable = refresh_markets(
+            &client,
+            &catalog,
+            &catalog_projection,
+            &enablement_projection,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(symbols(&tradable), vec!["kPEPE"]);
+        assert!(crate::logs_contain_at(
+            Level::INFO,
+            &["markets metadata refreshed", "markets=1"]
         ));
     }
 
