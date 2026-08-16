@@ -394,6 +394,7 @@ struct PortfolioCreatedResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ReviseTargetRequest {
+    #[serde(deserialize_with = "finance::deserialize_unique_symbol_weights")]
     weights: HashMap<Symbol, f64>,
     leverage: f64,
 }
@@ -1331,6 +1332,21 @@ mod tests {
         symbols.sort_unstable();
         assert_eq!(symbols, vec!["BTC", "ETH"]);
         assert_eq!(body.fetched_at, observed_at);
+    }
+
+    #[test]
+    fn revise_target_request_rejects_duplicate_canonical_symbols() {
+        let error = serde_json::from_str::<ReviseTargetRequest>(
+            r#"{"weights": {"btc": 0.6, "BTC/USDC:USDC": 0.4}, "leverage": 2.0}"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate symbol after normalization: BTC"),
+            "unexpected error: {error}"
+        );
     }
 
     #[traced_test]
