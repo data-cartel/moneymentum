@@ -141,7 +141,9 @@ impl HyperliquidClient {
             || HYPERLIQUID_MAINNET_BASE_URL.to_string(),
             |url| url.to_string().trim_end_matches('/').to_string(),
         );
-        debug!(base_url = %base_url, max_retries, "hyperliquid client ready");
+        // The configured URL stays out of the log: Url serialization includes
+        // userinfo and query values, which may carry credentials.
+        debug!(max_retries, "hyperliquid client ready");
         Ok(Self {
             base_url,
             http,
