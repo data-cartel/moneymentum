@@ -171,6 +171,23 @@ async fn indexes_match(
     pool: &SqlitePool,
     expected_indexes: &[ExpectedMigrationIndex],
 ) -> Result<bool, sqlx::Error> {
+    // The named index set must match exactly: an extra index on `events` is
+    // schema drift the reconciled checksum would otherwise silently bless.
+    let named_indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM pragma_index_list('events') \
+         WHERE \"unique\" = 0 AND origin = 'c' ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut expected_names: Vec<&str> = expected_indexes
+        .iter()
+        .map(|expected| expected.name)
+        .collect();
+    expected_names.sort_unstable();
+    if named_indexes != expected_names {
+        return Ok(false);
+    }
+
     for expected in expected_indexes {
         let index_columns: Vec<String> = sqlx::query_scalar(
             "SELECT index_info.name FROM pragma_index_list('events') AS index_list \
@@ -357,6 +374,26 @@ mod tests {
     async fn leaves_known_schema_with_missing_index_untouched_for_sqlx_to_reject() {
         let pool = event_sorcery_branch_database().await;
         sqlx::query("DROP INDEX idx_events_type")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let outcome = reconcile_known_migration_history(&pool).await.unwrap();
+        let migration_result = sqlx::migrate!("./migrations").run(&pool).await;
+
+        assert_eq!(outcome, MigrationHistoryOutcome::Unchanged);
+        assert!(matches!(
+            migration_result,
+            Err(sqlx::migrate::MigrateError::VersionMismatch(
+                CQRS_EVENT_STORE_MIGRATION_VERSION
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn leaves_known_schema_with_extra_index_untouched_for_sqlx_to_reject() {
+        let pool = event_sorcery_branch_database().await;
+        sqlx::query("CREATE INDEX idx_events_event_type ON events(event_type)")
             .execute(&pool)
             .await
             .unwrap();
