@@ -30,11 +30,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: visual-regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   prototype-visual:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
         with:
@@ -75,13 +81,25 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         run: nix develop --impure .#frontend --command bash -c 'cd frontend && bun run test:vrt'
 
+      - name: Upload failure diffs
+        if: failure() && github.event_name != 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: prototype-visual-failure-diffs
+          path: frontend/test-results/
+          retention-days: 7
+
+      - name: Build the exported visual-test package
+        if: github.event_name != 'workflow_dispatch'
+        run: nix build .#frontend-visual-test
+
       - name: Refresh linux baselines (manual seed only)
         if: github.event_name == 'workflow_dispatch'
         run: nix develop --impure .#frontend --command bash -c 'cd frontend && bun run test:vrt:update'
 
       - name: Upload refreshed baselines
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: prototype-visual-baselines-linux
           path: frontend/src/visual/prototype.spec.ts-snapshots/
