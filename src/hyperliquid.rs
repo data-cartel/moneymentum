@@ -11,7 +11,6 @@ use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 use chrono::{DateTime, Duration, Utc};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use hyperliquid_rust_sdk::InfoClient;
 use thiserror::Error;
 use tracing::{debug, info, instrument};
 use url::Url;
@@ -42,8 +41,6 @@ pub(crate) enum HyperliquidError {
     #[error(transparent)]
     DataFrame(#[from] DataFrameError),
     #[error(transparent)]
-    Sdk(#[from] hyperliquid_rust_sdk::Error),
-    #[error(transparent)]
     IntConversion(#[from] TryFromIntError),
     #[error(transparent)]
     Http(#[from] reqwest::Error),
@@ -53,6 +50,7 @@ pub(crate) enum HyperliquidError {
     Polars(#[from] polars::prelude::PolarsError),
 }
 
+pub(crate) const HYPERLIQUID_MAINNET_BASE_URL: &str = "https://api.hyperliquid.xyz";
 pub(crate) const HYPERLIQUID_TESTNET_BASE_URL: &str = "https://api.hyperliquid-testnet.xyz";
 
 /// Hyperliquid deployment a request targets, as selected by the frontend
@@ -73,18 +71,18 @@ pub(crate) struct HyperliquidClients {
 }
 
 impl HyperliquidClients {
-    pub(crate) async fn from_config(
+    pub(crate) fn from_config(
         mainnet_base_url: Option<&Url>,
         testnet_base_url: Option<&Url>,
         max_retries: usize,
     ) -> Result<Self, HyperliquidError> {
-        let mainnet = Arc::new(HyperliquidClient::new(mainnet_base_url, max_retries).await?)
+        let mainnet = Arc::new(HyperliquidClient::new(mainnet_base_url, max_retries)?)
             as Arc<dyn Hyperliquid>;
         let testnet_url = match testnet_base_url {
             Some(url) => url.clone(),
             None => Url::parse(HYPERLIQUID_TESTNET_BASE_URL)?,
         };
-        let testnet = Arc::new(HyperliquidClient::new(Some(&testnet_url), max_retries).await?)
+        let testnet = Arc::new(HyperliquidClient::new(Some(&testnet_url), max_retries)?)
             as Arc<dyn Hyperliquid>;
         Ok(Self { mainnet, testnet })
     }
@@ -119,36 +117,33 @@ pub(crate) trait Hyperliquid: Send + Sync {
 }
 
 pub(crate) struct HyperliquidClient {
-    info: InfoClient,
-    /// Timeout-bounded HTTP client shared across raw info requests, so each
+    base_url: String,
+    /// Timeout-bounded HTTP client shared across all info requests, so each
     /// fetch reuses pooled connections instead of paying TCP/TLS setup.
     http: reqwest::Client,
     max_retries: usize,
 }
 
 impl HyperliquidClient {
-    pub(crate) async fn new(
+    pub(crate) fn new(
         base_url: Option<&Url>,
         max_retries: usize,
     ) -> Result<Self, HyperliquidError> {
-        let mut info = InfoClient::new(None, None).await?;
-        if let Some(url) = base_url {
-            url.to_string()
-                .trim_end_matches('/')
-                .clone_into(&mut info.http_client.base_url);
-        }
-        // Bound each attempt so a hung upstream cannot stall startup or the
-        // markets endpoint indefinitely (matches the frontend's 10s guard).
+        // Bound each attempt so a hung upstream cannot stall startup, the
+        // markets endpoint, or an ingestion run indefinitely (matches the
+        // frontend's 10s guard). Candle and funding-rate fetches go through
+        // this client too -- without the bound a single stalled connection
+        // wedges the ingestion run slot forever.
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()?;
-        debug!(
-            base_url = %info.http_client.base_url,
-            max_retries,
-            "hyperliquid client ready"
+        let base_url = base_url.map_or_else(
+            || HYPERLIQUID_MAINNET_BASE_URL.to_string(),
+            |url| url.to_string().trim_end_matches('/').to_string(),
         );
+        debug!(base_url = %base_url, max_retries, "hyperliquid client ready");
         Ok(Self {
-            info,
+            base_url,
             http,
             max_retries,
         })
@@ -180,7 +175,7 @@ impl Hyperliquid for HyperliquidClient {
             only_isolated: Option<bool>,
         }
 
-        let url = format!("{}/info", self.info.http_client.base_url);
+        let url = format!("{}/info", self.base_url);
         let raw = (|| async {
             self.http
                 .post(&url)
@@ -234,14 +229,57 @@ impl Hyperliquid for HyperliquidClient {
         let start_ms = u64::try_from(start.timestamp_millis())?;
         let end_ms = u64::try_from(Utc::now().timestamp_millis())?;
 
+        // The raw `candleSnapshot` info request goes through the shared
+        // timeout-bounded client; the SDK's InfoClient has no timeout and a
+        // stalled upstream would hang the fetch forever.
+        #[derive(serde::Serialize)]
+        struct CandleSnapshotParams {
+            coin: String,
+            interval: String,
+            #[serde(rename = "startTime")]
+            start_time: u64,
+            #[serde(rename = "endTime")]
+            end_time: u64,
+        }
+        #[derive(serde::Serialize)]
+        struct CandleSnapshotRequest {
+            #[serde(rename = "type")]
+            request_type: &'static str,
+            req: CandleSnapshotParams,
+        }
+        #[derive(serde::Deserialize)]
+        struct RawCandle {
+            #[serde(rename = "t")]
+            time_open: u64,
+            #[serde(rename = "o")]
+            open: String,
+            #[serde(rename = "h")]
+            high: String,
+            #[serde(rename = "l")]
+            low: String,
+            #[serde(rename = "c")]
+            close: String,
+            #[serde(rename = "v")]
+            vlm: String,
+        }
+
+        let url = format!("{}/info", self.base_url);
         let response = (|| async {
-            self.info
-                .candles_snapshot(
-                    market.as_str().to_string(),
-                    timeframe.interval_string().to_string(),
-                    start_ms,
-                    end_ms,
-                )
+            self.http
+                .post(&url)
+                .json(&CandleSnapshotRequest {
+                    request_type: "candleSnapshot",
+                    req: CandleSnapshotParams {
+                        coin: market.as_str().to_string(),
+                        interval: timeframe.interval_string().to_string(),
+                        start_time: start_ms,
+                        end_time: end_ms,
+                    },
+                })
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<Vec<RawCandle>>()
                 .await
         })
         .retry(
@@ -291,9 +329,39 @@ impl Hyperliquid for HyperliquidClient {
         let start_ms = u64::try_from(start.timestamp_millis())?;
         let end_ms = u64::try_from(Utc::now().timestamp_millis())?;
 
+        // Same bounded raw-request path as candles: the `fundingHistory` info
+        // request must not outlive the client timeout.
+        #[derive(serde::Serialize)]
+        struct FundingHistoryRequest {
+            #[serde(rename = "type")]
+            request_type: &'static str,
+            coin: String,
+            #[serde(rename = "startTime")]
+            start_time: u64,
+            #[serde(rename = "endTime")]
+            end_time: u64,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawFundingEntry {
+            funding_rate: String,
+            time: u64,
+        }
+
+        let url = format!("{}/info", self.base_url);
         let response = (|| async {
-            self.info
-                .funding_history(market.as_str().to_string(), start_ms, Some(end_ms))
+            self.http
+                .post(&url)
+                .json(&FundingHistoryRequest {
+                    request_type: "fundingHistory",
+                    coin: market.as_str().to_string(),
+                    start_time: start_ms,
+                    end_time: end_ms,
+                })
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<Vec<RawFundingEntry>>()
                 .await
         })
         .retry(
@@ -818,6 +886,76 @@ mod tests {
         assert!(
             timestamp.contains('T') && timestamp.contains('Z'),
             "timestamp should be ISO 8601 format like '2024-01-01T00:00:00.000Z', got: {timestamp}"
+        );
+    }
+
+    /// Accepts connections, drains the request bytes, and never responds --
+    /// simulating an upstream that accepts the candle request and then stalls.
+    async fn spawn_stalled_upstream() -> Url {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::AsyncReadExt;
+                    let mut socket = socket;
+                    let mut request_bytes = [0u8; 1024];
+                    while let Ok(bytes_read) = socket.read(&mut request_bytes).await {
+                        if bytes_read == 0 {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        Url::parse(&format!("http://{address}")).unwrap()
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn candle_fetch_errors_instead_of_hanging_when_upstream_stalls() {
+        let stalled_upstream = spawn_stalled_upstream().await;
+        let client = HyperliquidClient::new(Some(&stalled_upstream), 0).unwrap();
+        assert!(logs_contain_at(Level::DEBUG, &["hyperliquid client ready"]));
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let fetch_outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            client.fetch_candles(&Market::new("BTC".to_string()), Timeframe::OneHour, start),
+        )
+        .await;
+
+        let fetch_result = fetch_outcome
+            .expect("candle fetch must fail within the client timeout instead of hanging forever");
+        assert!(
+            fetch_result.is_err(),
+            "a stalled upstream must surface as an error, not empty candles"
+        );
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn funding_rate_fetch_errors_instead_of_hanging_when_upstream_stalls() {
+        let stalled_upstream = spawn_stalled_upstream().await;
+        let client = HyperliquidClient::new(Some(&stalled_upstream), 0).unwrap();
+        assert!(logs_contain_at(Level::DEBUG, &["hyperliquid client ready"]));
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let fetch_outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            client.fetch_funding_rates(&Market::new("BTC".to_string()), start),
+        )
+        .await;
+
+        let fetch_result = fetch_outcome.expect(
+            "funding rate fetch must fail within the client timeout instead of hanging forever",
+        );
+        assert!(
+            fetch_result.is_err(),
+            "a stalled upstream must surface as an error, not empty funding rates"
         );
     }
 }

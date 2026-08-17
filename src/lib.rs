@@ -876,8 +876,7 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
         config.hyperliquid_base_url.as_ref(),
         config.hyperliquid_testnet_base_url.as_ref(),
         config.max_retries,
-    )
-    .await?;
+    )?;
     let hyperliquid: Arc<dyn Hyperliquid> = Arc::clone(&hyperliquid_clients.mainnet);
     let services = IngestionServices {
         hyperliquid,
@@ -893,7 +892,7 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
         services,
     });
 
-    spawn_ingestion_worker(apalis_pool.clone(), ingestion_context);
+    spawn_ingestion_worker(apalis_pool, ingestion_context);
     debug!("ingestion worker started");
 
     spawn_ingestion_schedulers(
@@ -1014,9 +1013,7 @@ mod tests {
     /// tests exercise the real route wiring and shared state, not a hand-rolled
     /// subset.
     async fn test_harness(data_dir: &std::path::Path) -> TestHarness {
-        let hyperliquid_clients = HyperliquidClients::from_config(None, None, 5)
-            .await
-            .unwrap();
+        let hyperliquid_clients = HyperliquidClients::from_config(None, None, 5).unwrap();
         test_harness_with_markets(data_dir, hyperliquid_clients).await
     }
 
