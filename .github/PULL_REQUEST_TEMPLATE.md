@@ -1,7 +1,8 @@
 ## Motivation
 
-<!-- Why is this change needed? Link the issue/ADR it advances. State the problem
-     and the desired end state, not the diff. -->
+<!-- Why is this change needed? Every PR must close a problem-only GitHub
+     issue: include a `Closes #<issue>` line here. Link any ADR it advances.
+     State the problem and the desired end state, not the diff. -->
 
 ## Solution
 
