@@ -1,0 +1,15 @@
+# Backend config for the contract e2e suite: the real moneymentum binary
+# pointed at the mock Hyperliquid server, run from the frontend/ directory.
+
+port = 8000
+
+data_dir = ".contract-data"
+database_url = "sqlite:.contract-data/contract.db?mode=rwc"
+
+log_level = "debug"
+
+max_concurrent_requests = 3
+max_retries = 2
+
+hyperliquid_base_url = "http://127.0.0.1:8022"
+hyperliquid_testnet_base_url = "http://127.0.0.1:8022"

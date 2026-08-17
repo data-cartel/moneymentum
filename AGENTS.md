@@ -49,11 +49,12 @@ Run from `frontend/` directory:
 
 ```bash
 cd frontend
-bun run typecheck  # Type check only
-bun run lint       # Lint
-bun run test       # Run tests (vitest)
-bun run build      # Full build
-bun run dev        # Dev server (port 5173) - only when explicitly asked
+bun run typecheck      # Type check only
+bun run lint           # Lint
+bun run test           # Run tests (vitest)
+bun run test:contract  # Backend+frontend contract e2e (builds the Rust backend)
+bun run build          # Full build
+bun run dev            # Dev server (port 5173) - only when explicitly asked
 ```
 
 ### Backend (Rust)

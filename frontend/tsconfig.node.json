@@ -26,6 +26,9 @@
     "vite.config.ts",
     "tailwind.config.ts",
     "vite-plugins.d.ts",
-    "playwright.visual.config.ts"
+    "playwright.visual.config.ts",
+    "playwright.contract.config.ts",
+    "playwright-chromium.ts",
+    "contract/mock-hyperliquid.ts"
   ]
 }
