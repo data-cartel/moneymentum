@@ -2,7 +2,24 @@
  * Mock data for prototype UI development.
  * This file provides static data for UI iteration without backend dependencies.
  * Will be replaced with real API calls when backend is ready.
+ *
+ * All generated series are deterministic: a seeded PRNG and a pinned time
+ * origin guarantee the prototype renders identically on every load, which the
+ * visual regression suite depends on.
  */
+
+const MOCK_TIME_ORIGIN_MS = Date.UTC(2026, 6, 1)
+
+/** Mulberry32: tiny deterministic PRNG over [0, 1), replayable per seed. */
+const createSeededRandom = (seed: number): (() => number) => {
+  let state = seed
+  return () => {
+    state = (state + 0x6d2b79f5) | 0
+    let mixed = Math.imul(state ^ (state >>> 15), 1 | state)
+    mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296
+  }
+}
 
 export type InstrumentType = "perp" | "spot" | "call" | "put"
 
@@ -319,14 +336,14 @@ export const MOCK_STRESS_TESTS: StressTest[] = [
 ]
 
 const generateBacktestData = (): BacktestPoint[] => {
-  const now = Date.now()
+  const nextRandom = createSeededRandom(0x0b47c7e5)
   const points: BacktestPoint[] = []
   let value = 10000
 
   for (let dayOffset = 365; dayOffset >= 0; dayOffset--) {
     const dayMs = 24 * 60 * 60 * 1000
-    const time = Math.floor((now - dayOffset * dayMs) / 1000)
-    const dailyReturn = (Math.random() - 0.48) * 0.03
+    const time = Math.floor((MOCK_TIME_ORIGIN_MS - dayOffset * dayMs) / 1000)
+    const dailyReturn = (nextRandom() - 0.48) * 0.03
     value = value * (1 + dailyReturn)
     points.push({ time, value })
   }
@@ -749,7 +766,7 @@ export interface ReturnDistributionBucket {
 
 const generateFactorHistoricalReturns = (): FactorHistoricalReturn[] => {
   const factors = ["Market Beta", "Momentum", "Carry", "Volatility", "Size"]
-  const now = Date.now()
+  const nextRandom = createSeededRandom(0xfac70235)
   const dayMs = 24 * 60 * 60 * 1000
   const results: FactorHistoricalReturn[] = []
 
@@ -772,10 +789,9 @@ const generateFactorHistoricalReturns = (): FactorHistoricalReturn[] => {
   for (const factor of factors) {
     let cumulativeReturn = 1
     for (let dayOffset = 365; dayOffset >= 0; dayOffset--) {
-      const time = Math.floor((now - dayOffset * dayMs) / 1000)
+      const time = Math.floor((MOCK_TIME_ORIGIN_MS - dayOffset * dayMs) / 1000)
       const dailyReturn =
-        factorDrifts[factor] +
-        (Math.random() - 0.5) * factorVolatilities[factor]
+        factorDrifts[factor] + (nextRandom() - 0.5) * factorVolatilities[factor]
       cumulativeReturn *= 1 + dailyReturn
       results.push({ factor, date: time, value: cumulativeReturn })
     }

@@ -193,6 +193,18 @@
           sqlite.dev
         ];
 
+        playwrightVisualInputs = with pkgs; [
+          playwright-driver.browsers
+          nodejs
+        ];
+
+        playwrightVisualEnv = {
+          PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
+          PLAYWRIGHT_NODEJS_PATH = "${pkgs.nodejs}/bin/node";
+        };
+
         frontendShell = devenv.lib.mkShell {
           inherit inputs pkgs;
           modules = [
@@ -205,6 +217,9 @@
                   install.enable = true;
                 };
               };
+
+              packages = playwrightVisualInputs;
+              env = playwrightVisualEnv;
 
               git-hooks = { inherit hooks; };
             }
@@ -219,6 +234,7 @@
               packages =
                 with pkgs;
                 deps
+                ++ playwrightVisualInputs
                 ++ [
                   git
                   gitbutler-cli
@@ -262,7 +278,8 @@
                 # bindings (anchor-lang declare_program! reads it at
                 # compile time).
                 FUND_IDL = "${fund.packages.${system}.idl}/idl/fund.json";
-              };
+              }
+              // playwrightVisualEnv;
 
               # Use pre-commit instead of git-hooks
               git-hooks = { inherit hooks; };
@@ -312,6 +329,7 @@
           frontend = frontendPkgs.package;
           frontend-lint = frontendPkgs.lint;
           frontend-test = frontendPkgs.test;
+          frontend-visual-test = frontendPkgs.visual-test;
 
           resolveIp = pkgs.writeShellApplication {
             name = "resolve-ip";

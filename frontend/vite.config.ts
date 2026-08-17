@@ -4,6 +4,7 @@ import tailwindcss from "@tailwindcss/vite"
 import solid from "vite-plugin-solid"
 import { defineConfig, type Plugin } from "vite"
 import { nodePolyfills } from "vite-plugin-node-polyfills"
+import { defaultExclude } from "vitest/config"
 
 const stripApiPrefix = (proxyPath: string): string =>
   proxyPath.replace(/^\/api/, "")
@@ -124,6 +125,7 @@ export default defineConfig({
     environment: "happy-dom",
     setupFiles: "./src/test/setup.ts",
     css: true,
+    exclude: [...defaultExclude, "src/visual/**"],
     server: {
       deps: {
         inline: [/solid-js/, /@solidjs/, /@kobalte/, /@tanstack/],
