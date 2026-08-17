@@ -24,6 +24,9 @@ const SATOSHIS_PER_BTC: i64 = 100_000_000;
 const ADDRESS_FETCH_CONCURRENCY: usize = 8;
 const BECH32_ADDRESS_MAX_LEN: usize = 90;
 
+/// Upper bound on addresses accepted per request; each address fans out into external provider calls.
+pub(crate) const MAX_ADDRESS_LIST_LEN: usize = 25;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct BtcAddress {
     value: String,
@@ -244,6 +247,8 @@ pub(crate) enum ReadonlyPortfolioError {
     InvalidBtcAddress(String),
     #[error("address list is empty")]
     EmptyAddressList,
+    #[error("address list exceeds {MAX_ADDRESS_LIST_LEN} addresses")]
+    AddressListTooLong,
     #[error("ubtc price is missing or invalid")]
     MissingUbtcPrice,
     #[error("invalid hyperliquid notional for {symbol}")]
@@ -308,6 +313,9 @@ pub(crate) async fn load_readonly_btc_balances(
 ) -> Result<ReadonlyBtcBalancesResponse, ReadonlyPortfolioError> {
     if request.addresses.is_empty() {
         return Err(ReadonlyPortfolioError::EmptyAddressList);
+    }
+    if request.addresses.len() > MAX_ADDRESS_LIST_LEN {
+        return Err(ReadonlyPortfolioError::AddressListTooLong);
     }
 
     let fetch_futures: Vec<_> = request
@@ -755,7 +763,8 @@ pub(crate) async fn post_portfolio_readonly_btc(
         error!(error = %err, "failed to load readonly btc balances");
         let status = match err {
             ReadonlyPortfolioError::InvalidBtcAddress(_)
-            | ReadonlyPortfolioError::EmptyAddressList => StatusCode::BAD_REQUEST,
+            | ReadonlyPortfolioError::EmptyAddressList
+            | ReadonlyPortfolioError::AddressListTooLong => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         api_error(status, err.to_string())
@@ -797,6 +806,7 @@ pub(crate) async fn post_portfolio_exposure(
         let status = match err {
             ReadonlyPortfolioError::InvalidBtcAddress(_)
             | ReadonlyPortfolioError::EmptyAddressList
+            | ReadonlyPortfolioError::AddressListTooLong
             | ReadonlyPortfolioError::InvalidNotional { .. } => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
@@ -1036,6 +1046,25 @@ mod tests {
         assert!(matches!(
             result,
             Err(ReadonlyPortfolioError::EmptyAddressList)
+        ));
+    }
+
+    #[tokio::test]
+    async fn load_readonly_btc_balances_rejects_address_list_exceeding_max() {
+        let addresses: Vec<BtcAddress> = (0..=MAX_ADDRESS_LIST_LEN)
+            .map(|_| parsed("1FfmbHfnpaZjKFvyi1okTjJJusN455paPH"))
+            .collect();
+
+        let result = load_readonly_btc_balances(
+            &client(),
+            &Url::parse("https://example.invalid").unwrap(),
+            &Url::parse("https://example.invalid").unwrap(),
+            &ReadonlyBtcBalancesRequest { addresses },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(ReadonlyPortfolioError::AddressListTooLong)
         ));
     }
 

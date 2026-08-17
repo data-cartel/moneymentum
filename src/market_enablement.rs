@@ -9,7 +9,6 @@
 use std::fmt::{self, Display};
 use std::str::FromStr;
 use std::sync::Arc;
-
 use axum::Json;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;

@@ -126,6 +126,11 @@ pub(crate) fn raw_json(bytes: Vec<u8>) -> Response {
     ([(header::CONTENT_TYPE, "application/json")], bytes).into_response()
 }
 
+/// Renders pre-serialized newline-delimited JSON with the `application/x-ndjson` content type.
+pub(crate) fn raw_ndjson(bytes: Vec<u8>) -> Response {
+    ([(header::CONTENT_TYPE, "application/x-ndjson")], bytes).into_response()
+}
+
 #[derive(Debug, serde::Serialize)]
 struct HealthResponse {
     status: &'static str,
@@ -1223,6 +1228,13 @@ mod tests {
         let response = router.oneshot(get_request("/candles/1h")).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|content_type| content_type.to_str().ok()),
+            Some("application/x-ndjson")
+        );
 
         let body = body_text(response).await;
         let candles: Vec<serde_json::Value> = body

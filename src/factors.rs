@@ -115,16 +115,13 @@ pub(crate) async fn post_beta(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let weights: Vec<(String, f64)> = {
-        let mut sorted_weights: Vec<_> = body
-            .weights
-            .iter()
-            .map(|(ticker, weight)| (ticker.clone(), *weight))
-            .collect();
-        sorted_weights
-            .sort_unstable_by(|(left_ticker, _), (right_ticker, _)| left_ticker.cmp(right_ticker));
-        sorted_weights
-    };
+    let weights: Vec<(String, f64)> = body
+        .weights
+        .iter()
+        .map(|(ticker, weight)| (ticker.clone(), *weight))
+        .collect::<BTreeMap<String, f64>>()
+        .into_iter()
+        .collect();
 
     match compute_portfolio_beta_report(&state.config.data_dir, &weights, &body.benchmark).await {
         Ok(report) => Ok(Json(BetaResponse {

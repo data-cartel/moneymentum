@@ -18,7 +18,7 @@ use tracing::{debug, error, instrument};
 use crate::dataframe::{self, DataFrameError};
 use crate::finance::{CcxtSymbol, Symbol};
 use crate::timeframe::Timeframe;
-use crate::{AppState, raw_json};
+use crate::{AppState, raw_ndjson};
 
 #[derive(Debug, Error)]
 pub(crate) enum CandleError {
@@ -116,7 +116,7 @@ pub(crate) async fn get_candles(
             error!(error = %err, "failed to read candles");
             StatusCode::INTERNAL_SERVER_ERROR
         })?
-        .map(raw_json)
+        .map(raw_ndjson)
         .ok_or(StatusCode::NOT_FOUND)
 }
 
