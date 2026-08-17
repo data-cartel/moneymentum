@@ -387,7 +387,7 @@ mod tests {
     #[traced_test]
     #[tokio::test]
     async fn refresh_preserves_exchange_native_market_case_for_ingestion() {
-        let (catalog, catalog_projection, _enablement, enablement_projection) =
+        let (catalog, catalog_projection, enablement, enablement_projection) =
             market_stores().await;
         // Recorded from Hyperliquid mainnet `meta` on 2026-08-15. The
         // `candleSnapshot` endpoint accepts this exact identifier and returns
@@ -410,6 +410,32 @@ mod tests {
             Level::INFO,
             &["markets metadata refreshed", "markets=1"]
         ));
+
+        // Disabling the canonical uppercased identifier must still exclude the
+        // exchange-native `kPEPE` listing: enablement matches case-insensitively
+        // while the tradable universe keeps the exchange-native casing.
+        enablement
+            .send(
+                &MarketId::new(VenueRef::Hyperliquid, Symbol::from_raw("KPEPE")),
+                MarketEnablementCommand::Disable { reason: None },
+            )
+            .await
+            .unwrap();
+
+        let tradable = refresh_markets(
+            &client,
+            &catalog,
+            &catalog_projection,
+            &enablement_projection,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            tradable.is_empty(),
+            "disable of KPEPE should exclude kPEPE, got {:?}",
+            symbols(&tradable)
+        );
     }
 
     #[traced_test]
