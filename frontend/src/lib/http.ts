@@ -28,11 +28,11 @@ const request = (
   })
 
 const extractDetail = (body: unknown): string | undefined => {
-  if (typeof body === "object" && body !== null && "detail" in body) {
-    const raw = (body as Record<string, unknown>).detail
-    return typeof raw === "string" ? raw : undefined
-  }
-  return undefined
+  if (typeof body !== "object" || body === null) return undefined
+
+  const responseBody = body as Record<string, unknown>
+  if (typeof responseBody.detail === "string") return responseBody.detail
+  return typeof responseBody.error === "string" ? responseBody.error : undefined
 }
 
 const ensureOk = (

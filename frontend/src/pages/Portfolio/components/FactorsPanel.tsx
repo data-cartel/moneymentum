@@ -8,6 +8,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import type { BetaDegradedReason } from "../hooks/useBeta"
 
 interface FactorExposure {
   name: string
@@ -58,6 +59,7 @@ interface FactorsPanelProps {
   beta: number | null
   isBetaLoading: boolean
   betaError: unknown
+  betaDegradedReason?: BetaDegradedReason | null
   excludedBetaSymbols: string[]
   betaDataAgeHours: number | null
   isBetaDataStale: boolean
@@ -78,8 +80,20 @@ export const FactorsPanel = (props: FactorsPanelProps) => {
   const attribution = () =>
     props.attribution ?? defaultAttribution(props.betaMethodology.exposureLabel)
   const concentration = () => props.concentration ?? defaultConcentration
+  const betaDegradedMessage = () => {
+    switch (props.betaDegradedReason) {
+      case "missing_bitcoin_balance":
+        return "Degraded data: missing Bitcoin balance"
+      case "btc_price_unavailable":
+        return "Degraded data: BTC price unavailable"
+      default:
+        return null
+    }
+  }
   const betaHasError = () =>
-    props.betaError !== null && props.betaError !== undefined
+    props.betaError !== null &&
+    props.betaError !== undefined &&
+    betaDegradedMessage() === null
   const betaHasKnownAge = () => props.betaDataAgeHours !== null
   const betaCanRender = () =>
     !props.isBetaLoading && !betaHasError() && betaHasKnownAge()
@@ -137,8 +151,14 @@ export const FactorsPanel = (props: FactorsPanelProps) => {
                   <span
                     class={twMerge(
                       clsx(
-                        (props.beta ?? 0) > 0 && "text-green-500",
-                        (props.beta ?? 0) < 0 && "text-red-500",
+                        betaDegradedMessage() !== null &&
+                          "text-muted-foreground",
+                        betaDegradedMessage() === null &&
+                          (props.beta ?? 0) > 0 &&
+                          "text-green-500",
+                        betaDegradedMessage() === null &&
+                          (props.beta ?? 0) < 0 &&
+                          "text-red-500",
                       ),
                     )}
                   >
@@ -149,6 +169,21 @@ export const FactorsPanel = (props: FactorsPanelProps) => {
               </Show>
             </span>
           </div>
+          <Show when={betaDegradedMessage()}>
+            {degradedMessage => (
+              <TooltipProvider>
+                <Tooltip openDelay={0}>
+                  <TooltipTrigger
+                    aria-label={degradedMessage()}
+                    class="inline-flex rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-500"
+                  >
+                    Degraded
+                  </TooltipTrigger>
+                  <TooltipContent>{degradedMessage()}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+          </Show>
           <Show when={props.excludedBetaSymbols.length > 0}>
             <div class="text-[10px] text-amber-500">
               Renormalized without {props.excludedBetaSymbols.join(", ")}

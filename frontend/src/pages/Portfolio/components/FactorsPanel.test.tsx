@@ -32,6 +32,31 @@ describe("FactorsPanel", () => {
     expect(screen.getAllByText("B to QQQ")).toHaveLength(3)
   })
 
+  it.each([
+    ["missing_bitcoin_balance", "Degraded data: missing Bitcoin balance"],
+    ["btc_price_unavailable", "Degraded data: BTC price unavailable"],
+  ] as const)(
+    "keeps the last beta visible for %s",
+    (betaDegradedReason, degradedMessage) => {
+      render(() => (
+        <FactorsPanel
+          beta={0.59}
+          isBetaLoading={false}
+          betaError={new Error(betaDegradedReason)}
+          betaDegradedReason={betaDegradedReason}
+          excludedBetaSymbols={[]}
+          betaDataAgeHours={2}
+          isBetaDataStale={false}
+          betaMethodology={betaMethodology}
+        />
+      ))
+
+      expect(screen.getByText("+0.59")).toHaveClass("text-muted-foreground")
+      expect(screen.getByText("Degraded")).toBeInTheDocument()
+      expect(screen.getByLabelText(degradedMessage)).toBeInTheDocument()
+    },
+  )
+
   it("warns when beta data is stale", () => {
     render(() => (
       <FactorsPanel
