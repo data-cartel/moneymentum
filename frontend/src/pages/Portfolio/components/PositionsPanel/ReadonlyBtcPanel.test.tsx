@@ -33,6 +33,38 @@ describe("ReadonlyBtcPanel", () => {
     expect(addAddress).toHaveBeenCalledWith("not-a-btc-address")
   })
 
+  it("marks holdings as read-only and explains they cannot trade", () => {
+    const address = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT"
+
+    render(() => (
+      <ReadonlyBtcPanel
+        rows={[
+          {
+            address,
+            includeInBeta: true,
+            quantityBtc: 0.5,
+            notionalUsd: 50_000,
+          },
+        ]}
+        isLoading={false}
+        error={null}
+        validationError={null}
+        onAddAddress={vi.fn()}
+        onRemoveAddress={vi.fn()}
+        onIncludeInBetaChange={vi.fn()}
+      />
+    ))
+
+    const readOnlyIndicator = screen.getByLabelText(
+      "Read-only — cannot trade",
+    )
+    expect(readOnlyIndicator).toHaveTextContent("Read-only")
+    expect(readOnlyIndicator.querySelector("svg")).not.toBeNull()
+    expect(screen.getByText(address).parentElement).toHaveClass(
+      "text-muted-foreground",
+    )
+  })
+
   it("shows validation and exposure fetch errors together", () => {
     render(() => (
       <ReadonlyBtcPanel
