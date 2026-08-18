@@ -296,13 +296,16 @@ open-high-low-close-volume (OHLCV) and funding-rate data). Outputs feed the
 screener (rank/filter assets by factor) and the rebalancer (target factor
 exposures, not symbols).
 
-The portfolio-weighted beta is exposed via `POST /beta`, which accepts a set of
-position weights plus a benchmark symbol and returns a single beta value
-(weighted sum of per-asset rolling betas to the benchmark). Per-asset betas are
-computed from log returns over a rolling window of daily candles. The endpoint
-is the canonical way for clients to compute portfolio Bitcoin beta;
-endpoint-level request/response details are documented next to the handler in
-the backend crate.
+The portfolio-weighted beta is exposed via `POST /beta`. Its source-aware
+request keeps exchange `positions` and `readOnlyBtc` addresses separate so the
+backend can fetch Bitcoin balances, value them from the Hyperliquid BTC mark,
+and derive normalized signed weights immediately before calculation. Monetary
+notionals cross that boundary as exact decimal strings. The legacy
+`weights`-plus-`benchmark` request remains accepted during the frontend
+migration. Per-asset betas are computed from log returns over a rolling window
+of daily candles. The endpoint is the canonical way for clients to compute
+portfolio Bitcoin beta; endpoint-level request/response details are documented
+next to the handler in the backend crate.
 
 **Risk Engine**: Portfolio-level risk metrics
 
