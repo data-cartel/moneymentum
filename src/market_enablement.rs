@@ -6,9 +6,6 @@
 //! tradable set (see `market_metadata`) is catalog listings minus the markets
 //! whose enablement stream is currently `Disabled`.
 
-use std::fmt::{self, Display};
-use std::str::FromStr;
-use std::sync::Arc;
 use axum::Json;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
@@ -17,6 +14,9 @@ use event_sorcery::{
     Table,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt::{self, Display};
+use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{debug, error};
 
 use crate::finance::Symbol;

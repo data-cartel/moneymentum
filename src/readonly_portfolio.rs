@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -8,7 +9,6 @@ use bitcoin::{Address, Network};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use reqwest::Url;
 use rust_decimal::Decimal;
-use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use thiserror::Error;
@@ -184,7 +184,7 @@ where
 pub(crate) struct HyperliquidPositionInput {
     pub(crate) symbol: String,
     pub(crate) side: Side,
-    pub(crate) notional_usd: f64,
+    pub(crate) notional_usd: Decimal,
 }
 
 #[derive(Debug, Deserialize)]
@@ -249,10 +249,16 @@ pub(crate) enum ReadonlyPortfolioError {
     EmptyAddressList,
     #[error("address list exceeds {MAX_ADDRESS_LIST_LEN} addresses")]
     AddressListTooLong,
+    #[error("address list contains a duplicate btc address")]
+    DuplicateBtcAddress,
     #[error("ubtc price is missing or invalid")]
     MissingUbtcPrice,
     #[error("invalid hyperliquid notional for {symbol}")]
     InvalidNotional { symbol: String },
+    #[error("readonly btc balance count does not match the request")]
+    BalanceCountMismatch,
+    #[error("portfolio exposure notional overflow")]
+    ExposureNotionalOverflow,
     #[error("mempool response decode failed for {address}")]
     MempoolDecode { address: String },
     #[error("provider returned invalid json: {provider}")]
@@ -273,6 +279,12 @@ pub(crate) enum ReadonlyPortfolioError {
     Request(#[from] reqwest::Error),
     #[error(transparent)]
     Url(#[from] url::ParseError),
+}
+
+#[derive(Debug)]
+enum ExposureValidationFailure {
+    DuplicateAddress,
+    InvalidNotional,
 }
 
 #[derive(Debug, Deserialize)]
@@ -317,6 +329,13 @@ pub(crate) async fn load_readonly_btc_balances(
     if request.addresses.len() > MAX_ADDRESS_LIST_LEN {
         return Err(ReadonlyPortfolioError::AddressListTooLong);
     }
+    if request.addresses.iter().collect::<HashSet<_>>().len() != request.addresses.len() {
+        debug!(
+            reason = ?ExposureValidationFailure::DuplicateAddress,
+            "readonly btc balance request rejected"
+        );
+        return Err(ReadonlyPortfolioError::DuplicateBtcAddress);
+    }
 
     let fetch_futures: Vec<_> = request
         .addresses
@@ -358,10 +377,14 @@ pub(crate) async fn load_portfolio_exposure(
     hyperliquid_base_url: Option<&Url>,
     request: &PortfolioExposureRequest,
 ) -> Result<PortfolioExposureResponse, ReadonlyPortfolioError> {
-    let mut merged_positions = validate_hyperliquid_positions(&request.hyperliquid_positions)?;
-
-    let ubtc_price_usd = if request.readonly_btc_entries.is_empty() {
-        Decimal::ZERO
+    let (readonly_balances, ubtc_price_usd) = if request.readonly_btc_entries.is_empty() {
+        (
+            ReadonlyBtcBalancesResponse {
+                holdings: Vec::new(),
+                total_confirmed_btc: Decimal::ZERO,
+            },
+            Decimal::ZERO,
+        )
     } else {
         let readonly_balance_request = ReadonlyBtcBalancesRequest {
             addresses: request
@@ -377,42 +400,65 @@ pub(crate) async fn load_portfolio_exposure(
             &readonly_balance_request,
         )
         .await?;
-        let price = fetch_ubtc_price_usd(http_client, hyperliquid_base_url).await?;
-
-        // The order of `holdings` mirrors `readonly_btc_entries` because
-        // `load_readonly_btc_balances` preserves input order via `buffered`,
-        // so we can pair by index. This avoids fragile address-string lookups
-        // (canonicalization can rewrite the address representation).
-        for (entry, holding) in request
-            .readonly_btc_entries
-            .iter()
-            .zip(readonly_balances.holdings)
-        {
-            merged_positions.push(ExposurePosition {
-                source: ExposureSource::BtcAddress,
-                source_id: Some(holding.address),
-                symbol: "BTC".to_string(),
-                side: Side::Buy,
-                notional_usd: holding.confirmed_btc * price,
-                quantity_btc: Some(holding.confirmed_btc),
-                tradability: Tradability::ReadOnly,
-                include_in_beta: entry.include_in_beta,
-            });
-        }
-        price
+        let ubtc_price_usd = fetch_ubtc_price_usd(http_client, hyperliquid_base_url).await?;
+        (readonly_balances, ubtc_price_usd)
     };
 
-    let gross_long_usd = merged_positions
+    build_portfolio_exposure(request, readonly_balances, ubtc_price_usd)
+}
+
+pub(crate) fn build_portfolio_exposure(
+    request: &PortfolioExposureRequest,
+    readonly_balances: ReadonlyBtcBalancesResponse,
+    ubtc_price_usd: Decimal,
+) -> Result<PortfolioExposureResponse, ReadonlyPortfolioError> {
+    if readonly_balances.holdings.len() != request.readonly_btc_entries.len() {
+        return Err(ReadonlyPortfolioError::BalanceCountMismatch);
+    }
+
+    let mut merged_positions = validate_hyperliquid_positions(&request.hyperliquid_positions)?;
+    let readonly_positions = request
+        .readonly_btc_entries
         .iter()
-        .filter(|position| position.side == Side::Buy)
-        .map(|position| position.notional_usd)
-        .sum::<Decimal>();
-    let gross_short_usd = merged_positions
-        .iter()
-        .filter(|position| position.side == Side::Sell)
-        .map(|position| position.notional_usd)
-        .sum::<Decimal>();
-    let net_usd = gross_long_usd - gross_short_usd;
+        .zip(readonly_balances.holdings)
+        .map(|(entry, holding)| {
+            holding
+                .confirmed_btc
+                .checked_mul(ubtc_price_usd)
+                .map(|notional_usd| ExposurePosition {
+                    source: ExposureSource::BtcAddress,
+                    source_id: Some(holding.address),
+                    symbol: "BTC".to_string(),
+                    side: Side::Buy,
+                    notional_usd,
+                    quantity_btc: Some(holding.confirmed_btc),
+                    tradability: Tradability::ReadOnly,
+                    include_in_beta: entry.include_in_beta,
+                })
+                .ok_or(ReadonlyPortfolioError::ExposureNotionalOverflow)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    merged_positions.extend(readonly_positions);
+
+    let (gross_long_usd, gross_short_usd) = merged_positions.iter().try_fold(
+        (Decimal::ZERO, Decimal::ZERO),
+        |(gross_long_usd, gross_short_usd), position| {
+            match position.side {
+                Side::Buy => position
+                    .notional_usd
+                    .checked_add(gross_long_usd)
+                    .map(|next_gross_long| (next_gross_long, gross_short_usd)),
+                Side::Sell => position
+                    .notional_usd
+                    .checked_add(gross_short_usd)
+                    .map(|next_gross_short| (gross_long_usd, next_gross_short)),
+            }
+            .ok_or(ReadonlyPortfolioError::ExposureNotionalOverflow)
+        },
+    )?;
+    let net_usd = gross_long_usd
+        .checked_sub(gross_short_usd)
+        .ok_or(ReadonlyPortfolioError::ExposureNotionalOverflow)?;
 
     info!(
         positions = merged_positions.len(),
@@ -437,17 +483,22 @@ fn validate_hyperliquid_positions(
     positions
         .iter()
         .map(|position| {
-            let notional_usd = finite_decimal(position.notional_usd)
-                .filter(|notional| *notional >= Decimal::ZERO)
-                .ok_or_else(|| ReadonlyPortfolioError::InvalidNotional {
+            if position.notional_usd < Decimal::ZERO {
+                debug!(
+                    reason = ?ExposureValidationFailure::InvalidNotional,
+                    "portfolio beta exposure rejected"
+                );
+                return Err(ReadonlyPortfolioError::InvalidNotional {
                     symbol: position.symbol.clone(),
-                })?;
+                });
+            }
+
             Ok(ExposurePosition {
                 source: ExposureSource::Hyperliquid,
                 source_id: None,
                 symbol: position.symbol.clone(),
                 side: position.side,
-                notional_usd,
+                notional_usd: position.notional_usd,
                 quantity_btc: None,
                 tradability: Tradability::Tradable,
                 include_in_beta: BetaInclusion::Included,
@@ -621,7 +672,8 @@ fn sats_to_btc(
     satoshis: i128,
     btc_address: &BtcAddress,
 ) -> Result<Decimal, ReadonlyPortfolioError> {
-    Decimal::from_i128(satoshis)
+    Decimal::try_from_i128_with_scale(satoshis, 0)
+        .ok()
         .map(|sats| sats / Decimal::from(SATOSHIS_PER_BTC))
         .ok_or_else(|| ReadonlyPortfolioError::SatsOutOfRange {
             address: btc_address.as_str().to_string(),
@@ -629,18 +681,7 @@ fn sats_to_btc(
         })
 }
 
-/// Maps a finite `f64` from the wire onto an exact `Decimal`; `None` for NaN,
-/// infinities, or values outside `Decimal`'s range. Local to this module so the
-/// readonly-portfolio fix carries no dependency on unmerged work elsewhere.
-fn finite_decimal(value: f64) -> Option<Decimal> {
-    if value.is_finite() {
-        Decimal::from_f64(value)
-    } else {
-        None
-    }
-}
-
-async fn fetch_ubtc_price_usd(
+pub(crate) async fn fetch_ubtc_price_usd(
     http_client: &reqwest::Client,
     hyperliquid_base_url: Option<&Url>,
 ) -> Result<Decimal, ReadonlyPortfolioError> {
@@ -1070,6 +1111,33 @@ mod tests {
 
     #[traced_test]
     #[tokio::test]
+    async fn load_readonly_btc_balances_rejects_duplicate_addresses_before_fetching() {
+        let duplicate_address = parsed("1FfmbHfnpaZjKFvyi1okTjJJusN455paPH");
+        let result = load_readonly_btc_balances(
+            &client(),
+            &Url::parse("https://example.invalid").unwrap(),
+            &Url::parse("https://example.invalid").unwrap(),
+            &ReadonlyBtcBalancesRequest {
+                addresses: vec![duplicate_address.clone(), duplicate_address],
+            },
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(ReadonlyPortfolioError::DuplicateBtcAddress)
+        ));
+        assert!(logs_contain_at(
+            Level::DEBUG,
+            &[
+                "readonly btc balance request rejected",
+                "reason=DuplicateAddress",
+            ]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
     async fn load_portfolio_exposure_uses_ubtc_price_for_readonly_notional() {
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -1098,7 +1166,7 @@ mod tests {
                 hyperliquid_positions: vec![HyperliquidPositionInput {
                     symbol: "ETH".to_string(),
                     side: Side::Sell,
-                    notional_usd: 2000.0,
+                    notional_usd: dec!(2000),
                 }],
                 readonly_btc_entries: vec![ReadonlyBtcEntryRequest {
                     address: parsed("1FfmbHfnpaZjKFvyi1okTjJJusN455paPH"),

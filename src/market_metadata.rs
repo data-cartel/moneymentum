@@ -8,15 +8,15 @@
 //! never clobbers an operator disable" a structural guarantee rather than a
 //! careful merge (the bug the old `markets.csv` left-join had to avoid by hand).
 
-use std::collections::BTreeSet;
-use std::str::FromStr;
-use std::sync::Arc;
 use axum::Json;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use event_sorcery::{Projection, ProjectionError, SendError, Store};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{debug, error, info};
 
 use crate::AppState;
