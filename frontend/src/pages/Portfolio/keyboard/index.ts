@@ -1,6 +1,8 @@
 export {
   hotkeyHintsForPanel,
+  isKeyboardPanelId,
   PANEL_DIGIT_BY_ID,
+  panelDigitForId,
   panelIdForDigitKey,
 } from "./hotkeyHints"
 export type { HotkeyHint, KeyboardPanelId } from "./hotkeyHints"

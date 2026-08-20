@@ -40,6 +40,32 @@ export const resolveAllSymbolClick = (
   }
 }
 
+export const dispatchAllSymbolClick = (
+  symbol: string,
+  targetPortfolio: Record<string, PortfolioInterface | undefined>,
+  deletedArchive: Record<string, PortfolioInterface | undefined>,
+  handlers: {
+    onAdd: (symbol: string) => void
+    onRemove: (symbol: string) => void
+    onUndoRemove: (symbol: string) => void
+  },
+): void => {
+  const action = resolveAllSymbolClick(
+    allSymbolPortfolioState(symbol, targetPortfolio, deletedArchive),
+  )
+
+  switch (action) {
+    case "remove":
+      handlers.onRemove(symbol)
+      return
+    case "undoRemove":
+      handlers.onUndoRemove(symbol)
+      return
+    case "add":
+      handlers.onAdd(symbol)
+  }
+}
+
 export const formatPercent = (value: number | null, digits = 2): string => {
   if (value === null) return "—"
   return `${(value * 100).toFixed(digits)}%`

@@ -3,9 +3,8 @@ import { useFactorScores } from "../hooks/useFactorScores"
 import { type PortfolioInterface } from "../hooks/usePortfolioState"
 import { AllSymbolsDataTable } from "./PositionsPanel/all-symbols-data-table"
 import {
-  allSymbolPortfolioState,
   buildAllSymbolRows,
-  resolveAllSymbolClick,
+  dispatchAllSymbolClick,
 } from "./PositionsPanel/allSymbolRowModel"
 import {
   visiblePortfolioMetricColumns,
@@ -40,23 +39,16 @@ export const AllSymbolsPanel = (props: AllSymbolsPanelProps): JSX.Element => {
   )
 
   const handleAllSymbolClick = (symbol: string) => {
-    const action = resolveAllSymbolClick(
-      allSymbolPortfolioState(
-        symbol,
-        props.targetPortfolio,
-        props.deletedArchive,
-      ),
+    dispatchAllSymbolClick(
+      symbol,
+      props.targetPortfolio,
+      props.deletedArchive,
+      {
+        onAdd: props.onAddSymbol,
+        onRemove: props.onRemove,
+        onUndoRemove: props.onUndoRemove,
+      },
     )
-
-    if (action === "remove") {
-      props.onRemove(symbol)
-      return
-    }
-    if (action === "undoRemove") {
-      props.onUndoRemove(symbol)
-      return
-    }
-    props.onAddSymbol(symbol)
   }
 
   return (

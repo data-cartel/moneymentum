@@ -60,7 +60,9 @@ import {
   type PortfolioLayoutHost,
 } from "./portfolioLayoutStorage"
 import {
+  isKeyboardPanelId,
   PANEL_DIGIT_BY_ID,
+  panelDigitForId,
   PortfolioHotkeyBar,
   PortfolioKeyboardContext,
   PortfolioKeyboardProvider,
@@ -70,10 +72,7 @@ import {
   usePortfolioKeyboardContext,
 } from "./keyboard"
 import { positionStatus } from "./components/PositionsPanel/positionRowModel"
-import {
-  allSymbolPortfolioState,
-  resolveAllSymbolClick,
-} from "./components/PositionsPanel/allSymbolRowModel"
+import { dispatchAllSymbolClick } from "./components/PositionsPanel/allSymbolRowModel"
 import "./portfolio-dockview.css"
 
 type PortfolioPanelId =
@@ -195,17 +194,7 @@ const useDockviewPanelTitle = (props: IDockviewPanelHeaderProps) => {
 }
 
 const LockedTab = (props: IDockviewPanelHeaderProps) => {
-  const digit = () => {
-    const panelId = props.api.id
-    if (
-      panelId === "portfolio" ||
-      panelId === "allSymbols" ||
-      panelId === "staged"
-    ) {
-      return PANEL_DIGIT_BY_ID[panelId]
-    }
-    return undefined
-  }
+  const digit = () => panelDigitForId(props.api.id)
 
   return (
     <Show when={digit()} fallback={<DockviewDefaultTab {...props} hideClose />}>
@@ -217,7 +206,10 @@ const LockedTab = (props: IDockviewPanelHeaderProps) => {
 }
 
 const LockedTabWithDigit = (
-  props: IDockviewPanelHeaderProps & { digit: string },
+  props: IDockviewPanelHeaderProps & {
+    digit: string
+    trailing?: import("solid-js").JSX.Element
+  },
 ) => {
   const title = useDockviewPanelTitle(props)
 
@@ -232,6 +224,7 @@ const LockedTabWithDigit = (
       <kbd class="ml-1 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
         {props.digit}
       </kbd>
+      {props.trailing}
     </div>
   )
 }
@@ -474,21 +467,12 @@ const PortfolioPage = () => {
     )
   }
 
-  const PortfolioTab = (props: IDockviewPanelHeaderProps) => {
-    const title = useDockviewPanelTitle(props)
-
-    return (
-      <KeyboardAwareDockviewProviders>
-        <div
-          data-testid="dockview-dv-default-tab"
-          class="dv-default-tab portfolio-dockview-tab"
-        >
-          <span class="dv-default-tab-content portfolio-dockview-tab-title">
-            {title()}
-          </span>
-          <kbd class="ml-1 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-            {PANEL_DIGIT_BY_ID.portfolio}
-          </kbd>
+  const PortfolioTab = (props: IDockviewPanelHeaderProps) => (
+    <KeyboardAwareDockviewProviders>
+      <LockedTabWithDigit
+        {...props}
+        digit={PANEL_DIGIT_BY_ID.portfolio}
+        trailing={
           <PortfolioSettingsMenu
             isPrecise={portfolio.isPrecise}
             onPreciseChange={value => {
@@ -501,10 +485,10 @@ const PortfolioPage = () => {
             metricVisibility={metricVisibility()}
             onMetricVisibilityChange={setMetricColumnVisible}
           />
-        </div>
-      </KeyboardAwareDockviewProviders>
-    )
-  }
+        }
+      />
+    </KeyboardAwareDockviewProviders>
+  )
 
   const AllSymbolsTab = (props: IDockviewPanelHeaderProps) => (
     <KeyboardAwareDockviewProviders>
@@ -821,11 +805,7 @@ const PortfolioPage = () => {
 
     const activeChange = event.api.onDidActivePanelChange(panel => {
       const panelId = panel?.id
-      if (
-        panelId === "portfolio" ||
-        panelId === "allSymbols" ||
-        panelId === "staged"
-      ) {
+      if (panelId !== undefined && isKeyboardPanelId(panelId)) {
         keyboardBridge?.onPanelActivated(panelId)
       }
     })
@@ -880,22 +860,16 @@ const PortfolioPage = () => {
         portfolio.targetPortfolio,
       ) === "closing",
     onAllSymbolEnter: symbol => {
-      const action = resolveAllSymbolClick(
-        allSymbolPortfolioState(
-          symbol,
-          portfolio.targetPortfolio,
-          portfolio.deletedArchive,
-        ),
+      dispatchAllSymbolClick(
+        symbol,
+        portfolio.targetPortfolio,
+        portfolio.deletedArchive,
+        {
+          onAdd: portfolio.handleAddToken,
+          onRemove: portfolio.handleRemoveToken,
+          onUndoRemove: portfolio.handleUndoRemoveToken,
+        },
       )
-      if (action === "remove") {
-        portfolio.handleRemoveToken(symbol)
-        return
-      }
-      if (action === "undoRemove") {
-        portfolio.handleUndoRemoveToken(symbol)
-        return
-      }
-      portfolio.handleAddToken(symbol)
     },
     onStagedSubmit: handlePrimaryStagedAction,
     onStagedClearAll: portfolio.handleResetToCurrent,
