@@ -31,3 +31,24 @@ pub(crate) use orchestration::{
 pub(crate) use run::{IngestionRun, IngestionRunStatus};
 pub(crate) use services::IngestionServices;
 pub(crate) use work::IngestionWork;
+
+use std::sync::Arc;
+
+use axum::Json;
+use axum::extract::State;
+use axum::http::StatusCode;
+use tracing::error;
+
+use crate::AppState;
+
+/// `GET /ingestion/status` -- the latest run's lifecycle state, if any.
+pub(crate) async fn get_ingestion_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Option<IngestionRunStatus>>, StatusCode> {
+    let status = latest_status(&state.database_pool).await.map_err(|err| {
+        error!(error = %err, "failed to load ingestion status");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(status))
+}

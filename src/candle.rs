@@ -5,15 +5,20 @@
 //! live in [`crate::dataframe`].
 
 use std::path::Path;
+use std::sync::Arc;
 
+use axum::extract::{Path as AxumPath, State};
+use axum::http::StatusCode;
+use axum::response::Response;
 use chrono::{DateTime, Utc};
 use polars::prelude::{DataFrame, JsonWriter, PolarsError, SerWriter, df};
 use thiserror::Error;
-use tracing::{debug, instrument};
+use tracing::{debug, error, instrument};
 
 use crate::dataframe::{self, DataFrameError};
 use crate::finance::{CcxtSymbol, Symbol};
 use crate::timeframe::Timeframe;
+use crate::{AppState, raw_ndjson};
 
 #[derive(Debug, Error)]
 pub(crate) enum CandleError {
@@ -96,6 +101,23 @@ pub(crate) async fn read_candles_json(
     let mut buffer = Vec::new();
     JsonWriter::new(&mut buffer).finish(&mut dataframe)?;
     Ok(Some(buffer))
+}
+
+/// `GET /candles/<timeframe>` -- serves the stored OHLCV candles for a timeframe.
+pub(crate) async fn get_candles(
+    State(state): State<Arc<AppState>>,
+    AxumPath(timeframe): AxumPath<String>,
+) -> Result<Response, StatusCode> {
+    let timeframe =
+        Timeframe::from_interval_string(&timeframe).ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
+    read_candles_json(&state.config.data_dir, timeframe)
+        .await
+        .map_err(|err| {
+            error!(error = %err, "failed to read candles");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .map(raw_ndjson)
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 #[cfg(test)]

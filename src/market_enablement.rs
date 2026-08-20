@@ -8,12 +8,20 @@
 
 use std::fmt::{self, Display};
 use std::str::FromStr;
-
-use event_sorcery::{Column, DomainEvent, EventSourced, JobQueue, Nil, Table};
+use std::sync::Arc;
+use axum::Json;
+use axum::extract::{Path as AxumPath, State};
+use axum::http::StatusCode;
+use event_sorcery::{
+    AggregateError, Column, DomainEvent, EventSourced, JobQueue, LifecycleError, Nil, SendError,
+    Table,
+};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error};
 
 use crate::finance::Symbol;
 use crate::venue::{UnknownVenue, VenueRef};
+use crate::{ApiError, AppState, api_error, bad_request};
 
 /// Identity of one market on one venue: the key of a [`MarketEnablement`]
 /// stream. Encoded as `venue:symbol`; neither component contains `:`, so the
@@ -194,6 +202,74 @@ fn status_after(event: &MarketEnablementEvent) -> MarketStatus {
 
 /// The generated `status` column on `market_enablement_view`.
 pub(crate) const ENABLEMENT_STATUS: Column = Column("status");
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DisableMarketRequest {
+    reason: Option<String>,
+}
+
+/// `POST /markets/<venue>/<symbol>/disable` -- excludes a market from ingestion
+/// and the tradable set.
+pub(crate) async fn post_market_disable(
+    State(state): State<Arc<AppState>>,
+    AxumPath((venue, symbol)): AxumPath<(String, String)>,
+    Json(body): Json<DisableMarketRequest>,
+) -> Result<StatusCode, ApiError> {
+    let market_id = parse_market_id(&venue, &symbol)?;
+    state
+        .market_enablement
+        .send(
+            &market_id,
+            MarketEnablementCommand::Disable {
+                reason: body.reason.clone(),
+            },
+        )
+        .await
+        .map_err(|err| classify_enablement_error(&err, "failed to disable market"))?;
+
+    debug!(venue = %venue, symbol = %symbol, "market disabled");
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// `POST /markets/<venue>/<symbol>/enable` -- re-enables a previously disabled market.
+pub(crate) async fn post_market_enable(
+    State(state): State<Arc<AppState>>,
+    AxumPath((venue, symbol)): AxumPath<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let market_id = parse_market_id(&venue, &symbol)?;
+    state
+        .market_enablement
+        .send(&market_id, MarketEnablementCommand::Enable)
+        .await
+        .map_err(|err| classify_enablement_error(&err, "failed to enable market"))?;
+
+    debug!(venue = %venue, symbol = %symbol, "market enabled");
+    Ok(StatusCode::ACCEPTED)
+}
+
+fn parse_market_id(venue: &str, symbol: &str) -> Result<MarketId, ApiError> {
+    let venue = VenueRef::from_str(venue).map_err(|_| bad_request("unknown venue"))?;
+    Ok(MarketId::new(venue, Symbol::from_raw(symbol)))
+}
+
+/// Translates a market-enablement command failure into an HTTP response.
+fn classify_enablement_error(error: &SendError<MarketEnablement>, operation: &str) -> ApiError {
+    let (status, message) = match error {
+        AggregateError::UserError(LifecycleError::Apply(
+            MarketEnablementError::AlreadyDisabled,
+        )) => (StatusCode::CONFLICT, "market is already disabled"),
+        AggregateError::UserError(LifecycleError::Apply(MarketEnablementError::AlreadyEnabled)) => {
+            (StatusCode::CONFLICT, "market is already enabled")
+        }
+        other => {
+            error!(error = %other, operation, "market command failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "market command failed")
+        }
+    };
+
+    api_error(status, message)
+}
 
 #[cfg(test)]
 mod tests {

@@ -9,14 +9,19 @@
 //! careful merge (the bug the old `markets.csv` left-join had to avoid by hand).
 
 use std::collections::BTreeSet;
-
+use std::str::FromStr;
+use std::sync::Arc;
+use axum::Json;
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use event_sorcery::{Projection, ProjectionError, SendError, Store};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
+use crate::AppState;
 use crate::finance::{self, CcxtSymbol, Market, Symbol};
-use crate::hyperliquid::{Hyperliquid, HyperliquidError};
+use crate::hyperliquid::{Hyperliquid, HyperliquidError, HyperliquidNetwork};
 use crate::market_catalog::{CatalogMarket, MarketCatalog, MarketCatalogCommand};
 use crate::market_enablement::{ENABLEMENT_STATUS, MarketEnablement, MarketId, MarketStatus};
 use crate::venue::VenueRef;
@@ -210,6 +215,82 @@ pub(crate) async fn leverage_limits(
         limits,
         fetched_at: catalog.observed_at(),
     }))
+}
+
+/// `GET /markets/<venue>` -- a venue's tradable markets: catalog listings minus
+/// operator disables.
+pub(crate) async fn get_markets(
+    State(state): State<Arc<AppState>>,
+    AxumPath(venue): AxumPath<String>,
+) -> Result<Json<Vec<String>>, StatusCode> {
+    let venue = VenueRef::from_str(&venue).map_err(|_| StatusCode::NOT_FOUND)?;
+    let tradable = tradable_markets(
+        venue,
+        &state.market_catalog_projection,
+        &state.market_enablement_projection,
+    )
+    .await
+    .map_err(|err| {
+        error!(error = %err, "failed to list tradable markets");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(
+        tradable
+            .iter()
+            .map(|market| market.as_str().to_string())
+            .collect(),
+    ))
+}
+
+/// `GET /markets/<venue>/leverage` -- a venue's per-market max-leverage limits
+/// from the cached catalog so clients size leverage controls without each
+/// running a heavy all-market fetch.
+pub(crate) async fn get_markets_leverage(
+    State(state): State<Arc<AppState>>,
+    AxumPath(venue): AxumPath<String>,
+) -> Result<Json<LeverageLimits>, StatusCode> {
+    let venue = VenueRef::from_str(&venue).map_err(|_| StatusCode::NOT_FOUND)?;
+    match leverage_limits(venue, &state.market_catalog_projection).await {
+        Ok(Some(limits)) => Ok(Json(limits)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(err) => {
+            error!(error = %err, "failed to read leverage limits");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct HyperliquidMarketsQuery {
+    network: HyperliquidNetwork,
+}
+
+/// `GET /hyperliquid/markets` -- the Hyperliquid perp universe in the ccxt-style
+/// shape the frontend trading client consumes. Fetched live from the exchange on
+/// every request: the asset indexes in the response route orders, so they must
+/// always match the exchange's current universe rather than a cached observation.
+pub(crate) async fn get_hyperliquid_markets(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HyperliquidMarketsQuery>,
+) -> Result<Json<MarketsApiResponse>, StatusCode> {
+    let network = query.network;
+    let metadata = state
+        .hyperliquid_clients
+        .for_network(network)
+        .fetch_market_metadata()
+        .await
+        .map_err(|err| {
+            error!(error = %err, ?network, "failed to fetch hyperliquid markets");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    debug!(
+        markets = metadata.len(),
+        ?network,
+        "hyperliquid markets served"
+    );
+    Ok(Json(markets_api_response(&metadata, Utc::now())))
 }
 
 #[cfg(test)]

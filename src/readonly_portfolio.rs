@@ -1,5 +1,9 @@
 use std::str::FromStr;
+use std::sync::Arc;
 
+use axum::Json;
+use axum::extract::State;
+use axum::http::StatusCode;
 use bitcoin::{Address, Network};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use reqwest::Url;
@@ -8,7 +12,9 @@ use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
+
+use crate::{ApiError, AppState, api_error};
 
 const DEFAULT_MEMPOOL_BASE_URL: &str = "https://mempool.space/api/";
 const DEFAULT_TESTNET_MEMPOOL_BASE_URL: &str = "https://mempool.space/testnet/api/";
@@ -17,6 +23,9 @@ const DEFAULT_HYPERLIQUID_INFO_BASE_URL: &str = "https://api.hyperliquid.xyz";
 const SATOSHIS_PER_BTC: i64 = 100_000_000;
 const ADDRESS_FETCH_CONCURRENCY: usize = 8;
 const BECH32_ADDRESS_MAX_LEN: usize = 90;
+
+/// Upper bound on addresses accepted per request; each address fans out into external provider calls.
+pub(crate) const MAX_ADDRESS_LIST_LEN: usize = 25;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct BtcAddress {
@@ -238,6 +247,8 @@ pub(crate) enum ReadonlyPortfolioError {
     InvalidBtcAddress(String),
     #[error("address list is empty")]
     EmptyAddressList,
+    #[error("address list exceeds {MAX_ADDRESS_LIST_LEN} addresses")]
+    AddressListTooLong,
     #[error("ubtc price is missing or invalid")]
     MissingUbtcPrice,
     #[error("invalid hyperliquid notional for {symbol}")]
@@ -302,6 +313,9 @@ pub(crate) async fn load_readonly_btc_balances(
 ) -> Result<ReadonlyBtcBalancesResponse, ReadonlyPortfolioError> {
     if request.addresses.is_empty() {
         return Err(ReadonlyPortfolioError::EmptyAddressList);
+    }
+    if request.addresses.len() > MAX_ADDRESS_LIST_LEN {
+        return Err(ReadonlyPortfolioError::AddressListTooLong);
     }
 
     let fetch_futures: Vec<_> = request
@@ -717,6 +731,89 @@ fn parse_ubtc_price_from_context(
     Err(ReadonlyPortfolioError::MissingUbtcPrice)
 }
 
+/// `POST /portfolio/readonly/btc` -- BTC balances for a set of watch-only addresses.
+pub(crate) async fn post_portfolio_readonly_btc(
+    Json(body): Json<ReadonlyBtcBalancesRequest>,
+) -> Result<Json<ReadonlyBtcBalancesResponse>, ApiError> {
+    let http_client = reqwest::Client::new();
+    let btc_base_url = default_btc_base_url().map_err(|err| {
+        error!(error = %err, "failed to resolve btc explorer base url");
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to resolve btc explorer base url",
+        )
+    })?;
+    let blockchain_info_base_url = default_blockchain_info_base_url().map_err(|err| {
+        error!(error = %err, "failed to resolve blockchain.info base url");
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to resolve blockchain.info base url",
+        )
+    })?;
+
+    load_readonly_btc_balances(
+        &http_client,
+        &btc_base_url,
+        &blockchain_info_base_url,
+        &body,
+    )
+    .await
+    .map(Json)
+    .map_err(|err| {
+        error!(error = %err, "failed to load readonly btc balances");
+        let status = match err {
+            ReadonlyPortfolioError::InvalidBtcAddress(_)
+            | ReadonlyPortfolioError::EmptyAddressList
+            | ReadonlyPortfolioError::AddressListTooLong => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        api_error(status, err.to_string())
+    })
+}
+
+/// `POST /portfolio/exposure` -- combined BTC + Hyperliquid exposure for a portfolio.
+pub(crate) async fn post_portfolio_exposure(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PortfolioExposureRequest>,
+) -> Result<Json<PortfolioExposureResponse>, ApiError> {
+    let http_client = reqwest::Client::new();
+    let btc_base_url = default_btc_base_url().map_err(|err| {
+        error!(error = %err, "failed to resolve btc explorer base url");
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to resolve btc explorer base url",
+        )
+    })?;
+    let blockchain_info_base_url = default_blockchain_info_base_url().map_err(|err| {
+        error!(error = %err, "failed to resolve blockchain.info base url");
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to resolve blockchain.info base url",
+        )
+    })?;
+
+    load_portfolio_exposure(
+        &http_client,
+        &btc_base_url,
+        &blockchain_info_base_url,
+        state.config.hyperliquid_base_url.as_ref(),
+        &body,
+    )
+    .await
+    .map(Json)
+    .map_err(|err| {
+        error!(error = %err, "failed to load portfolio exposure");
+        let status = match err {
+            ReadonlyPortfolioError::InvalidBtcAddress(_)
+            | ReadonlyPortfolioError::EmptyAddressList
+            | ReadonlyPortfolioError::AddressListTooLong
+            | ReadonlyPortfolioError::InvalidNotional { .. } => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        api_error(status, err.to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -949,6 +1046,25 @@ mod tests {
         assert!(matches!(
             result,
             Err(ReadonlyPortfolioError::EmptyAddressList)
+        ));
+    }
+
+    #[tokio::test]
+    async fn load_readonly_btc_balances_rejects_address_list_exceeding_max() {
+        let addresses: Vec<BtcAddress> = (0..=MAX_ADDRESS_LIST_LEN)
+            .map(|_| parsed("1FfmbHfnpaZjKFvyi1okTjJJusN455paPH"))
+            .collect();
+
+        let result = load_readonly_btc_balances(
+            &client(),
+            &Url::parse("https://example.invalid").unwrap(),
+            &Url::parse("https://example.invalid").unwrap(),
+            &ReadonlyBtcBalancesRequest { addresses },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(ReadonlyPortfolioError::AddressListTooLong)
         ));
     }
 
