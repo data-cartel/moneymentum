@@ -295,7 +295,7 @@ describe("portfolio keyboard workflow", () => {
       code: "BracketLeft",
       shiftKey: true,
     })
-    expect(onCrossAccountLeverageChange).toHaveBeenCalledWith(0.901)
+    expect(onCrossAccountLeverageChange).toHaveBeenCalledWith(1.001)
 
     setPortfolioSymbols([])
     onCrossAccountLeverageChange.mockClear()
