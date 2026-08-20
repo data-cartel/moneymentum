@@ -396,6 +396,7 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
               onKeyDown={event => {
                 if (event.key === "Enter") {
                   event.preventDefault()
+                  event.stopPropagation()
                   void submitUnlockPin()
                 }
               }}
