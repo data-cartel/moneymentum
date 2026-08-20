@@ -165,7 +165,9 @@ const useDockviewPanelTitle = (props: IDockviewPanelHeaderProps) => {
   // subscription and dispose the listener on cleanup.
   createEffect(() => {
     const api = props.api
-    setTitle(api.title)
+    if (api.title !== undefined) {
+      setTitle(api.title)
+    }
     const disposable = api.onDidTitleChange(event => {
       setTitle(event.title)
     })
