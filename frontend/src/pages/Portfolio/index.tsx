@@ -13,7 +13,10 @@ import { WalletHeader } from "@/components/wallet-header"
 import { WalletProvider } from "@/contexts/WalletProvider"
 import { cn } from "@/lib/cn"
 import { useDockviewPanelProviders } from "@/lib/dockviewPanelProviders"
-import { bindDockviewSolidOwner } from "@/lib/dockviewSolidOwner"
+import {
+  bindDockviewSolidOwner,
+  releaseDockviewSolidOwner,
+} from "@/lib/dockviewSolidOwner"
 import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import {
@@ -282,10 +285,9 @@ const AddPanelMenu = (props: IDockviewHeaderActionsProps) => {
 }
 
 const PortfolioPage = () => {
-  const portfolioOwner = getOwner()
-  bindDockviewSolidOwner(portfolioOwner)
+  const portfolioOwnerToken = bindDockviewSolidOwner(getOwner())
   onCleanup(() => {
-    bindDockviewSolidOwner(null)
+    releaseDockviewSolidOwner(portfolioOwnerToken)
   })
 
   const { isNetworkSwitching } = useNetwork()
