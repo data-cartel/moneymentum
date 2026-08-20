@@ -40,12 +40,7 @@ import { FactorsPanel } from "./components/FactorsPanel"
 import { PerformancePanel } from "./components/PerformancePanel"
 import { PortfolioSettingsMenu } from "./components/PortfolioSettingsMenu"
 import { PositionsPanel } from "./components/PositionsPanel/PositionsPanel"
-import {
-  readPortfolioMetricVisibility,
-  writePortfolioMetricVisibility,
-  type PortfolioMetricColumnId,
-  type PortfolioMetricVisibility,
-} from "./components/PositionsPanel/portfolioMetricVisibility"
+import { usePortfolioMetricVisibility } from "./components/PositionsPanel/portfolioMetricVisibility"
 import { RiskPanel } from "./components/RiskPanel"
 import {
   StagedChangesPanel,
@@ -296,8 +291,8 @@ const PortfolioPage = () => {
   const portfolio = usePortfolioState()
 
   const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
-  const [metricVisibility, setMetricVisibility] =
-    createSignal<PortfolioMetricVisibility>(readPortfolioMetricVisibility())
+  const { metricVisibility, setMetricColumnVisible } =
+    usePortfolioMetricVisibility()
 
   let dockviewContainer: HTMLDivElement | undefined
   let layoutChangeDisposable: { dispose: () => void } | undefined
@@ -365,11 +360,6 @@ const PortfolioPage = () => {
     writeManualWeightEntry(portfolio.isManualWeightEntry)
   })
 
-  // createEffect: persist metric visibility when gear toggles change
-  createEffect(() => {
-    writePortfolioMetricVisibility(metricVisibility())
-  })
-
   const betaResult = useBeta(
     () => portfolio.targetPortfolio,
     () => portfolio.targetTotalNotional,
@@ -385,16 +375,6 @@ const PortfolioPage = () => {
   const targetPositionCount = createMemo(
     () => Object.keys(portfolio.targetPortfolio).length,
   )
-
-  const setMetricColumnVisible = (
-    columnId: PortfolioMetricColumnId,
-    visible: boolean,
-  ) => {
-    setMetricVisibility(previous => ({
-      ...previous,
-      [columnId]: visible,
-    }))
-  }
 
   // createEffect: keep PORTFOLIO tab title count in sync
   createEffect(() => {

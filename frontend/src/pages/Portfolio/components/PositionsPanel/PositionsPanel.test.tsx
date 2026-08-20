@@ -2,17 +2,14 @@ import { render, screen, within } from "@solidjs/testing-library"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { createEffect, createSignal, type ParentProps } from "solid-js"
+import { type ParentProps } from "solid-js"
 
 import type { FactorScore } from "../../hooks/useFactorScores"
 import { AllSymbolsPanel } from "../AllSymbolsPanel"
 import { PortfolioSettingsMenu } from "../PortfolioSettingsMenu"
 import {
   PORTFOLIO_METRIC_COLUMNS_STORAGE_KEY,
-  readPortfolioMetricVisibility,
-  writePortfolioMetricVisibility,
-  type PortfolioMetricColumnId,
-  type PortfolioMetricVisibility,
+  usePortfolioMetricVisibility,
 } from "./portfolioMetricVisibility"
 
 const useFactorScoresMock = vi.hoisted(() => vi.fn())
@@ -88,24 +85,9 @@ const createWrapper = () => {
 }
 
 const AllSymbolsWithSettings = () => {
-  const [metricVisibility, setMetricVisibility] =
-    createSignal<PortfolioMetricVisibility>(readPortfolioMetricVisibility())
+  const { metricVisibility, setMetricColumnVisible } =
+    usePortfolioMetricVisibility()
   const screenerSymbols = () => ["BTC/USDC:USDC", "ETH/USDC:USDC"]
-
-  const setMetricColumnVisible = (
-    columnId: PortfolioMetricColumnId,
-    visible: boolean,
-  ) => {
-    setMetricVisibility(previous => ({
-      ...previous,
-      [columnId]: visible,
-    }))
-  }
-
-  // createEffect: mirror Portfolio page persistence for this harness
-  createEffect(() => {
-    writePortfolioMetricVisibility(metricVisibility())
-  })
 
   return (
     <>
@@ -258,5 +240,33 @@ describe("AllSymbolsPanel metric visibility", () => {
     expect(JSON.parse(storedVisibility ?? "{}")).toMatchObject({
       sharpe: false,
     })
+  })
+
+  it("restores the persisted metric visibility on the next mount", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 2 })
+
+    const firstMount = render(() => <AllSymbolsWithSettings />, {
+      wrapper: createWrapper(),
+    })
+
+    await user.click(
+      screen.getByRole("button", { name: "Open positions settings" }),
+    )
+    await toggleMetricVisibility(user, "Sharpe")
+
+    expect(
+      screen.getByRole("button", { name: "Sort by Sharpe", hidden: true }),
+    ).toBeInTheDocument()
+
+    firstMount.unmount()
+
+    render(() => <AllSymbolsWithSettings />, { wrapper: createWrapper() })
+
+    expect(
+      screen.getByRole("button", { name: "Sort by Sharpe", hidden: true }),
+    ).toBeInTheDocument()
+    expect(allSymbolsTable().headerCells().at(-1)?.textContent?.trim()).toBe(
+      "Sharpe",
+    )
   })
 })
