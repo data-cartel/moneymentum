@@ -24,6 +24,7 @@ export {
   focusPanelContainer,
   focusPortfolioCell,
   focusStagedPin,
+  scheduleFocusStagedPin,
 } from "./portfolioCellFocus"
 export type { PortfolioCellKind } from "./portfolioCellFocus"
 export {

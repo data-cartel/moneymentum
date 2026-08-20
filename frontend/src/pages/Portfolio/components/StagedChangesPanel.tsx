@@ -76,20 +76,6 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
 
   const showUnlockPinField = () => connectionState() === "agentLocked"
 
-  // createEffect: focus PIN when staged panel activates while agent is locked
-  createEffect(() => {
-    if (keyboard?.focusedPanel() !== "staged") {
-      return
-    }
-    if (!showUnlockPinField()) {
-      return
-    }
-    queueMicrotask(() => {
-      unlockPinInput?.focus()
-      unlockPinInput?.select()
-    })
-  })
-
   // createEffect: register unlock submit for Cmd/Ctrl+Enter while agent locked
   createEffect(() => {
     if (!keyboard) {
