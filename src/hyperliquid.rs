@@ -963,4 +963,95 @@ mod tests {
             "timestamp should be ISO 8601 format like '2024-01-01T00:00:00.000Z', got: {timestamp}"
         );
     }
+
+    /// Hyperliquid's info `coin` field is case-sensitive for both candle and
+    /// funding history requests. Record the outbound bodies so a regression that
+    /// uppercases exchange-native names (e.g. `kPEPE` -> `KPEPE`) fails here
+    /// instead of silently dropping those markets at ingest time.
+    ///
+    /// Contract references:
+    /// - [candleSnapshot](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#candle-snapshot)
+    /// - [fundingHistory](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals#retrieve-historical-funding-rates)
+    #[tokio::test]
+    async fn candle_and_funding_requests_preserve_exchange_native_coin_casing() {
+        use serde_json::json;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let base_url = url::Url::parse(&server.uri()).unwrap();
+        let client = HyperliquidClient::new(Some(&base_url), 0).await.unwrap();
+        let market = Market::new("kPEPE".to_string());
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+
+        Mock::given(method("POST"))
+            .and(path("/info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                "t": 1_700_000_000_000_u64,
+                "T": 1_700_003_600_000_u64,
+                "s": "kPEPE",
+                "i": "1h",
+                "o": "0.001",
+                "c": "0.002",
+                "h": "0.003",
+                "l": "0.0009",
+                "v": "1000.0",
+                "n": 10
+            }])))
+            .mount(&server)
+            .await;
+        client
+            .fetch_candles(&market, Timeframe::OneHour, start)
+            .await
+            .unwrap();
+        let candle_bodies: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+            .collect();
+        assert!(
+            candle_bodies
+                .iter()
+                .any(|body| body.contains("candleSnapshot") && body.contains("kPEPE")),
+            "candleSnapshot must send exchange-native coin casing: {candle_bodies:?}"
+        );
+        assert!(
+            candle_bodies.iter().all(|body| !body.contains("\"KPEPE\"")),
+            "candleSnapshot must not uppercase the coin: {candle_bodies:?}"
+        );
+
+        server.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                "coin": "kPEPE",
+                "fundingRate": "0.0001",
+                "premium": "0.00005",
+                "time": 1_700_000_000_000_u64
+            }])))
+            .mount(&server)
+            .await;
+        client.fetch_funding_rates(&market, start).await.unwrap();
+        let funding_bodies: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+            .collect();
+        assert!(
+            funding_bodies
+                .iter()
+                .any(|body| body.contains("fundingHistory") && body.contains("kPEPE")),
+            "fundingHistory must send exchange-native coin casing: {funding_bodies:?}"
+        );
+        assert!(
+            funding_bodies
+                .iter()
+                .all(|body| !body.contains("\"KPEPE\"")),
+            "fundingHistory must not uppercase the coin: {funding_bodies:?}"
+        );
+    }
 }
