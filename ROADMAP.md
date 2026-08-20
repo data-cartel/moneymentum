@@ -295,6 +295,9 @@ primitives.
 - [x] Rebalancer integration: connect rebalancer logic to SolidJS signals/stores
 - [x] Tests & CI: migrate Vitest tests to SolidJS testing utilities, verify CI
       passes
+- [x] Fix repository-managed frontend startup --
+      [#464](https://github.com/dataclique/moneymentum/issues/464) /
+      [#469](https://github.com/dataclique/moneymentum/pull/469)
 
 ---
 
