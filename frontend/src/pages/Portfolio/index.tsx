@@ -54,8 +54,10 @@ import {
   writePreciseToggle,
 } from "./hooks/usePortfolioState"
 import {
-  readPortfolioDockviewLayout,
+  persistPortfolioDockviewLayout,
+  restorePortfolioDockviewLayout,
   writePortfolioDockviewLayout,
+  type PortfolioLayoutHost,
 } from "./portfolioLayoutStorage"
 import "./portfolio-dockview.css"
 
@@ -677,36 +679,22 @@ const PortfolioPage = () => {
   const handleReady = (event: DockviewReadyEvent) => {
     setDockviewApi(event.api)
 
-    const hasRequiredPanels = (): boolean =>
-      (["portfolio", "allSymbols", "staged"] as const).every(
-        panelId => event.api.getPanel(panelId) !== undefined,
-      )
-
-    const persistRepairedLayout = () => {
-      try {
-        writePortfolioDockviewLayout(event.api.toJSON())
-      } catch {
-        // QuotaExceededError / SecurityError: keep trading; drop persistence.
-      }
+    const layoutHost: PortfolioLayoutHost = {
+      fromJSON: layout => {
+        event.api.fromJSON(layout)
+      },
+      clear: () => {
+        event.api.clear()
+      },
+      toJSON: () => event.api.toJSON(),
+      hasPanel: panelId => event.api.getPanel(panelId) !== undefined,
     }
 
-    const savedLayout = readPortfolioDockviewLayout()
-    if (savedLayout !== null) {
-      try {
-        event.api.fromJSON(savedLayout)
-        if (!hasRequiredPanels()) {
-          event.api.clear()
-          applyDefaultLayout(event.api)
-          persistRepairedLayout()
-        }
-      } catch {
-        event.api.clear()
-        applyDefaultLayout(event.api)
-        persistRepairedLayout()
-      }
-    } else {
+    if (
+      restorePortfolioDockviewLayout(layoutHost) === "requires-default-layout"
+    ) {
       applyDefaultLayout(event.api)
-      persistRepairedLayout()
+      persistPortfolioDockviewLayout(layoutHost)
     }
 
     const flushPendingLayoutWrite = () => {
