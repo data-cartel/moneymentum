@@ -1,8 +1,12 @@
-import { useContext } from "solid-js"
+import { createRoot, useContext } from "solid-js"
 import { describe, expect, it } from "vitest"
 import type { DockviewIDisposable } from "@arminmajerie/dockview-core"
 
-import { SolidPart, SolidPartContext } from "./dockviewSolidPart"
+import {
+  SolidPart,
+  SolidPartContext,
+  usePortalsLifecycle,
+} from "./dockviewSolidPart"
 
 const collectingPortalStore = () => {
   const portals: DockviewIDisposable[] = []
@@ -36,5 +40,29 @@ describe("SolidPart", () => {
 
     expect(contextDuringRender).toBe(panelContext)
     expect(parent.textContent).toBe("PORTFOLIO")
+  })
+
+  it("tears the portal down once when dispose is called repeatedly", () => {
+    const parent = document.createElement("div")
+    const Panel = (props: { title: string }) => <span>{props.title}</span>
+
+    createRoot(disposeOwner => {
+      const [portals, addPortal] = usePortalsLifecycle()
+      const part = new SolidPart(parent, { addPortal }, Panel, {
+        title: "PORTFOLIO",
+      })
+
+      expect(portals()).toHaveLength(1)
+
+      part.dispose()
+
+      expect(portals()).toHaveLength(0)
+      expect(parent.textContent).toBe("")
+      expect(() => {
+        part.dispose()
+      }).not.toThrow()
+
+      disposeOwner()
+    })
   })
 })
