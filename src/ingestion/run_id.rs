@@ -64,7 +64,7 @@ impl FromStr for IngestionRunId {
 
 /// Why a string is not a valid [`IngestionRunId`].
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum IngestionRunIdParseError {
+pub enum IngestionRunIdParseError {
     #[error("ingestion run id must start with `{INGESTION_RUN_ID_PREFIX}`")]
     MissingPrefix,
     #[error("ingestion run id is missing its nonce segment")]
