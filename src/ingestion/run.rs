@@ -14,7 +14,7 @@ use super::work::IngestionWork;
 /// state; every other state is final.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "TEXT")]
-pub(crate) enum IngestionRunStatus {
+pub enum IngestionRunStatus {
     Running,
     Completed,
     Failed,
@@ -215,7 +215,7 @@ impl EventSourced for IngestionRun {
 /// reads (the "is anything running?" check and the recovery sweep).
 pub(crate) const RUN_STATUS: Column = Column("status");
 
-pub(super) async fn complete_run(
+pub(crate) async fn complete_run(
     store: &Store<IngestionRun>,
     run_id: &IngestionRunId,
     last_record_at: DateTime<Utc>,

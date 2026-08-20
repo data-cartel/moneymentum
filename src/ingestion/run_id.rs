@@ -18,7 +18,7 @@ pub(crate) const INGESTION_RUN_ID_PREFIX: &str = "ingestion-";
 /// resolution the wire form preserves -- so an id always equals the value parsed
 /// back from its own [`Display`] output.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct IngestionRunId {
+pub struct IngestionRunId {
     started_at_micros: i64,
     nonce: Uuid,
 }
@@ -64,7 +64,7 @@ impl FromStr for IngestionRunId {
 
 /// Why a string is not a valid [`IngestionRunId`].
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum IngestionRunIdParseError {
+pub enum IngestionRunIdParseError {
     #[error("ingestion run id must start with `{INGESTION_RUN_ID_PREFIX}`")]
     MissingPrefix,
     #[error("ingestion run id is missing its nonce segment")]

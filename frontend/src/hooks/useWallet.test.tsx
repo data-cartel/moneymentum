@@ -32,7 +32,15 @@ vi.mock("@/services/hyperliquidClientLoader", async () => {
 })
 
 const mockEnsureEvmAppKit = vi.fn(
-  async () => null as null | { getAddress: () => null },
+  async () =>
+    null as null | {
+      getAddress: () => null
+      disconnect?: (namespace: "eip155") => Promise<void>
+      subscribeAccount?: (
+        subscriber: (accountState: unknown) => void,
+        namespace?: "eip155",
+      ) => () => void
+    },
 )
 const mockReadConnectedEip1193Provider = vi.fn(
   (): { request: ReturnType<typeof vi.fn> } | null => null,
@@ -42,12 +50,22 @@ vi.mock("@/reown/evmAppKit", () => ({
   ensureEvmAppKit: () => mockEnsureEvmAppKit(),
   prefetchEvmAppKit: () => undefined,
   readConnectedEip1193Provider: () => mockReadConnectedEip1193Provider(),
-  readEvmAddressFromAccountState: () => null,
-  readEvmWalletConnectedFromAccountState: () => false,
-  readReownProjectId: () => "test-project-id",
+  readEvmAddressFromAccountState: (accountState: unknown) =>
+    typeof accountState === "object" &&
+    accountState !== null &&
+    "address" in accountState &&
+    typeof accountState.address === "string"
+      ? accountState.address
+      : null,
+  readEvmWalletConnectedFromAccountState: (accountState: unknown) =>
+    typeof accountState === "object" &&
+    accountState !== null &&
+    "isConnected" in accountState &&
+    accountState.isConnected === true,
 }))
 
 const mockApproveHyperliquidAgent = vi.fn(() => Effect.void)
+const mockRevokeHyperliquidAgent = vi.fn(() => Effect.void)
 
 vi.mock("@/services/hyperliquidAgent", async importOriginal => {
   const actual =
@@ -56,6 +74,8 @@ vi.mock("@/services/hyperliquidAgent", async importOriginal => {
     ...actual,
     approveHyperliquidAgent: (...args: unknown[]) =>
       mockApproveHyperliquidAgent(...args),
+    revokeHyperliquidAgent: (...args: unknown[]) =>
+      mockRevokeHyperliquidAgent(...args),
     generateHyperliquidAgent: () => ({
       agentAddress: "0xGeneratedAgentAddress",
       agentPrivateKey:
@@ -111,6 +131,7 @@ describe("useWallet", () => {
     mockEnsureEvmAppKit.mockResolvedValue(null)
     mockReadConnectedEip1193Provider.mockReturnValue(null)
     mockApproveHyperliquidAgent.mockReturnValue(Effect.void)
+    mockRevokeHyperliquidAgent.mockReturnValue(Effect.void)
   })
 
   afterEach(() => {
@@ -218,6 +239,31 @@ describe("useWallet", () => {
     expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
   })
 
+  it("does not let a stale connect overwrite a newer account", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    const connecting = Effect.runPromise(
+      result.connect(
+        {
+          accountAddress: "0xAccountAAAA",
+          apiWalletAddress: "0xAgentAAAA",
+          privateKey: "TEST_PRIVATE_KEY_ACCOUNT_A",
+        },
+        TEST_PIN,
+      ),
+    )
+
+    result.setMainAddress("0xAccountBBBB")
+
+    await expect(connecting).rejects.toSatisfy(
+      error =>
+        getErrorMessage(error) ===
+        "Wallet changed while credentials were connecting. Please try again.",
+    )
+    expect(result.mainAddress()).toBe("0xAccountBBBB")
+    expect(result.credentials()).toBeNull()
+    expect(result.hasStoredSession()).toBe(false)
+  })
+
   it("unlocks an encrypted session with the correct pin", async () => {
     const credentials = {
       accountAddress: "0xTestAccountAddress",
@@ -238,6 +284,29 @@ describe("useWallet", () => {
 
     expect(reloaded.canTrade()).toBe(true)
     expect(reloaded.credentials()?.privateKey).toBe(credentials.privateKey)
+  })
+
+  it("does not let a stale unlock restore a replaced account", async () => {
+    const accountA = {
+      accountAddress: "0xAccountAAAA",
+      apiWalletAddress: "0xAgentAAAA",
+      privateKey: "TEST_PRIVATE_KEY_ACCOUNT_A",
+    }
+    const { result: initial } = renderHook(() => useWallet(), { wrapper })
+    await Effect.runPromise(initial.connect(accountA, TEST_PIN))
+
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    const unlocking = Effect.runPromise(result.unlock(TEST_PIN))
+    result.setMainAddress("0xAccountBBBB")
+
+    await expect(unlocking).rejects.toSatisfy(
+      error =>
+        getErrorMessage(error) ===
+        "Wallet changed while unlocking. Please try again.",
+    )
+    expect(result.mainAddress()).toBe("0xAccountBBBB")
+    expect(result.credentials()).toBeNull()
+    expect(result.canTrade()).toBe(false)
   })
 
   it("rejects unlock with the wrong pin", async () => {
@@ -375,6 +444,336 @@ describe("useWallet", () => {
     expect(stored.accountAddress).toBe("0xMainFromReown")
     expect(stored.apiWalletAddress).toBe("0xGeneratedAgentAddress")
     expect(stored.encryptedPrivateKey).toBeTypeOf("string")
+  })
+
+  it("does not restore account A credentials after approval finishes on account B", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    mockEnsureEvmAppKit.mockResolvedValue({ getAddress: () => null })
+    mockReadConnectedEip1193Provider.mockReturnValue({ request: vi.fn() })
+
+    let finishApproval: (() => void) | undefined
+    mockApproveHyperliquidAgent.mockReturnValue(
+      Effect.promise(
+        () =>
+          new Promise<void>(resolve => {
+            finishApproval = resolve
+          }),
+      ),
+    )
+
+    result.setMainAddress("0xAccountAAAA")
+    const authorization = Effect.runPromise(result.authorizeAgent(TEST_PIN))
+    await vi.waitFor(() => {
+      expect(finishApproval).toBeDefined()
+    })
+
+    result.setMainAddress("0xAccountBBBB")
+    finishApproval?.()
+    await expect(authorization).rejects.toSatisfy(
+      error =>
+        getErrorMessage(error) ===
+        "Wallet changed during agent authorization. Please try again.",
+    )
+
+    expect(result.mainAddress()).toBe("0xAccountBBBB")
+    expect(result.credentials()).toBeNull()
+    expect(result.canTrade()).toBe(false)
+    expect(result.hasStoredSession()).toBe(false)
+    expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
+  })
+
+  it("rejects account A authorization after the wallet changes away and back", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    mockEnsureEvmAppKit.mockResolvedValue({ getAddress: () => null })
+    mockReadConnectedEip1193Provider.mockReturnValue({ request: vi.fn() })
+
+    let finishApproval: (() => void) | undefined
+    mockApproveHyperliquidAgent.mockReturnValue(
+      Effect.promise(
+        () =>
+          new Promise<void>(resolve => {
+            finishApproval = resolve
+          }),
+      ),
+    )
+
+    result.setMainAddress("0xAccountAAAA")
+    const authorization = Effect.runPromise(result.authorizeAgent(TEST_PIN))
+    await vi.waitFor(() => {
+      expect(finishApproval).toBeDefined()
+    })
+
+    result.setMainAddress("0xAccountBBBB")
+    result.setMainAddress("0xAccountAAAA")
+    finishApproval?.()
+    await expect(authorization).rejects.toSatisfy(
+      error =>
+        getErrorMessage(error) ===
+        "Wallet context changed during agent authorization. Please try again.",
+    )
+
+    expect(result.mainAddress()).toBe("0xAccountAAAA")
+    expect(result.credentials()).toBeNull()
+    expect(result.canTrade()).toBe(false)
+    expect(result.hasStoredSession()).toBe(false)
+    expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
+  })
+
+  it("preserves account B credentials when account A approval later fails", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    mockEnsureEvmAppKit.mockResolvedValue({ getAddress: () => null })
+    mockReadConnectedEip1193Provider.mockReturnValue({ request: vi.fn() })
+
+    let rejectApproval: (() => void) | undefined
+    mockApproveHyperliquidAgent.mockReturnValue(
+      Effect.tryPromise({
+        try: () =>
+          new Promise<void>((_, reject) => {
+            rejectApproval = () => {
+              reject(new Error("approval rejected"))
+            }
+          }),
+        catch: cause => new ApproveAgentFailed({ cause }),
+      }),
+    )
+
+    result.setMainAddress("0xAccountAAAA")
+    const authorization = Effect.runPromise(result.authorizeAgent(TEST_PIN))
+    await vi.waitFor(() => {
+      expect(rejectApproval).toBeDefined()
+    })
+
+    const accountB = {
+      accountAddress: "0xAccountBBBB",
+      apiWalletAddress: "0xAgentBBBB",
+      privateKey: "TEST_PRIVATE_KEY_ACCOUNT_B",
+    }
+    await Effect.runPromise(result.connect(accountB, TEST_PIN))
+    rejectApproval?.()
+    await expect(authorization).rejects.toBeDefined()
+
+    expect(result.mainAddress()).toBe(accountB.accountAddress)
+    expect(result.credentials()).toEqual(accountB)
+    expect(result.canTrade()).toBe(true)
+    expect(result.hasStoredSession()).toBe(true)
+    const stored = JSON.parse(
+      localStorage.getItem("hyperliquid-wallet") ?? "{}",
+    )
+    expect(stored.accountAddress).toBe(accountB.accountAddress)
+    expect(stored.apiWalletAddress).toBe(accountB.apiWalletAddress)
+  })
+
+  it("preserves replacement credentials when an older same-account approval fails", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    mockEnsureEvmAppKit.mockResolvedValue({ getAddress: () => null })
+    mockReadConnectedEip1193Provider.mockReturnValue({ request: vi.fn() })
+
+    let rejectApproval: (() => void) | undefined
+    mockApproveHyperliquidAgent.mockReturnValue(
+      Effect.tryPromise({
+        try: () =>
+          new Promise<void>((_, reject) => {
+            rejectApproval = () => {
+              reject(new Error("approval rejected"))
+            }
+          }),
+        catch: cause => new ApproveAgentFailed({ cause }),
+      }),
+    )
+
+    result.setMainAddress("0xAccountAAAA")
+    const authorization = Effect.runPromise(result.authorizeAgent(TEST_PIN))
+    await vi.waitFor(() => {
+      expect(rejectApproval).toBeDefined()
+    })
+
+    const replacement = {
+      accountAddress: "0xAccountAAAA",
+      apiWalletAddress: "0xReplacementAgent",
+      privateKey: "TEST_REPLACEMENT_PRIVATE_KEY",
+    }
+    await Effect.runPromise(result.connect(replacement, TEST_PIN))
+    rejectApproval?.()
+    await expect(authorization).rejects.toBeDefined()
+
+    expect(result.mainAddress()).toBe(replacement.accountAddress)
+    expect(result.credentials()).toEqual(replacement)
+    expect(result.canTrade()).toBe(true)
+    expect(result.hasStoredSession()).toBe(true)
+    const stored = JSON.parse(
+      localStorage.getItem("hyperliquid-wallet") ?? "{}",
+    )
+    expect(stored.accountAddress).toBe(replacement.accountAddress)
+    expect(stored.apiWalletAddress).toBe(replacement.apiWalletAddress)
+  })
+
+  it("does not persist testnet credentials after approval finishes on mainnet", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    mockEnsureEvmAppKit.mockResolvedValue({ getAddress: () => null })
+    mockReadConnectedEip1193Provider.mockReturnValue({ request: vi.fn() })
+
+    let finishApproval: (() => void) | undefined
+    mockApproveHyperliquidAgent.mockReturnValue(
+      Effect.promise(
+        () =>
+          new Promise<void>(resolve => {
+            finishApproval = resolve
+          }),
+      ),
+    )
+
+    result.setMainAddress("0xAccountAAAA")
+    const authorization = Effect.runPromise(result.authorizeAgent(TEST_PIN))
+    await vi.waitFor(() => {
+      expect(finishApproval).toBeDefined()
+    })
+
+    result.setNetworkMode("mainnet")
+    finishApproval?.()
+    await expect(authorization).rejects.toSatisfy(
+      error =>
+        getErrorMessage(error) ===
+        "Network changed during agent authorization. Please try again.",
+    )
+
+    expect(result.networkMode()).toBe("mainnet")
+    expect(result.credentials()).toBeNull()
+    expect(result.canTrade()).toBe(false)
+    expect(result.hasStoredSession()).toBe(false)
+    expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
+  })
+
+  it("preserves a replacement session when an older revoke completes", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    mockEnsureEvmAppKit.mockResolvedValue({ getAddress: () => null })
+    mockReadConnectedEip1193Provider.mockReturnValue({ request: vi.fn() })
+
+    let finishRevoke: (() => void) | undefined
+    mockRevokeHyperliquidAgent.mockReturnValue(
+      Effect.promise(
+        () =>
+          new Promise<void>(resolve => {
+            finishRevoke = resolve
+          }),
+      ),
+    )
+
+    result.setMainAddress("0xAccountAAAA")
+    const revoking = Effect.runPromise(result.revokeAgent())
+    await vi.waitFor(() => {
+      expect(finishRevoke).toBeDefined()
+    })
+
+    const replacement = {
+      accountAddress: "0xAccountBBBB",
+      apiWalletAddress: "0xAgentBBBB",
+      privateKey: "TEST_PRIVATE_KEY_ACCOUNT_B",
+    }
+    await Effect.runPromise(result.connect(replacement, TEST_PIN))
+    finishRevoke?.()
+
+    await expect(revoking).rejects.toSatisfy(
+      error =>
+        getErrorMessage(error) ===
+        "Wallet changed before the operation completed. Please try again.",
+    )
+    expect(result.credentials()).toEqual(replacement)
+    expect(result.hasStoredSession()).toBe(true)
+  })
+
+  it("clears the local session when Reown emits its disconnect callback", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    let accountSubscriber: ((accountState: unknown) => void) | undefined
+    const disconnect = vi.fn(async () => {
+      accountSubscriber?.({ isConnected: false })
+    })
+    const modal = {
+      getAddress: () => null,
+      disconnect,
+      subscribeAccount: (subscriber: (accountState: unknown) => void) => {
+        accountSubscriber = subscriber
+        return () => {}
+      },
+    }
+    mockEnsureEvmAppKit.mockResolvedValue(modal)
+
+    const credentials = {
+      accountAddress: "0xAccountAAAA",
+      apiWalletAddress: "0xAgentAAAA",
+      privateKey: "TEST_PRIVATE_KEY_ACCOUNT_A",
+    }
+    await Effect.runPromise(result.connect(credentials, TEST_PIN))
+    const { result: mounted } = renderHook(() => useWallet(), { wrapper })
+    await vi.waitFor(() => {
+      expect(accountSubscriber).toBeDefined()
+    })
+    await Effect.runPromise(mounted.disconnect())
+
+    expect(disconnect).toHaveBeenCalledWith("eip155")
+    expect(mounted.mainAddress()).toBeNull()
+    expect(mounted.credentials()).toBeNull()
+    expect(mounted.hasStoredSession()).toBe(false)
+  })
+
+  it("preserves a replacement session when an older disconnect completes", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    let finishDisconnect: (() => void) | undefined
+    const disconnect = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finishDisconnect = resolve
+        }),
+    )
+    mockEnsureEvmAppKit.mockResolvedValue({
+      getAddress: () => null,
+      disconnect,
+    })
+
+    const disconnecting = Effect.runPromise(result.disconnect())
+    await vi.waitFor(() => {
+      expect(finishDisconnect).toBeDefined()
+    })
+
+    const replacement = {
+      accountAddress: "0xAccountBBBB",
+      apiWalletAddress: "0xAgentBBBB",
+      privateKey: "TEST_PRIVATE_KEY_ACCOUNT_B",
+    }
+    await Effect.runPromise(result.connect(replacement, TEST_PIN))
+    finishDisconnect?.()
+
+    await expect(disconnecting).rejects.toSatisfy(
+      error =>
+        getErrorMessage(error) ===
+        "Wallet changed while disconnecting. Please try again.",
+    )
+    expect(result.credentials()).toEqual(replacement)
+    expect(result.hasStoredSession()).toBe(true)
+  })
+
+  it("preserves local credentials when Reown disconnect fails", async () => {
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    const disconnectFailure = new Error("wallet refused disconnect")
+    const disconnect = vi.fn().mockRejectedValue(disconnectFailure)
+    mockEnsureEvmAppKit.mockResolvedValue({
+      getAddress: () => null,
+      disconnect,
+    })
+    const credentials = {
+      accountAddress: "0xAccountAAAA",
+      apiWalletAddress: "0xAgentAAAA",
+      privateKey: "TEST_PRIVATE_KEY_ACCOUNT_A",
+    }
+    await Effect.runPromise(result.connect(credentials, TEST_PIN))
+
+    await expect(Effect.runPromise(result.disconnect())).rejects.toBeDefined()
+
+    expect(disconnect).toHaveBeenCalledWith("eip155")
+    expect(result.mainAddress()).toBe(credentials.accountAddress)
+    expect(result.credentials()).toEqual(credentials)
+    expect(result.canTrade()).toBe(true)
+    expect(result.hasStoredSession()).toBe(true)
+    expect(localStorage.getItem("hyperliquid-wallet")).not.toBeNull()
   })
 
   describe("errors", () => {

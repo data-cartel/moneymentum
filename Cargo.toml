@@ -41,6 +41,7 @@ name = "moneymentum"
 version = "0.1.0"
 edition = "2024"
 authors = ["Data Clique Software Design FZCO"]
+default-run = "moneymentum"
 
 [dependencies]
 apalis = "=1.0.0-rc.9"
