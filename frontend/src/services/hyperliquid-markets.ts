@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect"
+import * as Schema from "effect/Schema"
 
 import type { NetworkMode } from "@/contexts/wallet-context"
 import {
@@ -8,20 +9,29 @@ import {
   type NetworkError,
 } from "@/lib/http"
 
-export interface LeverageLimit {
-  symbol: string
-  maxLeverage: number
-  assetIndex: number
+const LeverageLimitPayload = Schema.Struct({
+  symbol: Schema.String,
+  maxLeverage: Schema.Number,
+  assetIndex: Schema.Number,
   /** `true` when Hyperliquid forbids cross margin; always a boolean from the backend. */
-  onlyIsolated: boolean
-}
+  onlyIsolated: Schema.Boolean,
+})
 
-export interface HyperliquidMarketsResponse {
-  tickers: string[]
-  leverageLimits: LeverageLimit[]
-  refreshedAt: string | null
-  marketsMaxAgeMs?: number
-}
+const HyperliquidMarketsPayload = Schema.Struct({
+  tickers: Schema.Array(Schema.String),
+  leverageLimits: Schema.Array(LeverageLimitPayload),
+  refreshedAt: Schema.NullOr(Schema.String),
+})
+
+const decodeMarketsPayload = Schema.decodeUnknown(HyperliquidMarketsPayload)
+
+export type LeverageLimit = typeof LeverageLimitPayload.Type
+
+export type HyperliquidMarketsResponse =
+  typeof HyperliquidMarketsPayload.Type & {
+    /** How long the catalog stays fresh, derived from the response headers. */
+    readonly marketsMaxAgeMs?: number
+  }
 
 const HYPERLIQUID_REQUEST_TIMEOUT_MS = 10_000
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
@@ -48,6 +58,10 @@ const combinedAbortSignal = (signal?: AbortSignal): AbortSignal => {
 
 /**
  * Fetches the Hyperliquid markets catalog from the app API (no ccxt).
+ *
+ * The payload is decoded against the backend contract, so a response that
+ * drifts from it fails as a `JsonParseError` instead of flowing through the app
+ * as a mistyped catalog.
  */
 export const fetchHyperliquidMarkets = (
   network: NetworkMode,
@@ -64,9 +78,14 @@ export const fetchHyperliquidMarkets = (
   }).pipe(
     Effect.flatMap(response =>
       Effect.tryPromise({
-        try: () => response.json() as Promise<HyperliquidMarketsResponse>,
+        try: (): Promise<unknown> => response.json(),
         catch: cause => new JsonParseError({ cause }),
       }).pipe(
+        Effect.flatMap(payload =>
+          decodeMarketsPayload(payload).pipe(
+            Effect.mapError(cause => new JsonParseError({ cause })),
+          ),
+        ),
         Effect.map(markets => {
           const marketsMaxAgeMs =
             parseCacheMaxAgeMs(response.headers.get("cache-control")) ??
