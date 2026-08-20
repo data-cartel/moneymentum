@@ -74,7 +74,7 @@ cargo test -q       # tests
 cargo clippy        # lints (pedantic + nursery, panic-free)
 cargo fmt           # format
 
-cargo run -- --config config.toml
+cargo run --bin moneymentum -- --config config.toml
 # on-demand candle + funding pull (no HTTP server):
 cargo run --bin moneymentum-ingest -- --config config.toml
 ```

@@ -35,7 +35,7 @@ pub(crate) use orchestration::{
     recover_abandoned_runs, trigger_scheduled_ingestion,
 };
 pub(crate) use owner_lease::{IngestionOwnerLease, OwnerLeaseError};
-pub(crate) use run::{IngestionRun, IngestionRunStatus, running_runs};
+pub(crate) use run::{IngestionRun, IngestionRunStatus};
 pub(crate) use run_id::IngestionRunId;
 pub(crate) use services::IngestionServices;
 pub(crate) use work::IngestionWork;
