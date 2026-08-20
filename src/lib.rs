@@ -982,8 +982,17 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
     });
 
     let derive_config = state.config.derive.clone();
-    let router = build_router(state);
-    let router = match derive_config {
+    let router = mount_derive_options_routes(build_router(state), derive_config).await;
+
+    Ok(router)
+}
+
+/// Mounts Derive options routes when configured; otherwise returns `router` unchanged.
+async fn mount_derive_options_routes(
+    router: Router,
+    derive_config: Option<derive::DeriveConfig>,
+) -> Router {
+    match derive_config {
         Some(derive_config) => match derive::derive_options_router(derive_config).await {
             Ok(options_router) => {
                 info!("derive options routes mounted");
@@ -998,9 +1007,7 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
             }
         },
         None => router,
-    };
-
-    Ok(router)
+    }
 }
 
 /// Wires every moneymentum route to its handler and injects the shared state.

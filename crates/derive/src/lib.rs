@@ -1570,6 +1570,10 @@ async fn spawn_options_hub(
 /// (`/derive/options/...?network=`). No CORS layer -- same-origin via the proxy,
 /// same as the rest of moneymentum. For a standalone process with its own port,
 /// use [`derive_app`].
+///
+/// # Errors
+///
+/// Returns [`DeriveError`] when either network's options hub fails to start.
 pub async fn derive_options_router(config: DeriveConfig) -> Result<Router, DeriveError> {
     let mainnet = spawn_options_hub(
         config.rest_base_url.clone(),
@@ -1596,6 +1600,10 @@ pub async fn derive_options_router(config: DeriveConfig) -> Result<Router, Deriv
 }
 
 /// Standalone Derive options HTTP server (used by `derive_cli`).
+///
+/// # Errors
+///
+/// Returns [`DeriveError`] when the options hub fails to start.
 pub async fn derive_app(config: DeriveConfig) -> Result<Router, DeriveError> {
     let port = config.port;
     let router = derive_options_router(config).await?;
