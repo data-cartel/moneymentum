@@ -21,7 +21,6 @@ use crate::hyperliquid::HyperliquidClients;
 use crate::ingestion::{
     IngestionJobContext, IngestionOwnerLease, IngestionRun, IngestionRunId, IngestionRunStatus,
     IngestionServices, OwnerLeaseError, create_runs_for_active_units, recover_abandoned_runs,
-    running_runs,
 };
 use crate::market_catalog::MarketCatalog;
 use crate::market_enablement::MarketEnablement;
@@ -164,11 +163,23 @@ async fn wait_for_local_ingest_completion(
     runtime: &LocalIngestRuntime,
     started_run_ids: &[IngestionRunId],
 ) -> Result<(), LocalIngestError> {
+    // Poll only the runs this CLI enqueued. Unrelated Running rows (or busy
+    // units that were never started here) must not keep the command waiting.
     loop {
-        let running = running_runs(&runtime.ingestion_projection)
-            .await
-            .map_err(local_ingest_err)?;
-        if running.is_empty() {
+        let mut pending = false;
+        for run_id in started_run_ids {
+            let status = runtime
+                .ingestion_store
+                .load(run_id)
+                .await
+                .map_err(local_ingest_err)?
+                .map(|loaded| loaded.status);
+            if status == Some(IngestionRunStatus::Running) {
+                pending = true;
+                break;
+            }
+        }
+        if !pending {
             break;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
