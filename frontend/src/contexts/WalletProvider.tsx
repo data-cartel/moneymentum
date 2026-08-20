@@ -13,12 +13,14 @@ import {
   getStoredEncryptedSession,
   getStoredNetworkMode,
   type EncryptedWalletSession,
+  type HyperliquidClientLoad,
   type NetworkMode,
   type WalletCredentials,
 } from "./wallet-context"
 import * as Effect from "effect/Effect"
 import * as Either from "effect/Either"
 import {
+  HyperliquidClientLoadFailed,
   WalletAuthorizationAccountChanged,
   WalletAuthorizationContextChanged,
   WalletAuthorizationNetworkChanged,
@@ -110,6 +112,8 @@ export const WalletProvider = (props: ParentProps) => {
   )
   const [HyperliquidClientClass, setHyperliquidClientClass] =
     createSignal<HyperliquidClientConstructor | null>(null)
+  const [hyperliquidClientLoad, setHyperliquidClientLoad] =
+    createSignal<HyperliquidClientLoad>({ state: "loading" })
   let walletContextRevision = 0
   let activeWalletOperation: symbol | null = null
 
@@ -125,7 +129,6 @@ export const WalletProvider = (props: ParentProps) => {
   const isLocked = createMemo(
     () => hasStoredSession() && credentials() === null,
   )
-  const canTrade = createMemo(() => credentials() !== null)
 
   const client = createMemo((): HyperliquidClient | null => {
     const Client = HyperliquidClientClass()
@@ -145,6 +148,33 @@ export const WalletProvider = (props: ParentProps) => {
 
     return new Client({ accountAddress: address }, networkMode())
   })
+
+  // Unlocked credentials alone cannot place orders: the client module loads
+  // lazily, so trading only becomes possible once that client exists.
+  const canTrade = createMemo(() => credentials() !== null && client() !== null)
+
+  const loadHyperliquidClientModule = () => {
+    setHyperliquidClientLoad({ state: "loading" })
+    prefetchHyperliquidClientModule()
+    void ensureHyperliquidClientModule()
+      .then(clientModule => {
+        setHyperliquidClientClass(() => clientModule.HyperliquidClient)
+        setHyperliquidClientLoad({ state: "ready" })
+      })
+      .catch((cause: unknown) => {
+        setHyperliquidClientLoad({
+          state: "failed",
+          error: new HyperliquidClientLoadFailed({ cause }),
+        })
+      })
+  }
+
+  const retryHyperliquidClientLoad = () => {
+    if (hyperliquidClientLoad().state !== "failed") {
+      return
+    }
+    loadHyperliquidClientModule()
+  }
 
   const setMainAddress = (address: string | null) => {
     if (!sameWalletAddress(mainAddress(), address)) {
@@ -511,30 +541,19 @@ export const WalletProvider = (props: ParentProps) => {
   }
 
   onMount(() => {
-    // Defer CCXT until after the first paint so dockview/UI can render without
-    // competing with a ~500KB module download+eval on the same turn.
-    const startClientLoad = () => {
-      prefetchHyperliquidClientModule()
-      void ensureHyperliquidClientModule()
-        .then(clientModule => {
-          setHyperliquidClientClass(() => clientModule.HyperliquidClient)
-        })
-        .catch((error: unknown) => {
-          console.error("Failed to load Hyperliquid client module:", error)
-        })
-    }
-
     let idleCallbackId: number | undefined
     let timeoutId: ReturnType<typeof setTimeout> | undefined
     let unsubscribeAccount: (() => void) | undefined
     let accountSubscriptionCancelled = false
 
+    // Defer CCXT until after the first paint so dockview/UI can render without
+    // competing with a ~500KB module download+eval on the same turn.
     if (typeof window.requestIdleCallback === "function") {
-      idleCallbackId = window.requestIdleCallback(startClientLoad, {
+      idleCallbackId = window.requestIdleCallback(loadHyperliquidClientModule, {
         timeout: 2_000,
       })
     } else {
-      timeoutId = setTimeout(startClientLoad, 0)
+      timeoutId = setTimeout(loadHyperliquidClientModule, 0)
     }
 
     window.addEventListener("storage", handleStorageChange)
@@ -605,6 +624,8 @@ export const WalletProvider = (props: ParentProps) => {
         hasStoredSession,
         canTrade,
         client,
+        hyperliquidClientLoad,
+        retryHyperliquidClientLoad,
         connect,
         authorizeAgent,
         revokeAgent,

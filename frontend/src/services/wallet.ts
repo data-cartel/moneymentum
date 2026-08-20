@@ -67,6 +67,12 @@ export class WalletDisconnectContextChanged extends Data.TaggedError(
   "WalletDisconnectContextChanged",
 )<Record<string, never>> {}
 
+export class HyperliquidClientLoadFailed extends Data.TaggedError(
+  "HyperliquidClientLoadFailed",
+)<{
+  readonly cause: unknown
+}> {}
+
 export const copyWalletAddressToClipboard = (
   address: string,
 ): Effect.Effect<void, WalletAddressMissing | ClipboardWriteFailed> =>

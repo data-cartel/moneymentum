@@ -23,13 +23,12 @@ vi.mock("@/services/hyperliquid-client", async importOriginal => {
   }
 })
 
-vi.mock("@/services/hyperliquidClientLoader", async () => {
-  const clientModule = await import("@/services/hyperliquid-client")
-  return {
-    prefetchHyperliquidClientModule: () => undefined,
-    ensureHyperliquidClientModule: async () => clientModule,
-  }
-})
+const mockEnsureHyperliquidClientModule = vi.hoisted(() => vi.fn())
+
+vi.mock("@/services/hyperliquidClientLoader", () => ({
+  prefetchHyperliquidClientModule: () => undefined,
+  ensureHyperliquidClientModule: () => mockEnsureHyperliquidClientModule(),
+}))
 
 const mockEnsureEvmAppKit = vi.fn(
   async () =>
@@ -128,6 +127,9 @@ describe("useWallet", () => {
   beforeEach(() => {
     ensureLocalStorage()
     localStorage.clear()
+    mockEnsureHyperliquidClientModule.mockImplementation(
+      () => import("@/services/hyperliquid-client"),
+    )
     mockEnsureEvmAppKit.mockResolvedValue(null)
     mockReadConnectedEip1193Provider.mockReturnValue(null)
     mockApproveHyperliquidAgent.mockReturnValue(Effect.void)
@@ -219,8 +221,10 @@ describe("useWallet", () => {
     await Effect.runPromise(result.connect(credentials, TEST_PIN))
 
     expect(result.isConnected()).toBe(true)
-    expect(result.canTrade()).toBe(true)
     expect(result.credentials()).toEqual(credentials)
+    await waitFor(() => {
+      expect(result.canTrade()).toBe(true)
+    })
     const stored = JSON.parse(
       localStorage.getItem("hyperliquid-wallet") ?? "{}",
     )
@@ -282,8 +286,10 @@ describe("useWallet", () => {
 
     await Effect.runPromise(reloaded.unlock(TEST_PIN))
 
-    expect(reloaded.canTrade()).toBe(true)
     expect(reloaded.credentials()?.privateKey).toBe(credentials.privateKey)
+    await waitFor(() => {
+      expect(reloaded.canTrade()).toBe(true)
+    })
   })
 
   it("does not let a stale unlock restore a replaced account", async () => {
@@ -367,9 +373,11 @@ describe("useWallet", () => {
     }
 
     await Effect.runPromise(result.connect(accountA, TEST_PIN))
-    expect(result.canTrade()).toBe(true)
     expect(result.credentials()).toEqual(accountA)
     expect(localStorage.getItem("hyperliquid-wallet")).not.toBeNull()
+    await waitFor(() => {
+      expect(result.canTrade()).toBe(true)
+    })
 
     result.setMainAddress("0xAccountBBBB")
 
@@ -395,8 +403,10 @@ describe("useWallet", () => {
     result.setMainAddress("0xaccountaaaa")
 
     expect(result.credentials()).toEqual(accountA)
-    expect(result.canTrade()).toBe(true)
     expect(result.hasStoredSession()).toBe(true)
+    await waitFor(() => {
+      expect(result.canTrade()).toBe(true)
+    })
   })
 
   it("does not persist an encrypted session when agent approval fails", async () => {
@@ -432,9 +442,11 @@ describe("useWallet", () => {
     result.setMainAddress("0xMainFromReown")
     await Effect.runPromise(result.authorizeAgent(TEST_PIN))
 
-    expect(result.canTrade()).toBe(true)
     expect(result.hasStoredSession()).toBe(true)
     expect(result.credentials()?.accountAddress).toBe("0xMainFromReown")
+    await waitFor(() => {
+      expect(result.canTrade()).toBe(true)
+    })
     expect(result.credentials()?.apiWalletAddress).toBe(
       "0xGeneratedAgentAddress",
     )
@@ -554,8 +566,10 @@ describe("useWallet", () => {
 
     expect(result.mainAddress()).toBe(accountB.accountAddress)
     expect(result.credentials()).toEqual(accountB)
-    expect(result.canTrade()).toBe(true)
     expect(result.hasStoredSession()).toBe(true)
+    await waitFor(() => {
+      expect(result.canTrade()).toBe(true)
+    })
     const stored = JSON.parse(
       localStorage.getItem("hyperliquid-wallet") ?? "{}",
     )
@@ -598,8 +612,10 @@ describe("useWallet", () => {
 
     expect(result.mainAddress()).toBe(replacement.accountAddress)
     expect(result.credentials()).toEqual(replacement)
-    expect(result.canTrade()).toBe(true)
     expect(result.hasStoredSession()).toBe(true)
+    await waitFor(() => {
+      expect(result.canTrade()).toBe(true)
+    })
     const stored = JSON.parse(
       localStorage.getItem("hyperliquid-wallet") ?? "{}",
     )
@@ -771,9 +787,88 @@ describe("useWallet", () => {
     expect(disconnect).toHaveBeenCalledWith("eip155")
     expect(result.mainAddress()).toBe(credentials.accountAddress)
     expect(result.credentials()).toEqual(credentials)
-    expect(result.canTrade()).toBe(true)
     expect(result.hasStoredSession()).toBe(true)
     expect(localStorage.getItem("hyperliquid-wallet")).not.toBeNull()
+    await waitFor(() => {
+      expect(result.canTrade()).toBe(true)
+    })
+  })
+
+  it("keeps canTrade false until the lazy hyperliquid client module resolves", async () => {
+    let resolveClientModule:
+      | ((clientModule: typeof import("@/services/hyperliquid-client")) => void)
+      | undefined
+    mockEnsureHyperliquidClientModule.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          resolveClientModule = resolve
+        }),
+    )
+
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    await Effect.runPromise(
+      result.connect(
+        {
+          accountAddress: "0xTestAccountAddress",
+          apiWalletAddress: "0xTestApiWalletAddress",
+          privateKey: "TEST_PRIVATE_KEY_PLACEHOLDER",
+        },
+        TEST_PIN,
+      ),
+    )
+
+    expect(result.credentials()).not.toBeNull()
+    expect(result.client()).toBeNull()
+    expect(result.canTrade()).toBe(false)
+    expect(result.hyperliquidClientLoad().state).toBe("loading")
+
+    await vi.waitFor(() => {
+      expect(resolveClientModule).toBeDefined()
+    })
+    resolveClientModule?.(await import("@/services/hyperliquid-client"))
+
+    await waitFor(() => {
+      expect(result.canTrade()).toBe(true)
+    })
+    expect(result.hyperliquidClientLoad().state).toBe("ready")
+  })
+
+  it("surfaces a typed hyperliquid client load failure and recovers on retry", async () => {
+    mockEnsureHyperliquidClientModule.mockRejectedValueOnce(
+      new Error("chunk load failed"),
+    )
+
+    const { result } = renderHook(() => useWallet(), { wrapper })
+    await Effect.runPromise(
+      result.connect(
+        {
+          accountAddress: "0xTestAccountAddress",
+          apiWalletAddress: "0xTestApiWalletAddress",
+          privateKey: "TEST_PRIVATE_KEY_PLACEHOLDER",
+        },
+        TEST_PIN,
+      ),
+    )
+
+    await waitFor(() => {
+      expect(result.hyperliquidClientLoad().state).toBe("failed")
+    })
+
+    const failedLoad = result.hyperliquidClientLoad()
+    if (failedLoad.state !== "failed") {
+      throw new Error("expected the hyperliquid client load to have failed")
+    }
+    expect(getErrorMessage(failedLoad.error)).toBe(
+      "Could not load Hyperliquid trading. Please try again.",
+    )
+    expect(result.canTrade()).toBe(false)
+
+    result.retryHyperliquidClientLoad()
+
+    await waitFor(() => {
+      expect(result.canTrade()).toBe(true)
+    })
+    expect(result.hyperliquidClientLoad().state).toBe("ready")
   })
 
   describe("errors", () => {

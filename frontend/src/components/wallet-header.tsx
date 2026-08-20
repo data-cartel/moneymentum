@@ -55,6 +55,8 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     isConnected,
     hasStoredSession,
     mainAddress,
+    hyperliquidClientLoad,
+    retryHyperliquidClientLoad,
   } = useWallet()
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [isDisconnecting, setIsDisconnecting] = createSignal(false)
@@ -189,6 +191,11 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     )
   }
 
+  const failedHyperliquidClientLoad = () => {
+    const load = hyperliquidClientLoad()
+    return load.state === "failed" ? load : null
+  }
+
   const currentAccountAddress = () =>
     walletSettings()?.accountAddress ?? mainAddress() ?? ""
   const currentIsTestnet = () => walletSettings()?.isTestnet ?? true
@@ -233,6 +240,25 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     <div class="flex items-center gap-4">
       <Show when={isNetworkSwitching()}>
         <span class="text-[11px] text-muted-foreground">Switching...</span>
+      </Show>
+
+      <Show when={failedHyperliquidClientLoad()}>
+        {failedLoad => (
+          <div class="flex items-center gap-2" role="alert">
+            <span class="text-[11px] text-rose-500">
+              {getErrorMessage(failedLoad().error)}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              class="h-6 px-2 text-[11px]"
+              onClick={retryHyperliquidClientLoad}
+            >
+              Retry
+            </Button>
+          </div>
+        )}
       </Show>
 
       <Show
