@@ -237,9 +237,11 @@ pub(crate) async fn trigger_scheduled_ingestion(
     Ok(())
 }
 
-/// Abandons every still-running stream. Run unconditionally at startup, before
-/// before schedulers enqueue work, so a crash mid-run cannot leave the one-running slot
-/// permanently claimed (the regression that issue #339 fixed).
+/// Abandons every still-running stream. Call only after the caller holds an
+/// exclusive [`crate::ingestion::IngestionOwnerLease`] for this database, so a
+/// live server or CLI cannot keep writing after its schedule slots are released.
+/// Run before schedulers enqueue work, so a crash mid-run cannot leave the
+/// one-running slot permanently claimed (the regression that issue #339 fixed).
 pub(crate) async fn recover_abandoned_runs(
     store: &Store<IngestionRun>,
     projection: &Projection<IngestionRun>,

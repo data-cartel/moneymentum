@@ -4,8 +4,9 @@
 //! `Running -> {Completed, Failed, Abandoned}` state machine -- so crashed and
 //! abandoned runs stay visible without a database reset. The one-running-run-per-
 //! schedule-key invariant is enforced by the per-work projection check plus a
-//! partial unique index; an unconditional startup reconciler abandons every
-//! still-running stream before schedulers start, so a crash can never wedge a slot.
+//! partial unique index. An exclusive owner lease proves the previous writer is
+//! dead before a startup reconciler abandons still-running streams, so a live
+//! server or CLI cannot have its slots stolen by another process.
 //! Operators trigger the same work units on demand with the `moneymentum-ingest`
 //! CLI (`cargo run --bin moneymentum-ingest -- --config config.toml`).
 //!
@@ -14,10 +15,12 @@
 //! - [`run`]: the event-sourced aggregate and terminal transitions.
 //! - [`job`]: the apalis worker that performs ingestion work.
 //! - [`orchestration`]: run creation, recovery, scheduling, and status reads.
+//! - [`owner_lease`]: exclusive writer lock that makes recovery safe.
 //! - [`services`]: shared dependencies injected into the worker.
 
 mod job;
 mod orchestration;
+mod owner_lease;
 mod run;
 mod run_id;
 mod services;
@@ -31,6 +34,7 @@ pub(crate) use orchestration::{
     create_runs_for_active_units, default_ingestion_schedules, latest_status,
     recover_abandoned_runs, trigger_scheduled_ingestion,
 };
+pub(crate) use owner_lease::{IngestionOwnerLease, OwnerLeaseError};
 pub(crate) use run::{IngestionRun, IngestionRunStatus, running_runs};
 pub(crate) use run_id::IngestionRunId;
 pub(crate) use services::IngestionServices;

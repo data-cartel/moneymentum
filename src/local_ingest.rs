@@ -19,8 +19,9 @@ use tracing_subscriber::EnvFilter;
 use crate::Config;
 use crate::hyperliquid::HyperliquidClients;
 use crate::ingestion::{
-    IngestionJobContext, IngestionRun, IngestionRunId, IngestionRunStatus, IngestionServices,
-    create_runs_for_active_units, recover_abandoned_runs, running_runs,
+    IngestionJobContext, IngestionOwnerLease, IngestionRun, IngestionRunId, IngestionRunStatus,
+    IngestionServices, OwnerLeaseError, create_runs_for_active_units, recover_abandoned_runs,
+    running_runs,
 };
 use crate::market_catalog::MarketCatalog;
 use crate::market_enablement::MarketEnablement;
@@ -36,6 +37,8 @@ pub(crate) enum LocalIngestError {
         run_id: IngestionRunId,
         status: Option<IngestionRunStatus>,
     },
+    #[error(transparent)]
+    OwnerLease(#[from] OwnerLeaseError),
     #[error(transparent)]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -63,6 +66,8 @@ fn local_ingest_err(
 }
 
 struct LocalIngestRuntime {
+    /// Held for the CLI lifetime so a concurrent server cannot steal schedule slots.
+    _owner_lease: IngestionOwnerLease,
     ingestion_store: Arc<Store<IngestionRun>>,
     ingestion_projection: Arc<Projection<IngestionRun>>,
 }
@@ -72,6 +77,11 @@ async fn bootstrap_local_ingest(config: &Config) -> Result<LocalIngestRuntime, L
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 
     ensure_shared_database(&config.database_url).map_err(local_ingest_err)?;
+
+    // Exclusive ownership must be proven before abandoning Running streams: a
+    // live server or another CLI still holds those jobs, and releasing their
+    // slots would allow duplicate writers.
+    let owner_lease = IngestionOwnerLease::try_acquire(&config.database_url).await?;
 
     let database_options = SqliteConnectOptions::from_str(&config.database_url)
         .map_err(local_ingest_err)?
@@ -144,6 +154,7 @@ async fn bootstrap_local_ingest(config: &Config) -> Result<LocalIngestRuntime, L
     debug!("ingestion worker started");
 
     Ok(LocalIngestRuntime {
+        _owner_lease: owner_lease,
         ingestion_store,
         ingestion_projection,
     })
