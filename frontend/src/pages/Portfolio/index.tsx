@@ -774,11 +774,7 @@ const PortfolioPage = () => {
       }
       const layout = pendingLayoutSnapshot
       pendingLayoutSnapshot = undefined
-      try {
-        writePortfolioDockviewLayout(layout)
-      } catch {
-        // QuotaExceededError / SecurityError: keep trading; drop persistence.
-      }
+      writePortfolioDockviewLayout(layout)
     }
 
     const layoutChange = event.api.onDidLayoutChange(() => {
