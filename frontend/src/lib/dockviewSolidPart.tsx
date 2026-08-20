@@ -64,14 +64,15 @@ export class SolidPart<P extends object = object, C extends object = object> {
       const [version, setVersion] = createSignal(0)
       this.triggerUpdate = setVersion
 
+      // Comp must be instantiated as a child of the provider: calling it here
+      // would run its synchronous context reads before the provider exists.
       const ComponentWithContext = () => {
         version()
         const plainProps = { ...baseParams, ...overridesRef } as P
-        const panelContent = Comp(plainProps)
 
         return (
           <SolidPartContext.Provider value={ctx ?? {}}>
-            {panelContent}
+            <Comp {...plainProps} />
           </SolidPartContext.Provider>
         )
       }
@@ -82,16 +83,25 @@ export class SolidPart<P extends object = object, C extends object = object> {
 
     this.ref = this.portalStore.addPortal({
       dispose: () => {
+        if (this.disposed) {
+          return
+        }
+        this.disposed = true
         disposeRoot()
         parentEl.textContent = ""
-        this.disposed = true
       },
     })
   }
 
+  /**
+   * Idempotent: parent-owner teardown and dockview panel teardown both land
+   * here, and the portal store's disposable throws when disposed twice.
+   */
   dispose(): void {
+    if (this.disposed) {
+      return
+    }
     this.ref?.dispose()
-    this.disposed = true
   }
 }
 

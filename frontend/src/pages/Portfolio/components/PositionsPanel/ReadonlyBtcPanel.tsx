@@ -129,15 +129,25 @@ export const ReadonlyBtcPanel = (props: ReadonlyBtcPanelProps): JSX.Element => {
                 <span class="font-mono truncate" title={row.address}>
                   {row.address}
                 </span>
-                <span class="font-mono text-muted-foreground">
-                  {row.quantityBtc.toFixed(6)} BTC
-                </span>
-                <span class="font-mono">
-                  $
-                  {row.notionalUsd.toLocaleString(undefined, {
-                    maximumFractionDigits: 0,
-                  })}
-                </span>
+                <Show
+                  when={!props.isLoading}
+                  fallback={<Skeleton class="h-3 w-24" />}
+                >
+                  <span class="font-mono text-muted-foreground">
+                    {row.quantityBtc.toFixed(6)} BTC
+                  </span>
+                </Show>
+                <Show
+                  when={!props.isLoading}
+                  fallback={<Skeleton class="h-3 w-16" />}
+                >
+                  <span class="font-mono">
+                    $
+                    {row.notionalUsd.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
+                  </span>
+                </Show>
                 <div class="flex items-center gap-1">
                   <span class="text-muted-foreground">Beta</span>
                   <Switch

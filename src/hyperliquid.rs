@@ -51,6 +51,17 @@ pub(crate) enum HyperliquidError {
     Url(#[from] url::ParseError),
     #[error(transparent)]
     Polars(#[from] polars::prelude::PolarsError),
+    #[error("exchange returned no {kind} rows for a non-empty market universe ({markets} markets)")]
+    EmptyFetch { kind: &'static str, markets: usize },
+}
+
+/// Result of one candle or funding ingest pass over a market universe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IngestBatchOutcome {
+    /// Rows were fetched from the exchange and written to the dataset.
+    Written { fetched_rows: usize },
+    /// The market universe was empty, so datasets were left unchanged.
+    Unchanged,
 }
 
 pub(crate) const HYPERLIQUID_TESTNET_BASE_URL: &str = "https://api.hyperliquid-testnet.xyz";
@@ -348,7 +359,7 @@ impl<H: ?Sized + Hyperliquid> CandleIngester<H> {
         timeframe: Timeframe,
         data_dir: &Path,
         markets: &[Market],
-    ) -> Result<(), HyperliquidError> {
+    ) -> Result<IngestBatchOutcome, HyperliquidError> {
         let path = data_dir.join(timeframe.file_name());
         let existing = dataframe::read_csv(path.clone()).await?;
 
@@ -393,8 +404,14 @@ impl<H: ?Sized + Hyperliquid> CandleIngester<H> {
 
         let all_candles: Vec<Candle> = candle_batches.into_iter().flatten().collect();
         if all_candles.is_empty() {
-            info!("no new candles");
-            return Ok(());
+            if markets.is_empty() {
+                info!("no markets to ingest; candle dataset unchanged");
+                return Ok(IngestBatchOutcome::Unchanged);
+            }
+            return Err(HyperliquidError::EmptyFetch {
+                kind: "candle",
+                markets: markets.len(),
+            });
         }
 
         let market_count = markets.len();
@@ -414,7 +431,9 @@ impl<H: ?Sized + Hyperliquid> CandleIngester<H> {
             "ingestion complete"
         );
 
-        Ok(())
+        Ok(IngestBatchOutcome::Written {
+            fetched_rows: candle_count,
+        })
     }
 }
 
@@ -439,7 +458,7 @@ impl<H: ?Sized + Hyperliquid> FundingRateIngester<H> {
         &self,
         data_dir: &Path,
         markets: &[Market],
-    ) -> Result<(), HyperliquidError> {
+    ) -> Result<IngestBatchOutcome, HyperliquidError> {
         let path = data_dir.join(funding::file_name());
         let existing = dataframe::read_csv(path.clone()).await?;
 
@@ -477,8 +496,14 @@ impl<H: ?Sized + Hyperliquid> FundingRateIngester<H> {
 
         let all_rates: Vec<FundingRate> = rate_batches.into_iter().flatten().collect();
         if all_rates.is_empty() {
-            info!("no new funding rates");
-            return Ok(());
+            if markets.is_empty() {
+                info!("no markets to ingest; funding dataset unchanged");
+                return Ok(IngestBatchOutcome::Unchanged);
+            }
+            return Err(HyperliquidError::EmptyFetch {
+                kind: "funding",
+                markets: markets.len(),
+            });
         }
 
         let market_count = markets.len();
@@ -502,7 +527,9 @@ impl<H: ?Sized + Hyperliquid> FundingRateIngester<H> {
             "funding rate ingestion complete"
         );
 
-        Ok(())
+        Ok(IngestBatchOutcome::Written {
+            fetched_rows: rate_count,
+        })
     }
 }
 
@@ -604,12 +631,21 @@ mod tests {
 
         async fn fetch_candles(
             &self,
-            _market: &Market,
+            market: &Market,
             _timeframe: Timeframe,
             start: DateTime<Utc>,
         ) -> Result<Vec<Candle>, HyperliquidError> {
             *self.captured_start_millis.lock().unwrap() = Some(start.timestamp_millis());
-            Ok(vec![])
+            Ok(vec![Candle {
+                timestamp: DateTime::<Utc>::UNIX_EPOCH,
+                open: 1.0,
+                high: 1.0,
+                low: 1.0,
+                close: 1.0,
+                volume: 1.0,
+                market: finance::hyperliquid_swap_ccxt_symbol(market.as_str()),
+                symbol: Symbol::from_raw(market.as_str()),
+            }])
         }
 
         async fn fetch_funding_rates(
@@ -653,11 +689,12 @@ mod tests {
         let mock = Arc::new(MockHyperliquid::new());
         let ingester = CandleIngester::new(mock, 10);
 
-        ingester
+        let outcome = ingester
             .ingest_with_markets(Timeframe::OneHour, data_dir.path(), &btc_markets())
             .await
             .unwrap();
 
+        assert_eq!(outcome, IngestBatchOutcome::Written { fetched_rows: 1 });
         let csv_path = data_dir.path().join("ohlcv_1h.csv");
         assert!(csv_path.exists(), "CSV file should be created");
 
@@ -668,17 +705,42 @@ mod tests {
 
     #[traced_test]
     #[tokio::test]
-    async fn candle_ingester_logs_when_no_new_candles() {
+    async fn candle_ingester_rejects_empty_fetch_for_non_empty_universe() {
         let data_dir = TempDir::new().unwrap();
         let mock = Arc::new(MockHyperliquid::new().with_empty_data());
         let ingester = CandleIngester::new(mock, 10);
 
-        ingester
+        let error = ingester
             .ingest_with_markets(Timeframe::OneHour, data_dir.path(), &btc_markets())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            HyperliquidError::EmptyFetch {
+                kind: "candle",
+                markets: 1
+            }
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn candle_ingester_reports_unchanged_when_universe_is_empty() {
+        let data_dir = TempDir::new().unwrap();
+        let mock = Arc::new(MockHyperliquid::new().with_empty_data());
+        let ingester = CandleIngester::new(mock, 10);
+
+        let outcome = ingester
+            .ingest_with_markets(Timeframe::OneHour, data_dir.path(), &[])
             .await
             .unwrap();
 
-        assert!(logs_contain_at(Level::INFO, &["no new candles"]));
+        assert_eq!(outcome, IngestBatchOutcome::Unchanged);
+        assert!(logs_contain_at(
+            Level::INFO,
+            &["no markets to ingest; candle dataset unchanged"]
+        ));
     }
 
     #[traced_test]
@@ -712,17 +774,42 @@ mod tests {
 
     #[traced_test]
     #[tokio::test]
-    async fn funding_ingester_logs_when_no_new_rates() {
+    async fn funding_ingester_rejects_empty_fetch_for_non_empty_universe() {
         let data_dir = TempDir::new().unwrap();
         let mock = Arc::new(MockHyperliquid::new().with_empty_data());
         let ingester = FundingRateIngester::new(mock, 10);
 
-        ingester
+        let error = ingester
             .ingest_with_markets(data_dir.path(), &btc_markets())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            HyperliquidError::EmptyFetch {
+                kind: "funding",
+                markets: 1
+            }
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn funding_ingester_reports_unchanged_when_universe_is_empty() {
+        let data_dir = TempDir::new().unwrap();
+        let mock = Arc::new(MockHyperliquid::new().with_empty_data());
+        let ingester = FundingRateIngester::new(mock, 10);
+
+        let outcome = ingester
+            .ingest_with_markets(data_dir.path(), &[])
             .await
             .unwrap();
 
-        assert!(logs_contain_at(Level::INFO, &["no new funding rates"]));
+        assert_eq!(outcome, IngestBatchOutcome::Unchanged);
+        assert!(logs_contain_at(
+            Level::INFO,
+            &["no markets to ingest; funding dataset unchanged"]
+        ));
     }
 
     #[tokio::test]
@@ -874,6 +961,97 @@ mod tests {
         assert!(
             timestamp.contains('T') && timestamp.contains('Z'),
             "timestamp should be ISO 8601 format like '2024-01-01T00:00:00.000Z', got: {timestamp}"
+        );
+    }
+
+    /// Hyperliquid's info `coin` field is case-sensitive for both candle and
+    /// funding history requests. Record the outbound bodies so a regression that
+    /// uppercases exchange-native names (e.g. `kPEPE` -> `KPEPE`) fails here
+    /// instead of silently dropping those markets at ingest time.
+    ///
+    /// Contract references:
+    /// - [candleSnapshot](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#candle-snapshot)
+    /// - [fundingHistory](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals#retrieve-historical-funding-rates)
+    #[tokio::test]
+    async fn candle_and_funding_requests_preserve_exchange_native_coin_casing() {
+        use serde_json::json;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let base_url = url::Url::parse(&server.uri()).unwrap();
+        let client = HyperliquidClient::new(Some(&base_url), 0).await.unwrap();
+        let market = Market::new("kPEPE".to_string());
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+
+        Mock::given(method("POST"))
+            .and(path("/info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                "t": 1_700_000_000_000_u64,
+                "T": 1_700_003_600_000_u64,
+                "s": "kPEPE",
+                "i": "1h",
+                "o": "0.001",
+                "c": "0.002",
+                "h": "0.003",
+                "l": "0.0009",
+                "v": "1000.0",
+                "n": 10
+            }])))
+            .mount(&server)
+            .await;
+        client
+            .fetch_candles(&market, Timeframe::OneHour, start)
+            .await
+            .unwrap();
+        let candle_bodies: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+            .collect();
+        assert!(
+            candle_bodies
+                .iter()
+                .any(|body| body.contains("candleSnapshot") && body.contains("kPEPE")),
+            "candleSnapshot must send exchange-native coin casing: {candle_bodies:?}"
+        );
+        assert!(
+            candle_bodies.iter().all(|body| !body.contains("\"KPEPE\"")),
+            "candleSnapshot must not uppercase the coin: {candle_bodies:?}"
+        );
+
+        server.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                "coin": "kPEPE",
+                "fundingRate": "0.0001",
+                "premium": "0.00005",
+                "time": 1_700_000_000_000_u64
+            }])))
+            .mount(&server)
+            .await;
+        client.fetch_funding_rates(&market, start).await.unwrap();
+        let funding_bodies: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+            .collect();
+        assert!(
+            funding_bodies
+                .iter()
+                .any(|body| body.contains("fundingHistory") && body.contains("kPEPE")),
+            "fundingHistory must send exchange-native coin casing: {funding_bodies:?}"
+        );
+        assert!(
+            funding_bodies
+                .iter()
+                .all(|body| !body.contains("\"KPEPE\"")),
+            "fundingHistory must not uppercase the coin: {funding_bodies:?}"
         );
     }
 }

@@ -18,7 +18,10 @@ import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
 import { prefetchEvmAppKit } from "@/reown/evmAppKit"
-import { copyWalletAddressToClipboard } from "@/services/wallet"
+import {
+  WalletOperationContextChanged,
+  copyWalletAddressToClipboard,
+} from "@/services/wallet"
 import { toast } from "solid-sonner"
 
 const formatPublicKey = (key: string): string => {
@@ -52,11 +55,14 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     isConnected,
     hasStoredSession,
     mainAddress,
+    hyperliquidClientLoad,
+    retryHyperliquidClientLoad,
   } = useWallet()
   const [menuOpen, setMenuOpen] = createSignal(false)
-  const [isRevokingAgent, setIsRevokingAgent] = createSignal(false)
   const [isDisconnecting, setIsDisconnecting] = createSignal(false)
+  const [isRevokingAgent, setIsRevokingAgent] = createSignal(false)
   const [showCopied, setShowCopied] = createSignal(false)
+  let networkSwitchRevision = 0
   let copiedTimeoutId: ReturnType<typeof setTimeout> | undefined
 
   onCleanup(() => {
@@ -65,40 +71,76 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     }
   })
 
-  const handleTestnetToggle = async (checked: boolean) => {
+  const handleTestnetToggle = (checked: boolean) => {
     if (!isConnected()) {
       toast.error("Please connect wallet first")
       return
     }
 
-    if (switchNetworkMutation.isPending || isNetworkSwitching()) {
+    if (
+      switchNetworkMutation.isPending ||
+      isNetworkSwitching() ||
+      isDisconnecting() ||
+      isRevokingAgent()
+    ) {
       return
     }
 
+    const accountAddress = mainAddress()?.toLowerCase() ?? null
+    const operationRevision = ++networkSwitchRevision
     setIsNetworkSwitching(true)
-
-    try {
-      await switchNetworkMutation.mutateAsync(checked ? "testnet" : "mainnet")
-      props.handleNetworkSwitch?.()
-    } catch (error) {
-      console.error("Failed to toggle testnet/mainnet:", error)
-      toast.error("Failed to toggle network. Please try again.")
-    } finally {
-      setIsNetworkSwitching(false)
-    }
+    void Effect.runPromise(
+      Effect.tryPromise({
+        try: () =>
+          switchNetworkMutation.mutateAsync(checked ? "testnet" : "mainnet"),
+        catch: cause => new WalletOperationContextChanged({ cause }),
+      }).pipe(
+        Effect.tap(() =>
+          // The completion intentionally validates current wallet signals.
+          // eslint-disable-next-line solid/reactivity
+          Effect.sync(() => {
+            const currentAddress = mainAddress()?.toLowerCase() ?? null
+            if (
+              operationRevision === networkSwitchRevision &&
+              currentAddress === accountAddress &&
+              isConnected()
+            ) {
+              props.handleNetworkSwitch?.()
+            }
+          }),
+        ),
+        Effect.catchAll(error =>
+          Effect.sync(() => {
+            toast.error(getErrorMessage(error))
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            setIsNetworkSwitching(false)
+          }),
+        ),
+      ),
+    )
   }
 
   const onDisconnectClick = () => {
-    if (isDisconnecting() || isRevokingAgent()) {
+    if (
+      isDisconnecting() ||
+      isRevokingAgent() ||
+      switchNetworkMutation.isPending ||
+      isNetworkSwitching()
+    ) {
       return
     }
 
-    props.handleDisconnect?.()
     setIsDisconnecting(true)
     void Effect.runPromise(
       disconnect().pipe(
         Effect.tap(() =>
+          // This post-disconnect callback runs from the click handler's Effect.
+          // eslint-disable-next-line solid/reactivity
           Effect.sync(() => {
+            props.handleDisconnect?.()
             setMenuOpen(false)
             toast.success("Wallet disconnected")
           }),
@@ -149,11 +191,20 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     )
   }
 
+  const failedHyperliquidClientLoad = () => {
+    const load = hyperliquidClientLoad()
+    return load.state === "failed" ? load : null
+  }
+
   const currentAccountAddress = () =>
     walletSettings()?.accountAddress ?? mainAddress() ?? ""
   const currentIsTestnet = () => walletSettings()?.isTestnet ?? true
   const isDisabled = () =>
-    !isConnected() || switchNetworkMutation.isPending || isNetworkSwitching()
+    !isConnected() ||
+    switchNetworkMutation.isPending ||
+    isNetworkSwitching() ||
+    isDisconnecting() ||
+    isRevokingAgent()
   const canRevokeAgent = () =>
     isConnected() &&
     (hasStoredSession() || canTrade()) &&
@@ -189,6 +240,25 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     <div class="flex items-center gap-4">
       <Show when={isNetworkSwitching()}>
         <span class="text-[11px] text-muted-foreground">Switching...</span>
+      </Show>
+
+      <Show when={failedHyperliquidClientLoad()}>
+        {failedLoad => (
+          <div class="flex items-center gap-2" role="alert">
+            <span class="text-[11px] text-rose-500">
+              {getErrorMessage(failedLoad().error)}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              class="h-6 px-2 text-[11px]"
+              onClick={retryHyperliquidClientLoad}
+            >
+              Retry
+            </Button>
+          </div>
+        )}
       </Show>
 
       <Show
@@ -282,7 +352,12 @@ export const WalletHeader = (props: WalletHeaderProps) => {
                 variant="outline"
                 class="transition-opacity"
                 classList={{ "opacity-50": isDisconnecting() }}
-                disabled={isDisconnecting() || isRevokingAgent()}
+                disabled={
+                  isDisconnecting() ||
+                  isRevokingAgent() ||
+                  switchNetworkMutation.isPending ||
+                  isNetworkSwitching()
+                }
                 onPointerEnter={() => {
                   prefetchEvmAppKit()
                 }}

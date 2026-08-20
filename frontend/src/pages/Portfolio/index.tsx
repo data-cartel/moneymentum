@@ -13,7 +13,10 @@ import { WalletHeader } from "@/components/wallet-header"
 import { WalletProvider } from "@/contexts/WalletProvider"
 import { cn } from "@/lib/cn"
 import { useDockviewPanelProviders } from "@/lib/dockviewPanelProviders"
-import { bindDockviewSolidOwner } from "@/lib/dockviewSolidOwner"
+import {
+  bindDockviewSolidOwner,
+  releaseDockviewSolidOwner,
+} from "@/lib/dockviewSolidOwner"
 import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import {
@@ -37,12 +40,7 @@ import { FactorsPanel } from "./components/FactorsPanel"
 import { PerformancePanel } from "./components/PerformancePanel"
 import { PortfolioSettingsMenu } from "./components/PortfolioSettingsMenu"
 import { PositionsPanel } from "./components/PositionsPanel/PositionsPanel"
-import {
-  readPortfolioMetricVisibility,
-  writePortfolioMetricVisibility,
-  type PortfolioMetricColumnId,
-  type PortfolioMetricVisibility,
-} from "./components/PositionsPanel/portfolioMetricVisibility"
+import { usePortfolioMetricVisibility } from "./components/PositionsPanel/portfolioMetricVisibility"
 import { RiskPanel } from "./components/RiskPanel"
 import {
   StagedChangesPanel,
@@ -56,8 +54,10 @@ import {
   writePreciseToggle,
 } from "./hooks/usePortfolioState"
 import {
-  readPortfolioDockviewLayout,
+  persistPortfolioDockviewLayout,
+  restorePortfolioDockviewLayout,
   writePortfolioDockviewLayout,
+  type PortfolioLayoutHost,
 } from "./portfolioLayoutStorage"
 import {
   PANEL_DIGIT_BY_ID,
@@ -180,7 +180,9 @@ const useDockviewPanelTitle = (props: IDockviewPanelHeaderProps) => {
   // subscription and dispose the listener on cleanup.
   createEffect(() => {
     const api = props.api
-    setTitle(api.title)
+    if (api.title !== undefined) {
+      setTitle(api.title)
+    }
     const disposable = api.onDidTitleChange(event => {
       setTitle(event.title)
     })
@@ -333,20 +335,36 @@ const AddPanelMenu = (props: IDockviewHeaderActionsProps) => {
 }
 
 const PortfolioPage = () => {
+  const portfolioOwnerToken = bindDockviewSolidOwner(getOwner())
+  onCleanup(() => {
+    releaseDockviewSolidOwner(portfolioOwnerToken)
+  })
+
   const { isNetworkSwitching } = useNetwork()
   const { hasStoredSession, isLocked, canTrade, isConnected } = useWallet()
   const DockviewProviders = useDockviewPanelProviders()
   const portfolio = usePortfolioState()
 
   const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
-  const [metricVisibility, setMetricVisibility] =
-    createSignal<PortfolioMetricVisibility>(readPortfolioMetricVisibility())
+  const { metricVisibility, setMetricColumnVisible } =
+    usePortfolioMetricVisibility()
 
-  let dockviewApi: DockviewApi | undefined
   let dockviewContainer: HTMLDivElement | undefined
   let layoutChangeDisposable: { dispose: () => void } | undefined
+  let pendingLayoutFrame: number | undefined
+  let pendingLayoutSnapshot: ReturnType<DockviewApi["toJSON"]> | undefined
+  let defaultLayoutSizingTimeout: number | undefined
+  let defaultLayoutSizingCancelled = false
+  const [dockviewApi, setDockviewApi] = createSignal<DockviewApi | undefined>()
   const [containerWidth, setContainerWidth] = createSignal(0)
   const [containerHeight, setContainerHeight] = createSignal(0)
+  const [defaultLayoutSizing, setDefaultLayoutSizing] = createSignal<{
+    api: DockviewApi
+    portfolioPanel: ReturnType<DockviewApi["addPanel"]>
+    performancePanel: ReturnType<DockviewApi["addPanel"]>
+    stagedPanel: ReturnType<DockviewApi["addPanel"]>
+    factorsPanel: ReturnType<DockviewApi["addPanel"]>
+  } | null>(null)
 
   const stagedConnectionState = (): StagedConnectionState => {
     if (!isConnected()) {
@@ -397,11 +415,6 @@ const PortfolioPage = () => {
     writeManualWeightEntry(portfolio.isManualWeightEntry)
   })
 
-  // createEffect: persist metric visibility when gear toggles change
-  createEffect(() => {
-    writePortfolioMetricVisibility(metricVisibility())
-  })
-
   const betaResult = useBeta(
     () => portfolio.targetPortfolio,
     () => portfolio.targetTotalNotional,
@@ -418,20 +431,10 @@ const PortfolioPage = () => {
     () => Object.keys(portfolio.targetPortfolio).length,
   )
 
-  const setMetricColumnVisible = (
-    columnId: PortfolioMetricColumnId,
-    visible: boolean,
-  ) => {
-    setMetricVisibility(previous => ({
-      ...previous,
-      [columnId]: visible,
-    }))
-  }
-
   // createEffect: keep PORTFOLIO tab title count in sync
   createEffect(() => {
     const count = targetPositionCount()
-    dockviewApi?.getPanel("portfolio")?.api.setTitle(`PORTFOLIO (${count})`)
+    dockviewApi()?.getPanel("portfolio")?.api.setTitle(`PORTFOLIO (${count})`)
   })
 
   onMount(() => {
@@ -629,107 +632,192 @@ const PortfolioPage = () => {
   }
 
   const applyDefaultLayout = (api: DockviewApi) => {
-    const layoutWidth = containerWidth()
-    const layoutHeight = containerHeight()
+    const portfolioConfig = findPanelCatalogEntry("portfolio")
+    const allSymbolsConfig = findPanelCatalogEntry("allSymbols")
+    const performanceConfig = findPanelCatalogEntry("performance")
+    const stagedConfig = findPanelCatalogEntry("staged")
+    const factorsConfig = findPanelCatalogEntry("factors")
+    const riskConfig = findPanelCatalogEntry("risk")
+
+    if (
+      portfolioConfig === undefined ||
+      allSymbolsConfig === undefined ||
+      performanceConfig === undefined ||
+      stagedConfig === undefined ||
+      factorsConfig === undefined ||
+      riskConfig === undefined
+    ) {
+      return
+    }
 
     const portfolioPanel = api.addPanel({
-      id: "portfolio",
-      component: "portfolio",
-      tabComponent: "portfolioTab",
+      id: portfolioConfig.id,
+      component: portfolioConfig.component,
+      tabComponent: portfolioConfig.tabComponent,
       title: `PORTFOLIO (${targetPositionCount()})`,
     })
 
     api.addPanel({
-      id: "allSymbols",
-      component: "allSymbols",
-      tabComponent: "allSymbolsTab",
-      title: "ALL SYMBOLS",
-      position: { referencePanel: "portfolio", direction: "within" },
+      id: allSymbolsConfig.id,
+      component: allSymbolsConfig.component,
+      tabComponent: allSymbolsConfig.tabComponent,
+      title: allSymbolsConfig.title,
+      position: { referencePanel: portfolioConfig.id, direction: "within" },
     })
 
     const performancePanel = api.addPanel({
-      id: "performance",
-      component: "performance",
-      tabComponent: "closableTab",
-      title: "PERFORMANCE",
-      position: { referencePanel: "portfolio", direction: "right" },
+      id: performanceConfig.id,
+      component: performanceConfig.component,
+      tabComponent: performanceConfig.tabComponent,
+      title: performanceConfig.title,
+      position: { referencePanel: portfolioConfig.id, direction: "right" },
     })
 
     const stagedPanel = api.addPanel({
-      id: "staged",
-      component: "staged",
-      tabComponent: "stagedTab",
-      title: "STAGED CHANGES",
-      position: { referencePanel: "performance", direction: "below" },
+      id: stagedConfig.id,
+      component: stagedConfig.component,
+      tabComponent: stagedConfig.tabComponent,
+      title: stagedConfig.title,
+      position: { referencePanel: performanceConfig.id, direction: "below" },
     })
 
     const factorsPanel = api.addPanel({
-      id: "factors",
-      component: "factors",
-      tabComponent: "closableTab",
-      title: "FACTORS",
-      position: { referencePanel: "staged", direction: "right" },
+      id: factorsConfig.id,
+      component: factorsConfig.component,
+      tabComponent: factorsConfig.tabComponent,
+      title: factorsConfig.title,
+      position: { referencePanel: stagedConfig.id, direction: "right" },
     })
 
     api.addPanel({
-      id: "risk",
-      component: "risk",
-      tabComponent: "closableTab",
-      title: "RISK",
-      position: { referencePanel: "factors", direction: "right" },
+      id: riskConfig.id,
+      component: riskConfig.component,
+      tabComponent: riskConfig.tabComponent,
+      title: riskConfig.title,
+      position: { referencePanel: factorsConfig.id, direction: "right" },
     })
 
+    setDefaultLayoutSizing({
+      api,
+      portfolioPanel,
+      performancePanel,
+      stagedPanel,
+      factorsPanel,
+    })
+  }
+
+  // createEffect: retry default panel sizing until the dockview host is large
+  // enough; cancel any pending timeout when the pending target changes.
+  createEffect(() => {
+    const pending = defaultLayoutSizing()
+    if (pending === null) {
+      return
+    }
+
+    const layoutWidth = containerWidth()
+    const layoutHeight = containerHeight()
     if (layoutWidth < 100 || layoutHeight < 100) {
       return
     }
 
-    window.setTimeout(() => {
+    if (defaultLayoutSizingTimeout !== undefined) {
+      window.clearTimeout(defaultLayoutSizingTimeout)
+      defaultLayoutSizingTimeout = undefined
+    }
+
+    const activeApi = dockviewApi()
+    // setTimeout: wait one macrotask so Dockview finishes inserting panels
+    // before setSize.
+    defaultLayoutSizingTimeout = window.setTimeout(() => {
+      defaultLayoutSizingTimeout = undefined
+      if (defaultLayoutSizingCancelled) {
+        return
+      }
+      if (activeApi !== pending.api) {
+        setDefaultLayoutSizing(null)
+        return
+      }
+
       const leftWidth = Math.floor(layoutWidth * 0.48)
       const rightWidth = Math.max(layoutWidth - leftWidth, 1)
       const topHeight = Math.floor(layoutHeight * 0.45)
       const bottomHeight = Math.max(layoutHeight - topHeight, 1)
 
-      portfolioPanel.group.api.setSize({ width: leftWidth })
-      performancePanel.group.api.setSize({ width: rightWidth })
-      performancePanel.api.setSize({ height: topHeight })
-      stagedPanel.group.api.setSize({
+      pending.portfolioPanel.group.api.setSize({ width: leftWidth })
+      pending.performancePanel.group.api.setSize({ width: rightWidth })
+      pending.performancePanel.api.setSize({ height: topHeight })
+      pending.stagedPanel.group.api.setSize({
         width: Math.floor(rightWidth * 0.4),
         height: bottomHeight,
       })
-      factorsPanel.group.api.setSize({
+      pending.factorsPanel.group.api.setSize({
         width: Math.floor(rightWidth * 0.25),
       })
+      setDefaultLayoutSizing(null)
     }, 0)
-  }
+
+    onCleanup(() => {
+      if (defaultLayoutSizingTimeout !== undefined) {
+        window.clearTimeout(defaultLayoutSizingTimeout)
+        defaultLayoutSizingTimeout = undefined
+      }
+    })
+  })
 
   const handleReady = (event: DockviewReadyEvent) => {
-    dockviewApi = event.api
+    setDockviewApi(event.api)
 
-    const hasRequiredPanels = (): boolean =>
-      (["portfolio", "allSymbols", "staged"] as const).every(
-        panelId => event.api.getPanel(panelId) !== undefined,
-      )
-
-    const savedLayout = readPortfolioDockviewLayout()
-    if (savedLayout !== null) {
-      try {
-        event.api.fromJSON(savedLayout)
-        if (!hasRequiredPanels()) {
-          event.api.clear()
-          applyDefaultLayout(event.api)
-        }
-      } catch {
+    const layoutHost: PortfolioLayoutHost = {
+      fromJSON: layout => {
+        event.api.fromJSON(layout)
+      },
+      clear: () => {
         event.api.clear()
-        applyDefaultLayout(event.api)
-      }
-    } else {
+      },
+      toJSON: () => event.api.toJSON(),
+      hasPanel: panelId => event.api.getPanel(panelId) !== undefined,
+    }
+
+    if (
+      restorePortfolioDockviewLayout(layoutHost) === "requires-default-layout"
+    ) {
       applyDefaultLayout(event.api)
+      persistPortfolioDockviewLayout(layoutHost)
+    }
+
+    const flushPendingLayoutWrite = () => {
+      if (pendingLayoutFrame !== undefined) {
+        window.cancelAnimationFrame(pendingLayoutFrame)
+        pendingLayoutFrame = undefined
+      }
+      if (pendingLayoutSnapshot === undefined) {
+        return
+      }
+      const layout = pendingLayoutSnapshot
+      pendingLayoutSnapshot = undefined
+      try {
+        writePortfolioDockviewLayout(layout)
+      } catch {
+        // QuotaExceededError / SecurityError: keep trading; drop persistence.
+      }
     }
 
     const layoutChange = event.api.onDidLayoutChange(() => {
-      writePortfolioDockviewLayout(event.api.toJSON())
+      pendingLayoutSnapshot = event.api.toJSON()
+      if (pendingLayoutFrame !== undefined) {
+        return
+      }
+      pendingLayoutFrame = window.requestAnimationFrame(() => {
+        pendingLayoutFrame = undefined
+        flushPendingLayoutWrite()
+      })
     })
-    layoutChangeDisposable = layoutChange
+    layoutChangeDisposable = {
+      dispose: () => {
+        flushPendingLayoutWrite()
+        layoutChange.dispose()
+      },
+    }
 
     const activeChange = event.api.onDidActivePanelChange(panel => {
       const panelId = panel?.id
@@ -745,13 +833,18 @@ const PortfolioPage = () => {
   }
 
   onCleanup(() => {
+    defaultLayoutSizingCancelled = true
+    if (defaultLayoutSizingTimeout !== undefined) {
+      window.clearTimeout(defaultLayoutSizingTimeout)
+      defaultLayoutSizingTimeout = undefined
+    }
     layoutChangeDisposable?.dispose()
     activePanelChangeDisposable?.dispose()
   })
 
   const keyboardActions = (): PortfolioKeyboardActions => ({
     activatePanel: (panelId: KeyboardPanelId) => {
-      dockviewApi?.getPanel(panelId)?.api.setActive()
+      dockviewApi()?.getPanel(panelId)?.api.setActive()
     },
     getPortfolioSymbols: () =>
       Object.keys({

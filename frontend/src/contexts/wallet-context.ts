@@ -2,12 +2,19 @@ import { createContext, type Accessor } from "solid-js"
 import type * as Effect from "effect/Effect"
 import type { HyperliquidClient } from "@/services/hyperliquid-client"
 import type {
+  HyperliquidClientLoadFailed,
   WalletConnectError,
-  WalletDisconnectFailed,
+  WalletDisconnectFailure,
   WalletUnlockFailure,
 } from "@/services/wallet"
 
 export type NetworkMode = "testnet" | "mainnet"
+
+/** Load state of the lazily imported module that constructs Hyperliquid clients. */
+export type HyperliquidClientLoad =
+  | { readonly state: "loading" }
+  | { readonly state: "ready" }
+  | { readonly state: "failed"; readonly error: HyperliquidClientLoadFailed }
 
 export interface WalletCredentials {
   accountAddress: string // Main wallet where positions/funds are
@@ -26,9 +33,16 @@ export interface WalletContextType {
   isLocked: Accessor<boolean>
   /** True when an encrypted Hyperliquid agent session is stored. */
   hasStoredSession: Accessor<boolean>
-  /** True when the agent private key is unlocked in memory (can submit trades). */
+  /**
+   * True when the agent private key is unlocked in memory and the lazily loaded
+   * Hyperliquid client is available (can submit trades).
+   */
   canTrade: Accessor<boolean>
   client: Accessor<HyperliquidClient | null>
+  /** Load state of the lazy Hyperliquid client module; trading needs "ready". */
+  hyperliquidClientLoad: Accessor<HyperliquidClientLoad>
+  /** Restart the lazy Hyperliquid client module load after a failure. */
+  retryHyperliquidClientLoad: () => void
   /** Persist agent credentials encrypted with the local PIN (legacy + agent flows). */
   connect: (
     credentials: WalletCredentials,
@@ -45,7 +59,7 @@ export interface WalletContextType {
    */
   revokeAgent: () => Effect.Effect<void, WalletConnectError>
   unlock: (pin: string) => Effect.Effect<void, WalletUnlockFailure>
-  disconnect: () => Effect.Effect<void, WalletDisconnectFailed>
+  disconnect: () => Effect.Effect<void, WalletDisconnectFailure>
   setNetworkMode: (mode: NetworkMode) => void
   /** Sync the Reown-connected main address into wallet state (read-only). */
   setMainAddress: (address: string | null) => void
