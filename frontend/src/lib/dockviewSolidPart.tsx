@@ -64,14 +64,15 @@ export class SolidPart<P extends object = object, C extends object = object> {
       const [version, setVersion] = createSignal(0)
       this.triggerUpdate = setVersion
 
+      // Comp must be instantiated as a child of the provider: calling it here
+      // would run its synchronous context reads before the provider exists.
       const ComponentWithContext = () => {
         version()
         const plainProps = { ...baseParams, ...overridesRef } as P
-        const panelContent = Comp(plainProps)
 
         return (
           <SolidPartContext.Provider value={ctx ?? {}}>
-            {panelContent}
+            <Comp {...plainProps} />
           </SolidPartContext.Provider>
         )
       }
