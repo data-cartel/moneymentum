@@ -215,7 +215,7 @@ impl EventSourced for IngestionRun {
 /// reads (the "is anything running?" check and the recovery sweep).
 pub(crate) const RUN_STATUS: Column = Column("status");
 
-pub(super) async fn complete_run(
+pub(crate) async fn complete_run(
     store: &Store<IngestionRun>,
     run_id: &IngestionRunId,
     last_record_at: DateTime<Utc>,

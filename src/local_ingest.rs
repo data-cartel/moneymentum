@@ -20,8 +20,9 @@ use tracing_subscriber::EnvFilter;
 use crate::Config;
 use crate::hyperliquid::HyperliquidClients;
 use crate::ingestion::{
-    IngestionJobContext, IngestionOwnerLease, IngestionRun, IngestionRunId, IngestionRunStatus,
-    IngestionServices, OwnerLeaseError, create_runs_for_active_units, recover_abandoned_runs,
+    ActiveUnitsEnqueue, IngestionJobContext, IngestionOwnerLease, IngestionRun, IngestionRunId,
+    IngestionRunStatus, IngestionServices, OwnerLeaseError, create_runs_for_active_units,
+    recover_abandoned_runs,
 };
 use crate::market_catalog::MarketCatalog;
 use crate::market_enablement::MarketEnablement;
@@ -250,6 +251,11 @@ async fn wait_for_local_ingest_completion(
             .map_err(local_ingest_err)?;
         let status = run.as_ref().map(|loaded| loaded.status);
         if status != Some(IngestionRunStatus::Completed) {
+            warn!(
+                run_id = %run_id,
+                status = ?status,
+                "local ingestion run did not complete successfully"
+            );
             return Err(LocalIngestError::RunNotCompleted {
                 run_id: run_id.clone(),
                 status,
@@ -260,16 +266,25 @@ async fn wait_for_local_ingest_completion(
     Ok(())
 }
 
-async fn run_local_ingest_inner(config: Config) -> Result<(), LocalIngestError> {
-    let mut runtime = bootstrap_local_ingest(&config).await?;
-
-    let outcome =
-        create_runs_for_active_units(&runtime.ingestion_store, &runtime.ingestion_projection).await;
-
+async fn finalize_enqueued_runs(
+    runtime: &mut LocalIngestRuntime,
+    outcome: ActiveUnitsEnqueue,
+    timeout: Duration,
+) -> Result<(), LocalIngestError> {
     if outcome.enqueued.is_empty() {
-        return Err(outcome
-            .error
-            .map_or_else(|| LocalIngestError::NothingEnqueued, local_ingest_err));
+        return match outcome.error {
+            Some(err) => {
+                warn!(
+                    error = %err,
+                    "local ingestion enqueue failed with no runs started"
+                );
+                Err(local_ingest_err(err))
+            }
+            None => {
+                warn!("no idle ingestion units available; every unit already has a running run");
+                Err(LocalIngestError::NothingEnqueued)
+            }
+        };
     }
 
     info!(
@@ -277,14 +292,14 @@ async fn run_local_ingest_inner(config: Config) -> Result<(), LocalIngestError> 
         "local ingestion runs enqueued; waiting for completion"
     );
 
-    wait_for_local_ingest_completion(
-        &mut runtime,
-        &outcome.enqueued,
-        LOCAL_INGEST_COMPLETION_TIMEOUT,
-    )
-    .await?;
+    wait_for_local_ingest_completion(runtime, &outcome.enqueued, timeout).await?;
 
     if let Some(err) = outcome.error {
+        warn!(
+            error = %err,
+            completed = outcome.enqueued.len(),
+            "local ingestion finished enqueued runs after a partial enqueue failure"
+        );
         return Err(local_ingest_err(err));
     }
 
@@ -293,4 +308,225 @@ async fn run_local_ingest_inner(config: Config) -> Result<(), LocalIngestError> 
         "local ingestion finished"
     );
     Ok(())
+}
+
+async fn run_local_ingest_inner(config: Config) -> Result<(), LocalIngestError> {
+    let mut runtime = bootstrap_local_ingest(&config).await?;
+
+    let outcome =
+        create_runs_for_active_units(&runtime.ingestion_store, &runtime.ingestion_projection).await;
+
+    finalize_enqueued_runs(&mut runtime, outcome, LOCAL_INGEST_COMPLETION_TIMEOUT).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tracing::Level;
+    use tracing_test::traced_test;
+
+    use super::{
+        LocalIngestError, LocalIngestRuntime, finalize_enqueued_runs,
+        wait_for_local_ingest_completion,
+    };
+    use crate::ingestion::fixtures::ingestion_store;
+    use crate::ingestion::{
+        ActiveUnitsEnqueue, IngestionError, IngestionOwnerLease, IngestionRunStatus, IngestionWork,
+        complete_run, create_run, create_runs_for_active_units, fail_run,
+    };
+    use crate::logs_contain_at;
+    use crate::timeframe::Timeframe;
+
+    async fn test_runtime() -> LocalIngestRuntime {
+        let data_dir = tempfile::TempDir::new().unwrap();
+        let database_url = format!(
+            "sqlite://{}?mode=rwc",
+            data_dir.path().join("lease.db").display()
+        );
+        let owner_lease = IngestionOwnerLease::try_acquire(&database_url)
+            .await
+            .unwrap();
+        let (ingestion_store, ingestion_projection, _pool) = ingestion_store().await;
+        // Keep the tempdir alive for the lease sidecar path for the test body.
+        std::mem::forget(data_dir);
+
+        LocalIngestRuntime {
+            _owner_lease: owner_lease,
+            ingestion_store,
+            ingestion_projection,
+            worker: tokio::spawn(std::future::pending()),
+        }
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn finalize_reports_nothing_enqueued_when_every_unit_is_busy() {
+        let mut runtime = test_runtime().await;
+        let first =
+            create_runs_for_active_units(&runtime.ingestion_store, &runtime.ingestion_projection)
+                .await;
+        assert!(!first.enqueued.is_empty());
+
+        let outcome =
+            create_runs_for_active_units(&runtime.ingestion_store, &runtime.ingestion_projection)
+                .await;
+        let error = finalize_enqueued_runs(&mut runtime, outcome, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, LocalIngestError::NothingEnqueued));
+        assert!(logs_contain_at(
+            Level::WARN,
+            &["no idle ingestion units available"]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn wait_rejects_a_failed_terminal_run() {
+        let mut runtime = test_runtime().await;
+        let run_id = create_run(
+            &runtime.ingestion_store,
+            &runtime.ingestion_projection,
+            IngestionWork::candles(Timeframe::OneHour),
+        )
+        .await
+        .unwrap();
+        fail_run(&runtime.ingestion_store, &run_id, "boom")
+            .await
+            .unwrap();
+
+        let error = wait_for_local_ingest_completion(
+            &mut runtime,
+            &[run_id.clone()],
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            LocalIngestError::RunNotCompleted {
+                status: Some(IngestionRunStatus::Failed),
+                ..
+            }
+        ));
+        let run_id = run_id.to_string();
+        assert!(logs_contain_at(
+            Level::WARN,
+            &[
+                "local ingestion run did not complete successfully",
+                run_id.as_str()
+            ]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn finalize_surfaces_partial_enqueue_after_started_runs_complete() {
+        let mut runtime = test_runtime().await;
+        let run_id = create_run(
+            &runtime.ingestion_store,
+            &runtime.ingestion_projection,
+            IngestionWork::candles(Timeframe::OneHour),
+        )
+        .await
+        .unwrap();
+        complete_run(&runtime.ingestion_store, &run_id, chrono::Utc::now())
+            .await
+            .unwrap();
+
+        let error = finalize_enqueued_runs(
+            &mut runtime,
+            ActiveUnitsEnqueue {
+                enqueued: vec![run_id],
+                error: Some(IngestionError::AlreadyRunning),
+            },
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, LocalIngestError::Bootstrap(_)));
+        assert!(logs_contain_at(
+            Level::WARN,
+            &["local ingestion finished enqueued runs after a partial enqueue failure"]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn wait_reports_worker_exit_while_runs_are_pending() {
+        let data_dir = tempfile::TempDir::new().unwrap();
+        let database_url = format!(
+            "sqlite://{}?mode=rwc",
+            data_dir.path().join("lease.db").display()
+        );
+        let owner_lease = IngestionOwnerLease::try_acquire(&database_url)
+            .await
+            .unwrap();
+        let (ingestion_store, ingestion_projection, _pool) = ingestion_store().await;
+        let run_id = create_run(
+            &ingestion_store,
+            &ingestion_projection,
+            IngestionWork::candles(Timeframe::OneHour),
+        )
+        .await
+        .unwrap();
+
+        let mut runtime = LocalIngestRuntime {
+            _owner_lease: owner_lease,
+            ingestion_store,
+            ingestion_projection,
+            worker: tokio::spawn(async {}),
+        };
+        std::mem::forget(data_dir);
+
+        let error = wait_for_local_ingest_completion(
+            &mut runtime,
+            &[run_id.clone()],
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, LocalIngestError::WorkerExited { .. }));
+        let run_id = run_id.to_string();
+        assert!(logs_contain_at(
+            Level::WARN,
+            &[
+                "ingestion worker exited before local ingest finished",
+                run_id.as_str()
+            ]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn wait_times_out_while_runs_remain_running() {
+        let mut runtime = test_runtime().await;
+        let run_id = create_run(
+            &runtime.ingestion_store,
+            &runtime.ingestion_projection,
+            IngestionWork::candles(Timeframe::OneHour),
+        )
+        .await
+        .unwrap();
+
+        let error = wait_for_local_ingest_completion(
+            &mut runtime,
+            &[run_id.clone()],
+            Duration::from_millis(50),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, LocalIngestError::TimedOut { .. }));
+        let run_id = run_id.to_string();
+        assert!(logs_contain_at(
+            Level::WARN,
+            &["local ingestion timed out", run_id.as_str()]
+        ));
+    }
 }

@@ -31,13 +31,17 @@ pub(crate) mod fixtures;
 
 pub(crate) use job::{IngestionJob, IngestionJobContext};
 pub(crate) use orchestration::{
-    create_runs_for_active_units, default_ingestion_schedules, latest_status,
+    ActiveUnitsEnqueue, create_runs_for_active_units, default_ingestion_schedules, latest_status,
     recover_abandoned_runs, trigger_scheduled_ingestion,
 };
+#[cfg(test)]
+pub(crate) use orchestration::{IngestionError, create_run};
 pub(crate) use owner_lease::IngestionOwnerLease;
 pub use owner_lease::OwnerLeaseError;
 pub(crate) use run::IngestionRun;
 pub use run::IngestionRunStatus;
+#[cfg(test)]
+pub(crate) use run::{complete_run, fail_run};
 pub use run_id::IngestionRunId;
 pub(crate) use services::IngestionServices;
 pub(crate) use work::IngestionWork;
