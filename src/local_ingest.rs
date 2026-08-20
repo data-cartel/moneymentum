@@ -287,7 +287,7 @@ async fn finalize_enqueued_runs(
         };
     }
 
-    info!(
+    debug!(
         enqueued = outcome.enqueued.len(),
         "local ingestion runs enqueued; waiting for completion"
     );
