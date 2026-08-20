@@ -13,7 +13,8 @@ use event_sorcery::{Projection, Store, StoreBuilder};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use thiserror::Error;
-use tracing::{debug, info};
+use tokio::task::JoinHandle;
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::Config;
@@ -26,6 +27,10 @@ use crate::market_catalog::MarketCatalog;
 use crate::market_enablement::MarketEnablement;
 use crate::{ensure_shared_database, spawn_ingestion_worker};
 
+/// Upper bound for waiting on enqueued local-ingest runs before reporting the
+/// unfinished set and exiting nonzero.
+const LOCAL_INGEST_COMPLETION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
 /// Why a local on-demand ingestion pass fails.
 #[derive(Debug, Error)]
 pub(crate) enum LocalIngestError {
@@ -36,6 +41,10 @@ pub(crate) enum LocalIngestError {
         run_id: IngestionRunId,
         status: Option<IngestionRunStatus>,
     },
+    #[error("ingestion worker exited before runs finished ({unfinished})")]
+    WorkerExited { unfinished: String },
+    #[error("timed out waiting for ingestion runs to finish ({unfinished})")]
+    TimedOut { unfinished: String },
     #[error(transparent)]
     OwnerLease(#[from] OwnerLeaseError),
     #[error(transparent)]
@@ -69,6 +78,7 @@ struct LocalIngestRuntime {
     _owner_lease: IngestionOwnerLease,
     ingestion_store: Arc<Store<IngestionRun>>,
     ingestion_projection: Arc<Projection<IngestionRun>>,
+    worker: JoinHandle<()>,
 }
 
 async fn bootstrap_local_ingest(config: &Config) -> Result<LocalIngestRuntime, LocalIngestError> {
@@ -142,7 +152,7 @@ async fn bootstrap_local_ingest(config: &Config) -> Result<LocalIngestRuntime, L
         market_catalog_projection: Arc::clone(&market_catalog_projection),
         market_enablement_projection: Arc::clone(&market_enablement_projection),
     };
-    spawn_ingestion_worker(
+    let worker = spawn_ingestion_worker(
         apalis_pool,
         Arc::new(IngestionJobContext {
             run_store: Arc::clone(&ingestion_store),
@@ -156,15 +166,37 @@ async fn bootstrap_local_ingest(config: &Config) -> Result<LocalIngestRuntime, L
         _owner_lease: owner_lease,
         ingestion_store,
         ingestion_projection,
+        worker,
     })
 }
 
-async fn wait_for_local_ingest_completion(
+async fn unfinished_run_summary(
     runtime: &LocalIngestRuntime,
     started_run_ids: &[IngestionRunId],
+) -> Result<String, LocalIngestError> {
+    let mut parts = Vec::with_capacity(started_run_ids.len());
+    for run_id in started_run_ids {
+        let status = runtime
+            .ingestion_store
+            .load(run_id)
+            .await
+            .map_err(local_ingest_err)?
+            .map(|loaded| loaded.status);
+        parts.push(format!("{run_id}={status:?}"));
+    }
+    Ok(parts.join(", "))
+}
+
+async fn wait_for_local_ingest_completion(
+    runtime: &mut LocalIngestRuntime,
+    started_run_ids: &[IngestionRunId],
+    timeout: Duration,
 ) -> Result<(), LocalIngestError> {
     // Poll only the runs this CLI enqueued. Unrelated Running rows (or busy
     // units that were never started here) must not keep the command waiting.
+    // Race the poll against worker exit and a hard deadline so a hung worker
+    // cannot leave the CLI blocked forever.
+    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let mut pending = false;
         for run_id in started_run_ids {
@@ -182,7 +214,33 @@ async fn wait_for_local_ingest_completion(
         if !pending {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            let unfinished = unfinished_run_summary(runtime, started_run_ids).await?;
+            warn!(unfinished = %unfinished, "local ingestion timed out");
+            return Err(LocalIngestError::TimedOut { unfinished });
+        }
+
+        let sleep_until = deadline.min(now + Duration::from_millis(250));
+        tokio::select! {
+            () = tokio::time::sleep_until(sleep_until) => {}
+            join_result = &mut runtime.worker => {
+                let unfinished = unfinished_run_summary(runtime, started_run_ids).await?;
+                match join_result {
+                    Ok(()) => warn!(
+                        unfinished = %unfinished,
+                        "ingestion worker exited before local ingest finished"
+                    ),
+                    Err(join_error) => warn!(
+                        error = %join_error,
+                        unfinished = %unfinished,
+                        "ingestion worker task failed before local ingest finished"
+                    ),
+                }
+                return Err(LocalIngestError::WorkerExited { unfinished });
+            }
+        }
     }
 
     for run_id in started_run_ids {
@@ -204,7 +262,7 @@ async fn wait_for_local_ingest_completion(
 }
 
 async fn run_local_ingest_inner(config: Config) -> Result<(), LocalIngestError> {
-    let runtime = bootstrap_local_ingest(&config).await?;
+    let mut runtime = bootstrap_local_ingest(&config).await?;
 
     let outcome =
         create_runs_for_active_units(&runtime.ingestion_store, &runtime.ingestion_projection).await;
@@ -220,7 +278,12 @@ async fn run_local_ingest_inner(config: Config) -> Result<(), LocalIngestError> 
         "local ingestion runs enqueued; waiting for completion"
     );
 
-    wait_for_local_ingest_completion(&runtime, &outcome.enqueued).await?;
+    wait_for_local_ingest_completion(
+        &mut runtime,
+        &outcome.enqueued,
+        LOCAL_INGEST_COMPLETION_TIMEOUT,
+    )
+    .await?;
 
     if let Some(err) = outcome.error {
         return Err(local_ingest_err(err));

@@ -742,10 +742,13 @@ fn classify_enablement_error(error: &SendError<MarketEnablement>, operation: &st
 /// library's shared retry/backoff/circuit-breaker policy: retries are exhausted
 /// before a terminal failure trips the breaker and stops the worker for a human
 /// to inspect.
+///
+/// Returns the task handle so callers that must not hang (the local ingest CLI)
+/// can detect an unexpected worker exit.
 pub(crate) fn spawn_ingestion_worker(
     apalis_pool: apalis_sqlite::SqlitePool,
     context: Arc<IngestionJobContext>,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let failure_notify = Arc::new(tokio::sync::Notify::new());
         let monitor = EventSorceryMonitor::new().register(move |worker_index| {
@@ -781,7 +784,7 @@ pub(crate) fn spawn_ingestion_worker(
         if let Err(err) = monitor.run().await {
             error!(error = %err, "ingestion monitor crashed");
         }
-    });
+    })
 }
 
 /// Spawns supervised apalis-cron workers -- one per built-in schedule -- so each
