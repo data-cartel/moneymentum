@@ -224,12 +224,12 @@ export const useRebalanceHyperliquidPositions = () => {
 }
 
 export const useWalletSettings = () => {
-  const { credentials, networkMode, isConnected } = useWallet()
+  const { credentials, mainAddress, networkMode, isConnected } = useWallet()
 
   const data = createMemo(() => {
     if (!isConnected()) return null
     return {
-      accountAddress: credentials()?.accountAddress ?? "",
+      accountAddress: credentials()?.accountAddress ?? mainAddress() ?? "",
       isTestnet: networkMode() === "testnet",
     }
   })

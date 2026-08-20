@@ -7,6 +7,7 @@ import { AppLayout, FullscreenLayout } from "./App"
 import { NetworkProvider } from "./contexts/NetworkContext"
 import { WalletProvider } from "./contexts/WalletProvider"
 import { ThemeProvider } from "./components/ui/theme-provider"
+import "./fonts.css"
 import "./index.css"
 
 const PortfolioPage = lazy(() => import("./pages/Portfolio"))
