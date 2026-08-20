@@ -30,7 +30,7 @@ use crate::{ensure_shared_database, spawn_ingestion_worker};
 
 /// Upper bound for waiting on enqueued local-ingest runs before reporting the
 /// unfinished set and exiting nonzero.
-const LOCAL_INGEST_COMPLETION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const LOCAL_INGEST_COMPLETION_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// Why a local on-demand ingestion pass fails.
 #[derive(Debug, Error)]
@@ -272,19 +272,19 @@ async fn finalize_enqueued_runs(
     timeout: Duration,
 ) -> Result<(), LocalIngestError> {
     if outcome.enqueued.is_empty() {
-        return match outcome.error {
-            Some(err) => {
+        return outcome.error.map_or_else(
+            || {
+                warn!("no idle ingestion units available; every unit already has a running run");
+                Err(LocalIngestError::NothingEnqueued)
+            },
+            |err| {
                 warn!(
                     error = %err,
                     "local ingestion enqueue failed with no runs started"
                 );
                 Err(local_ingest_err(err))
-            }
-            None => {
-                warn!("no idle ingestion units available; every unit already has a running run");
-                Err(LocalIngestError::NothingEnqueued)
-            }
-        };
+            },
+        );
     }
 
     debug!(
@@ -399,7 +399,7 @@ mod tests {
 
         let error = wait_for_local_ingest_completion(
             &mut runtime,
-            &[run_id.clone()],
+            std::slice::from_ref(&run_id),
             Duration::from_secs(1),
         )
         .await
@@ -485,7 +485,7 @@ mod tests {
 
         let error = wait_for_local_ingest_completion(
             &mut runtime,
-            &[run_id.clone()],
+            std::slice::from_ref(&run_id),
             Duration::from_secs(5),
         )
         .await
@@ -516,7 +516,7 @@ mod tests {
 
         let error = wait_for_local_ingest_completion(
             &mut runtime,
-            &[run_id.clone()],
+            std::slice::from_ref(&run_id),
             Duration::from_millis(50),
         )
         .await

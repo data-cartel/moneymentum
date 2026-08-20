@@ -78,10 +78,10 @@ fn sidecar_lock_url(database_url: &str) -> Result<String, OwnerLeaseError> {
         return Err(OwnerLeaseError::UnsupportedDatabaseUrl);
     }
     let lock_path = format!("{path}.ingestion-owner");
-    match query {
-        Some(query) => Ok(format!("sqlite://{lock_path}?{query}")),
-        None => Ok(format!("sqlite://{lock_path}")),
-    }
+    Ok(query.map_or_else(
+        || format!("sqlite://{lock_path}"),
+        |query| format!("sqlite://{lock_path}?{query}"),
+    ))
 }
 
 fn is_lock_held(error: &sqlx::Error) -> bool {
