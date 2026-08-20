@@ -92,8 +92,8 @@ pub(crate) fn default_ingestion_schedules()
 /// - wholly failed: `enqueued` is empty and `error` is `Some`
 #[derive(Debug)]
 pub(crate) struct ActiveUnitsEnqueue {
-    pub enqueued: Vec<IngestionRunId>,
-    pub error: Option<IngestionError>,
+    pub(crate) enqueued: Vec<IngestionRunId>,
+    pub(crate) error: Option<IngestionError>,
 }
 
 /// Opens a run for every active work unit that is idle.
