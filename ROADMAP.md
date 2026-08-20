@@ -175,6 +175,8 @@ the next user-facing priority; it runs in parallel to the Dev track above.
 - [ ] [Deploy the service binary, unit, and config atomically](https://github.com/dataclique/moneymentum/issues/422)
 - [x] [Address #377 review follow-ups](https://github.com/dataclique/moneymentum/issues/392)
       ([#393](https://github.com/dataclique/moneymentum/pull/393))
+- [x] [operator diagnostics persist raw runtime output that can contain secrets](https://github.com/dataclique/moneymentum/issues/474)
+      ([#476](https://github.com/dataclique/moneymentum/pull/476))
 
 ---
 
