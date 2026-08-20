@@ -132,8 +132,7 @@ export const PositionsPanelRow = (props: {
   const baseSymbol = () =>
     props.position().symbol.split("/")[0] ?? props.position().symbol
 
-  const leverageEditorSpan = () =>
-    leverageEditorColumnSpan(props.visibleMetricColumns)
+  const leverageEditorSpan = () => leverageEditorColumnSpan()
 
   const tableColumnCount = () =>
     positionTableColumnIds(props.visibleMetricColumns).length
