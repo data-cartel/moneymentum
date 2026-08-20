@@ -11,8 +11,6 @@ log_level = "debug"
 max_concurrent_requests = 3
 max_retries = 5
 
-markets_refresh_token = "local-markets-refresh-token"
-
 # Derive (Lyra) options integration.
 # Options chain routes mount on the main moneymentum HTTP port when present.
 # `port` is only used by the standalone `derive_cli` binary.

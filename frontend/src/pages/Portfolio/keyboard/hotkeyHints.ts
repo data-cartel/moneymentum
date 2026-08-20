@@ -14,21 +14,30 @@ export const PANEL_DIGIT_BY_ID: Record<KeyboardPanelId, string> = {
   staged: "4",
 }
 
+/** True when `panelId` is a keyboard-navigable portfolio panel. */
+export const isKeyboardPanelId = (
+  panelId: string,
+): panelId is KeyboardPanelId =>
+  panelId === "portfolio" ||
+  panelId === "hyperliquid" ||
+  panelId === "derive" ||
+  panelId === "staged"
+
+/** Digit badge for a panel id, or undefined when the panel has no binding. */
+export const panelDigitForId = (panelId: string): string | undefined => {
+  if (!isKeyboardPanelId(panelId)) {
+    return undefined
+  }
+  return PANEL_DIGIT_BY_ID[panelId]
+}
+
 export const panelIdForDigitKey = (
   key: string,
 ): KeyboardPanelId | undefined => {
-  switch (key) {
-    case "1":
-      return "portfolio"
-    case "2":
-      return "hyperliquid"
-    case "3":
-      return "derive"
-    case "4":
-      return "staged"
-    default:
-      return undefined
-  }
+  const entry = (
+    Object.entries(PANEL_DIGIT_BY_ID) as [KeyboardPanelId, string][]
+  ).find(([, digit]) => digit === key)
+  return entry?.[0]
 }
 
 export const hotkeyHintsForPanel = (panelId: KeyboardPanelId): HotkeyHint[] => {

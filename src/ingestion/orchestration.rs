@@ -83,26 +83,58 @@ pub(crate) fn default_ingestion_schedules()
         .collect()
 }
 
+/// Outcome of opening runs across every active work unit in one pass.
+///
+/// `AlreadyRunning` never populates [`Self::error`]. Callers distinguish:
+/// - clean pass: `error` is `None` (possibly with an empty `enqueued` when every
+///   unit was already busy)
+/// - mixed success: `enqueued` is non-empty and `error` is `Some`
+/// - wholly failed: `enqueued` is empty and `error` is `Some`
+#[derive(Debug)]
+pub(crate) struct ActiveUnitsEnqueue {
+    pub(crate) enqueued: Vec<IngestionRunId>,
+    pub(crate) error: Option<IngestionError>,
+}
+
 /// Opens a run for every active work unit that is idle.
 ///
-/// Returns the run ids that were enqueued. `AlreadyRunning` for an individual
-/// unit is skipped so a partial busy set still starts the idle ones; only a
-/// genuine send/projection failure aborts the pass.
+/// Continues through the full active set after genuine send/projection failures
+/// so earlier successes are not discarded. `AlreadyRunning` for an individual
+/// unit is skipped. The first genuine failure is retained in
+/// [`ActiveUnitsEnqueue::error`] alongside any run ids that were enqueued.
 pub(crate) async fn create_runs_for_active_units(
     store: &Store<IngestionRun>,
     projection: &Projection<IngestionRun>,
-) -> Result<Vec<IngestionRunId>, IngestionError> {
+) -> ActiveUnitsEnqueue {
+    enqueue_active_units(|work| create_run(store, projection, work)).await
+}
+
+async fn enqueue_active_units<Create, CreateFuture>(mut create: Create) -> ActiveUnitsEnqueue
+where
+    Create: FnMut(IngestionWork) -> CreateFuture,
+    CreateFuture: std::future::Future<Output = Result<IngestionRunId, IngestionError>>,
+{
     let mut enqueued = Vec::new();
+    let mut error = None;
 
     for work in active_ingestion_units() {
-        match create_run(store, projection, work).await {
+        match create(work).await {
             Ok(run_id) => enqueued.push(run_id),
             Err(IngestionError::AlreadyRunning) => {}
-            Err(err) => return Err(err),
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    work = work.schedule_key(),
+                    "failed to enqueue ingestion run for active unit"
+                );
+                if error.is_none() {
+                    error = Some(err);
+                }
+            }
         }
     }
 
-    Ok(enqueued)
+    ActiveUnitsEnqueue { enqueued, error }
 }
 
 /// Opens a new ingestion run and enqueues its job atomically with the
@@ -205,9 +237,11 @@ pub(crate) async fn trigger_scheduled_ingestion(
     Ok(())
 }
 
-/// Abandons every still-running stream. Run unconditionally at startup, before
-/// before schedulers enqueue work, so a crash mid-run cannot leave the one-running slot
-/// permanently claimed (the regression that issue #339 fixed).
+/// Abandons every still-running stream. Call only after the caller holds an
+/// exclusive [`crate::ingestion::IngestionOwnerLease`] for this database, so a
+/// live server or CLI cannot keep writing after its schedule slots are released.
+/// Run before schedulers enqueue work, so a crash mid-run cannot leave the
+/// one-running slot permanently claimed (the regression that issue #339 fixed).
 pub(crate) async fn recover_abandoned_runs(
     store: &Store<IngestionRun>,
     projection: &Projection<IngestionRun>,
@@ -324,7 +358,7 @@ mod tests {
 
     use super::{
         IngestionError, active_ingestion_units, create_run, create_runs_for_active_units,
-        latest_status, recover_abandoned_runs, trigger_scheduled_ingestion,
+        enqueue_active_units, latest_status, recover_abandoned_runs, trigger_scheduled_ingestion,
     };
     use crate::ingestion::fixtures::{ingestion_store, instant};
     use crate::ingestion::run::{
@@ -614,11 +648,10 @@ mod tests {
     async fn create_runs_for_active_units_enqueues_every_idle_unit() {
         let (store, projection, _pool) = ingestion_store().await;
 
-        let enqueued = create_runs_for_active_units(&store, &projection)
-            .await
-            .unwrap();
+        let outcome = create_runs_for_active_units(&store, &projection).await;
 
-        assert_eq!(enqueued.len(), active_ingestion_units().len());
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.enqueued.len(), active_ingestion_units().len());
         assert_eq!(
             running_runs(&projection).await.unwrap().len(),
             active_ingestion_units().len()
@@ -635,11 +668,10 @@ mod tests {
 
         create_run(&store, &projection, first).await.unwrap();
 
-        let enqueued = create_runs_for_active_units(&store, &projection)
-            .await
-            .unwrap();
+        let outcome = create_runs_for_active_units(&store, &projection).await;
 
-        assert_eq!(enqueued.len(), units.len() - 1);
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.enqueued.len(), units.len() - 1);
         assert_eq!(running_runs(&projection).await.unwrap().len(), units.len());
         assert!(logs_contain_at(Level::DEBUG, &["ingestion run created"]));
     }
@@ -647,15 +679,59 @@ mod tests {
     #[tokio::test]
     async fn create_runs_for_active_units_reports_zero_when_every_unit_is_busy() {
         let (store, projection, _pool) = ingestion_store().await;
-        create_runs_for_active_units(&store, &projection)
-            .await
-            .unwrap();
+        let first_pass = create_runs_for_active_units(&store, &projection).await;
+        assert!(first_pass.error.is_none());
+        assert!(!first_pass.enqueued.is_empty());
 
-        let enqueued = create_runs_for_active_units(&store, &projection)
-            .await
-            .unwrap();
+        let outcome = create_runs_for_active_units(&store, &projection).await;
 
-        assert!(enqueued.is_empty());
+        assert!(outcome.error.is_none());
+        assert!(outcome.enqueued.is_empty());
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn create_runs_for_active_units_keeps_successes_when_a_later_unit_fails() {
+        let units = active_ingestion_units();
+        assert!(
+            units.len() >= 2,
+            "need at least two active units to cover mixed success"
+        );
+
+        let (store, projection, pool) = ingestion_store().await;
+        let call_index = Arc::new(AtomicU32::new(0));
+
+        let outcome = enqueue_active_units(|work| {
+            let store = Arc::clone(&store);
+            let projection = Arc::clone(&projection);
+            let pool = pool.clone();
+            let call_index = Arc::clone(&call_index);
+            async move {
+                let index = call_index.fetch_add(1, Ordering::Relaxed);
+                if index == 0 {
+                    let run_id = create_run(&store, &projection, work).await?;
+                    pool.close().await;
+                    Ok(run_id)
+                } else {
+                    create_run(&store, &projection, work).await
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(
+            outcome.enqueued.len(),
+            1,
+            "the successful enqueue before the failure must be retained"
+        );
+        assert!(
+            outcome.error.is_some(),
+            "a later genuine failure must be reported alongside retained run ids"
+        );
+        assert!(logs_contain_at(
+            Level::WARN,
+            &["failed to enqueue ingestion run for active unit"]
+        ));
     }
 
     #[traced_test]

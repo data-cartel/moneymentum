@@ -209,7 +209,7 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
 
   return (
     <div
-      class="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col outline-none"
+      class="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col outline-none focus-visible:ring-2 focus-visible:ring-primary"
       tabIndex={0}
       data-portfolio-panel="portfolio"
     >

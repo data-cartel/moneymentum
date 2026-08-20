@@ -1,3 +1,5 @@
+import { createEffect, createSignal, type Accessor } from "solid-js"
+
 export const PORTFOLIO_METRIC_COLUMNS_STORAGE_KEY =
   "portfolio-metric-columns-visibility"
 
@@ -52,19 +54,19 @@ export const isPortfolioMetricColumnId = (
 ): value is PortfolioMetricColumnId => portfolioMetricColumnIds.has(value)
 
 export const readPortfolioMetricVisibility = (): PortfolioMetricVisibility => {
-  if (
-    typeof localStorage === "undefined" ||
-    typeof localStorage.getItem !== "function"
-  ) {
-    return { ...DEFAULT_PORTFOLIO_METRIC_VISIBILITY }
-  }
-
-  const raw = localStorage.getItem(PORTFOLIO_METRIC_COLUMNS_STORAGE_KEY)
-  if (raw === null) {
-    return { ...DEFAULT_PORTFOLIO_METRIC_VISIBILITY }
-  }
-
   try {
+    if (
+      typeof localStorage === "undefined" ||
+      typeof localStorage.getItem !== "function"
+    ) {
+      return { ...DEFAULT_PORTFOLIO_METRIC_VISIBILITY }
+    }
+
+    const raw = localStorage.getItem(PORTFOLIO_METRIC_COLUMNS_STORAGE_KEY)
+    if (raw === null) {
+      return { ...DEFAULT_PORTFOLIO_METRIC_VISIBILITY }
+    }
+
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== "object" || parsed === null) {
       return { ...DEFAULT_PORTFOLIO_METRIC_VISIBILITY }
@@ -106,11 +108,41 @@ export const writePortfolioMetricVisibility = (
   }
 }
 
+/**
+ * Restores the persisted metric column visibility and keeps localStorage in
+ * sync with every gear-menu toggle for the lifetime of the owning component.
+ */
+export const usePortfolioMetricVisibility = (): {
+  metricVisibility: Accessor<PortfolioMetricVisibility>
+  setMetricColumnVisible: (
+    columnId: PortfolioMetricColumnId,
+    visible: boolean,
+  ) => void
+} => {
+  const [metricVisibility, setMetricVisibility] =
+    createSignal<PortfolioMetricVisibility>(readPortfolioMetricVisibility())
+
+  // createEffect: persist metric visibility when gear toggles change
+  createEffect(() => {
+    writePortfolioMetricVisibility(metricVisibility())
+  })
+
+  const setMetricColumnVisible = (
+    columnId: PortfolioMetricColumnId,
+    visible: boolean,
+  ) => {
+    setMetricVisibility(previous => ({
+      ...previous,
+      [columnId]: visible,
+    }))
+  }
+
+  return { metricVisibility, setMetricColumnVisible }
+}
+
 export const visiblePortfolioMetricColumns = (
   visibility: PortfolioMetricVisibility,
 ): PortfolioMetricColumnId[] =>
   PORTFOLIO_METRIC_COLUMN_ORDER.filter(columnId => visibility[columnId])
 
-export const leverageEditorColumnSpan = (
-  _visibleMetricColumns: PortfolioMetricColumnId[],
-): number => 3
+export const leverageEditorColumnSpan = (): number => 3

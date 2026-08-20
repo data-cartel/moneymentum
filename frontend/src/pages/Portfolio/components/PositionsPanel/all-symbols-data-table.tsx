@@ -210,12 +210,8 @@ export const AllSymbolsDataTable = (
   createEffect(() => {
     const symbols = rows().map(row => row.original.symbol)
     keyboard?.setAllSymbolOrder(symbols)
-    if (
-      keyboard?.focusedPanel() === "hyperliquid" &&
-      keyboard.selectedAllSymbolsIndex() === null &&
-      symbols.length > 0
-    ) {
-      keyboard.setSelectedAllSymbolsIndex(0)
+    if (keyboard?.focusedPanel() === "hyperliquid") {
+      keyboard.ensureAllSymbolsSelection()
     }
   })
 

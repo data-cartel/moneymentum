@@ -844,7 +844,7 @@ export class HyperliquidClient {
   }
 
   private hydrateMarketsFromBackend(
-    leverageLimits: LeverageLimit[],
+    leverageLimits: readonly LeverageLimit[],
     perpContexts: Map<string, PerpMarketContext>,
   ): void {
     const markets = leverageLimits.map(entry => {

@@ -1,6 +1,8 @@
 export {
   hotkeyHintsForPanel,
+  isKeyboardPanelId,
   PANEL_DIGIT_BY_ID,
+  panelDigitForId,
   panelIdForDigitKey,
 } from "./hotkeyHints"
 export type { HotkeyHint, KeyboardPanelId } from "./hotkeyHints"
@@ -24,6 +26,7 @@ export {
   focusPortfolioCell,
   focusStagedPin,
   focusDerivePin,
+  scheduleFocusStagedPin,
 } from "./portfolioCellFocus"
 export type { PortfolioCellKind } from "./portfolioCellFocus"
 export {

@@ -157,8 +157,7 @@ export const PositionsPanelRow = (props: {
 
   const positionVenue = () => props.position().venue
 
-  const leverageEditorSpan = () =>
-    leverageEditorColumnSpan(props.visibleMetricColumns)
+  const leverageEditorSpan = () => leverageEditorColumnSpan()
 
   const tableColumnCount = () =>
     positionTableColumnIds(props.visibleMetricColumns).length

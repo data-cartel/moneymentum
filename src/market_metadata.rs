@@ -120,9 +120,12 @@ pub(crate) enum RefreshError {
 /// tradable markets: every listed market the operator has not disabled.
 ///
 /// Returned [`Market`] values keep the exchange-native coin casing from the
-/// live fetch. Hyperliquid's candle and funding endpoints are case-sensitive
-/// (`kPEPE` succeeds; `KPEPE` returns HTTP 500), while [`Symbol`] uppercases
-/// for identity joins with operator disable decisions.
+/// live fetch. Hyperliquid's `candleSnapshot` and `fundingHistory` info
+/// endpoints take a `coin` string that must match the universe name exactly
+/// ([candle snapshot](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#candle-snapshot),
+/// [funding history](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals#retrieve-historical-funding-rates)):
+/// `kPEPE` succeeds while `KPEPE` fails. [`Symbol`] uppercases for identity
+/// joins with operator disable decisions.
 pub(crate) async fn refresh_markets(
     client: &dyn Hyperliquid,
     catalog: &Store<MarketCatalog>,

@@ -185,6 +185,20 @@ const messageForTag = (error: TaggedError): string | null => {
       return "Failed to copy address. Check clipboard permissions."
     case "WalletDisconnectFailed":
       return "Failed to disconnect wallet. Please try again."
+    case "WalletAuthorizationAccountChanged":
+      return "Wallet changed during agent authorization. Please try again."
+    case "WalletAuthorizationNetworkChanged":
+      return "Network changed during agent authorization. Please try again."
+    case "WalletAuthorizationContextChanged":
+      return "Wallet context changed during agent authorization. Please try again."
+    case "WalletConnectionContextChanged":
+      return "Wallet changed while credentials were connecting. Please try again."
+    case "WalletOperationContextChanged":
+      return "Wallet changed before the operation completed. Please try again."
+    case "WalletUnlockContextChanged":
+      return "Wallet changed while unlocking. Please try again."
+    case "WalletDisconnectContextChanged":
+      return "Wallet changed while disconnecting. Please try again."
     case "ReownWalletUnavailable":
       return "Connect a wallet with Reown first."
     case "ReownWalletRejected":
@@ -218,6 +232,8 @@ const messageForTag = (error: TaggedError): string | null => {
         ? `Derive rejected the request: ${message}`
         : "Derive rejected the request."
     }
+    case "HyperliquidClientLoadFailed":
+      return "Could not load Hyperliquid trading. Please try again."
     case "BitcoinAddressValidatorLoadFailed":
       return "Could not load Bitcoin address validation. Please try again."
     default:

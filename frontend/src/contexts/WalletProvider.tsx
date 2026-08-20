@@ -14,19 +14,28 @@ import {
   getStoredEncryptedSession,
   getStoredEncryptedDeriveSession,
   getStoredNetworkMode,
-  getStoredWalletAddresses,
   type EncryptedDeriveSession,
   type EncryptedWalletSession,
   type DeriveWalletCredentials,
+  type HyperliquidClientLoad,
   type NetworkMode,
   type WalletCredentials,
 } from "./wallet-context"
 import * as Effect from "effect/Effect"
 import * as Either from "effect/Either"
 import {
+  HyperliquidClientLoadFailed,
+  WalletAuthorizationAccountChanged,
+  WalletAuthorizationContextChanged,
+  WalletAuthorizationNetworkChanged,
   WalletConnectError,
+  WalletConnectionContextChanged,
+  WalletDisconnectContextChanged,
   WalletDisconnectFailed,
+  WalletOperationContextChanged,
   WalletSessionMissing,
+  WalletUnlockContextChanged,
+  type WalletDisconnectFailure,
   type WalletUnlockFailure,
 } from "@/services/wallet"
 import type { HyperliquidClient } from "@/services/hyperliquid-client"
@@ -102,13 +111,10 @@ const sameWalletAddress = (
   left: string | null | undefined,
   right: string | null | undefined,
 ): boolean => {
-  if (
-    left === null ||
-    left === undefined ||
-    right === null ||
-    right === undefined
-  ) {
-    return false
+  const leftMissing = left === null || left === undefined
+  const rightMissing = right === null || right === undefined
+  if (leftMissing || rightMissing) {
+    return leftMissing && rightMissing
   }
 
   return left.toLowerCase() === right.toLowerCase()
@@ -142,10 +148,18 @@ export const WalletProvider = (props: ParentProps) => {
   const [hasVerifiedSessionPin, setHasVerifiedSessionPin] = createSignal(false)
   const [HyperliquidClientClass, setHyperliquidClientClass] =
     createSignal<HyperliquidClientConstructor | null>(null)
+  const [hyperliquidClientLoad, setHyperliquidClientLoad] =
+    createSignal<HyperliquidClientLoad>({ state: "loading" })
+  let walletContextRevision = 0
+  let activeWalletOperation: symbol | null = null
 
   // Verified PIN for this SPA session only (never persisted). Cleared on full
   // disconnect / storage wipes for both venues.
   let sessionPin: string | null = null
+
+  const markWalletContextChanged = () => {
+    walletContextRevision += 1
+  }
 
   const rememberSessionPin = (pin: string) => {
     sessionPin = pin
@@ -192,7 +206,6 @@ export const WalletProvider = (props: ParentProps) => {
   const isDeriveLocked = createMemo(
     () => isDeriveConnected() && deriveCredentials() === null,
   )
-  const canTrade = createMemo(() => credentials() !== null)
 
   const client = createMemo((): HyperliquidClient | null => {
     const Client = HyperliquidClientClass()
@@ -213,7 +226,38 @@ export const WalletProvider = (props: ParentProps) => {
     return new Client({ accountAddress: address }, networkMode())
   })
 
+  // Unlocked credentials alone cannot place orders: the client module loads
+  // lazily, so trading only becomes possible once that client exists.
+  const canTrade = createMemo(() => credentials() !== null && client() !== null)
+
+  const loadHyperliquidClientModule = () => {
+    setHyperliquidClientLoad({ state: "loading" })
+    prefetchHyperliquidClientModule()
+    void ensureHyperliquidClientModule()
+      .then(clientModule => {
+        setHyperliquidClientClass(() => clientModule.HyperliquidClient)
+        setHyperliquidClientLoad({ state: "ready" })
+      })
+      .catch((cause: unknown) => {
+        setHyperliquidClientLoad({
+          state: "failed",
+          error: new HyperliquidClientLoadFailed({ cause }),
+        })
+      })
+  }
+
+  const retryHyperliquidClientLoad = () => {
+    if (hyperliquidClientLoad().state !== "failed") {
+      return
+    }
+    loadHyperliquidClientModule()
+  }
+
   const setMainAddress = (address: string | null) => {
+    if (!sameWalletAddress(mainAddress(), address)) {
+      markWalletContextChanged()
+    }
+
     // Reown account callbacks are not Solid tracked scopes; read unlocked
     // credentials without subscribing so mismatch invalidation still runs.
     const unlocked = untrack(() => credentials())
@@ -267,8 +311,10 @@ export const WalletProvider = (props: ParentProps) => {
   const connect = (
     newCredentials: WalletCredentials,
     pin: string,
-  ): Effect.Effect<void, WalletConnectError> =>
-    validatePinAgainstStoredSessions(pin).pipe(
+  ): Effect.Effect<void, WalletConnectError> => {
+    const contextRevision = walletContextRevision
+
+    return validatePinAgainstStoredSessions(pin).pipe(
       Effect.mapError(cause => new WalletConnectError({ cause })),
       Effect.flatMap(() =>
         Effect.tryPromise({
@@ -276,17 +322,27 @@ export const WalletProvider = (props: ParentProps) => {
           catch: cause => new WalletConnectError({ cause }),
         }),
       ),
-      Effect.tap(encrypted =>
-        Effect.sync(() => {
+      Effect.flatMap(encrypted => {
+        if (walletContextRevision !== contextRevision) {
+          return Effect.fail(
+            new WalletConnectError({
+              cause: new WalletConnectionContextChanged(),
+            }),
+          )
+        }
+
+        return Effect.sync(() => {
+          markWalletContextChanged()
           rememberSessionPin(pin)
           persistEncryptedSession(newCredentials, encrypted)
           setMainAddressState(newCredentials.accountAddress)
           setCredentials(newCredentials)
           syncStoredSessionState()
-        }),
-      ),
+        })
+      }),
       Effect.asVoid,
     )
+  }
 
   const connectDerive = (
     input: {
@@ -297,6 +353,7 @@ export const WalletProvider = (props: ParentProps) => {
     pin?: string,
   ): Effect.Effect<void, WalletConnectError> => {
     const mode = networkMode()
+    const contextRevision = walletContextRevision
 
     return Effect.gen(function* () {
       const resolvedPin = yield* resolvePin(pin)
@@ -318,6 +375,14 @@ export const WalletProvider = (props: ParentProps) => {
         catch: cause => new WalletConnectError({ cause }),
       })
 
+      if (walletContextRevision !== contextRevision) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletConnectionContextChanged(),
+          }),
+        )
+      }
+
       const existing = getStoredEncryptedDeriveSession()
       const subaccountId =
         input.subaccountId !== undefined
@@ -336,6 +401,7 @@ export const WalletProvider = (props: ParentProps) => {
         networkMode: mode,
       }
 
+      markWalletContextChanged()
       rememberSessionPin(resolvedPin)
       persistEncryptedDeriveSession(session)
       setDeriveCredentials(
@@ -346,31 +412,51 @@ export const WalletProvider = (props: ParentProps) => {
   }
 
   /**
-   * Generate agent + encrypt with PIN, then Reown-signed approveAgent.
-   * Persists the encrypted session only after approval succeeds.
-   * On approve failure any leftover encrypted session is cleared.
+   * PIN -> generate agent -> encrypt in memory -> approveAgent via Reown.
+   * Persists the generated encrypted session only after approval succeeds.
+   * Approval failure never mutates an existing encrypted session.
    */
+  // Called only from UI event handlers; its signal snapshots deliberately bind
+  // one authorization attempt to the account and network that started it.
   const authorizeAgent = (
     pin?: string,
   ): Effect.Effect<void, WalletConnectError> => {
-    // Snapshot signals synchronously so Effect.gen is not a reactive scope.
     const address = mainAddress()
     const mode = networkMode()
+    const contextRevision = walletContextRevision
+    const operationToken = Symbol("authorize-agent")
 
+    // Effect.gen executes after an event handler starts this operation, outside
+    // Solid tracking; subsequent reads intentionally detect account changes.
+    // eslint-disable-next-line solid/reactivity
     return Effect.gen(function* () {
-      if (!address) {
+      if (activeWalletOperation !== null) {
         return yield* Effect.fail(
           new WalletConnectError({
-            cause: new Error("Connect a wallet with Reown before authorizing"),
+            cause: new WalletOperationContextChanged(),
           }),
         )
       }
+      activeWalletOperation = operationToken
 
       const resolvedPin = yield* resolvePin(pin)
 
       yield* validatePinAgainstStoredSessions(resolvedPin).pipe(
         Effect.mapError(cause => new WalletConnectError({ cause })),
       )
+
+      const agentModule = yield* Effect.tryPromise({
+        try: () => import("@/services/hyperliquidAgent"),
+        catch: cause => new WalletConnectError({ cause }),
+      })
+
+      if (!address) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new agentModule.ReownWalletUnavailable(),
+          }),
+        )
+      }
 
       const modal = yield* Effect.tryPromise({
         try: () => ensureEvmAppKit(),
@@ -380,15 +466,10 @@ export const WalletProvider = (props: ParentProps) => {
       if (!provider) {
         return yield* Effect.fail(
           new WalletConnectError({
-            cause: new Error("Reown wallet provider is unavailable"),
+            cause: new agentModule.ReownWalletUnavailable(),
           }),
         )
       }
-
-      const agentModule = yield* Effect.tryPromise({
-        try: () => import("@/services/hyperliquidAgent"),
-        catch: cause => new WalletConnectError({ cause }),
-      })
 
       const agent = agentModule.generateHyperliquidAgent()
       const pendingCredentials: WalletCredentials = {
@@ -403,6 +484,14 @@ export const WalletProvider = (props: ParentProps) => {
         catch: cause => new WalletConnectError({ cause }),
       })
 
+      if (walletContextRevision !== contextRevision) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletAuthorizationContextChanged(),
+          }),
+        )
+      }
+
       const approveResult = yield* Effect.either(
         agentModule.approveHyperliquidAgent(
           provider,
@@ -413,19 +502,49 @@ export const WalletProvider = (props: ParentProps) => {
       )
 
       if (Either.isLeft(approveResult)) {
-        clearEncryptedSession()
-        syncStoredSessionState()
-        setCredentials(null)
         return yield* Effect.fail(
           new WalletConnectError({ cause: approveResult.left }),
         )
       }
 
+      if (!sameWalletAddress(mainAddress(), address)) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletAuthorizationAccountChanged(),
+          }),
+        )
+      }
+
+      if (networkMode() !== mode) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletAuthorizationNetworkChanged(),
+          }),
+        )
+      }
+
+      if (walletContextRevision !== contextRevision) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletAuthorizationContextChanged(),
+          }),
+        )
+      }
+
+      markWalletContextChanged()
       rememberSessionPin(resolvedPin)
       persistEncryptedSession(pendingCredentials, encrypted)
       syncStoredSessionState()
       setCredentials(pendingCredentials)
-    })
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (activeWalletOperation === operationToken) {
+            activeWalletOperation = null
+          }
+        }),
+      ),
+    )
   }
 
   /**
@@ -436,12 +555,28 @@ export const WalletProvider = (props: ParentProps) => {
     // Snapshot signals synchronously so Effect.gen is not a reactive scope.
     const address = mainAddress()
     const mode = networkMode()
+    const contextRevision = walletContextRevision
+    const operationToken = Symbol("revoke-agent")
 
     return Effect.gen(function* () {
+      if (activeWalletOperation !== null) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletOperationContextChanged(),
+          }),
+        )
+      }
+      activeWalletOperation = operationToken
+
+      const agentModule = yield* Effect.tryPromise({
+        try: () => import("@/services/hyperliquidAgent"),
+        catch: cause => new WalletConnectError({ cause }),
+      })
+
       if (!address) {
         return yield* Effect.fail(
           new WalletConnectError({
-            cause: new Error("Connect a wallet with Reown before revoking"),
+            cause: new agentModule.ReownWalletUnavailable(),
           }),
         )
       }
@@ -454,15 +589,10 @@ export const WalletProvider = (props: ParentProps) => {
       if (!provider) {
         return yield* Effect.fail(
           new WalletConnectError({
-            cause: new Error("Reown wallet provider is unavailable"),
+            cause: new agentModule.ReownWalletUnavailable(),
           }),
         )
       }
-
-      const agentModule = yield* Effect.tryPromise({
-        try: () => import("@/services/hyperliquidAgent"),
-        catch: cause => new WalletConnectError({ cause }),
-      })
 
       const revokeResult = yield* Effect.either(
         agentModule.revokeHyperliquidAgent(provider, address, mode),
@@ -474,10 +604,27 @@ export const WalletProvider = (props: ParentProps) => {
         )
       }
 
+      if (walletContextRevision !== contextRevision) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletOperationContextChanged(),
+          }),
+        )
+      }
+
+      markWalletContextChanged()
       setCredentials(null)
       clearEncryptedSession()
       syncStoredSessionState()
-    })
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (activeWalletOperation === operationToken) {
+            activeWalletOperation = null
+          }
+        }),
+      ),
+    )
   }
 
   const unlock = (pin: string): Effect.Effect<void, WalletUnlockFailure> => {
@@ -487,30 +634,48 @@ export const WalletProvider = (props: ParentProps) => {
     if (hyperliquidSession === null && deriveSession === null) {
       return Effect.fail(new WalletSessionMissing())
     }
+    const contextRevision = walletContextRevision
 
     return Effect.gen(function* () {
+      let hyperliquidPrivateKey: string | null = null
+      let derivePrivateKey: string | null = null
+
       if (hyperliquidSession !== null) {
-        const privateKey = yield* decryptWalletPrivateKey(
+        hyperliquidPrivateKey = yield* decryptWalletPrivateKey(
           hyperliquidSession.encryptedPrivateKey,
           pin,
           hyperliquidSession.salt,
           hyperliquidSession.iv,
         )
-        setMainAddressState(hyperliquidSession.accountAddress)
-        setCredentials(credentialsFromSession(hyperliquidSession, privateKey))
       }
 
       if (deriveSession !== null) {
-        const privateKey = yield* decryptWalletPrivateKey(
+        derivePrivateKey = yield* decryptWalletPrivateKey(
           deriveSession.encryptedPrivateKey,
           pin,
           deriveSession.salt,
           deriveSession.iv,
         )
+      }
+
+      if (walletContextRevision !== contextRevision) {
+        return yield* Effect.fail(new WalletUnlockContextChanged())
+      }
+
+      markWalletContextChanged()
+
+      if (hyperliquidSession !== null && hyperliquidPrivateKey !== null) {
+        setMainAddressState(hyperliquidSession.accountAddress)
+        setCredentials(
+          credentialsFromSession(hyperliquidSession, hyperliquidPrivateKey),
+        )
+      }
+
+      if (deriveSession !== null && derivePrivateKey !== null) {
         setDeriveCredentials(
           deriveCredentialsFromSession(
             deriveSession,
-            privateKey as `0x${string}`,
+            derivePrivateKey as `0x${string}`,
           ),
         )
       }
@@ -519,24 +684,37 @@ export const WalletProvider = (props: ParentProps) => {
     }).pipe(Effect.asVoid)
   }
 
-  const disconnect = (): Effect.Effect<void, WalletDisconnectFailed> =>
-    Effect.gen(function* () {
-      const remoteDisconnect = Effect.gen(function* () {
-        const modal = yield* Effect.tryPromise({
-          try: () => ensureEvmAppKit(),
+  const disconnect = (): Effect.Effect<void, WalletDisconnectFailure> => {
+    const contextRevision = walletContextRevision
+    const operationToken = Symbol("disconnect")
+
+    // Invoked from UI handlers; post-await signal reads validate AppKit events.
+    // eslint-disable-next-line solid/reactivity
+    return Effect.gen(function* () {
+      if (activeWalletOperation !== null) {
+        return yield* Effect.fail(new WalletDisconnectContextChanged())
+      }
+      activeWalletOperation = operationToken
+
+      const modal = yield* Effect.tryPromise({
+        try: () => ensureEvmAppKit(),
+        catch: cause => new WalletDisconnectFailed({ cause }),
+      })
+      if (modal) {
+        yield* Effect.tryPromise({
+          try: () => modal.disconnect("eip155"),
           catch: cause => new WalletDisconnectFailed({ cause }),
         })
+      }
 
-        if (modal) {
-          yield* Effect.tryPromise({
-            try: () => modal.disconnect("eip155"),
-            catch: cause => new WalletDisconnectFailed({ cause }),
-          })
-        }
-      })
+      const revisionUnchanged = walletContextRevision === contextRevision
+      const expectedDisconnectCallback =
+        walletContextRevision === contextRevision + 1 && mainAddress() === null
+      if (!revisionUnchanged && !expectedDisconnectCallback) {
+        return yield* Effect.fail(new WalletDisconnectContextChanged())
+      }
 
-      const remoteResult = yield* Effect.either(remoteDisconnect)
-
+      markWalletContextChanged()
       setCredentials(null)
       setMainAddressState(null)
       clearEncryptedSession()
@@ -544,16 +722,21 @@ export const WalletProvider = (props: ParentProps) => {
       if (getStoredEncryptedDeriveSession() === null) {
         clearSessionPin()
       }
-
-      if (Either.isLeft(remoteResult)) {
-        return yield* Effect.fail(remoteResult.left)
-      }
-    })
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (activeWalletOperation === operationToken) {
+            activeWalletOperation = null
+          }
+        }),
+      ),
+    )
+  }
 
   const disconnectDerive = (): Effect.Effect<void, WalletDisconnectFailed> => {
-    // Snapshot before leaving the Solid reactive scope (Effect.sync is not tracked).
     const hyperliquidAddress = mainAddress()
     return Effect.sync(() => {
+      markWalletContextChanged()
       setDeriveCredentials(null)
       clearEncryptedDeriveSession()
       syncStoredSessionState()
@@ -562,6 +745,7 @@ export const WalletProvider = (props: ParentProps) => {
       }
     })
   }
+
   const setDeriveSubaccountId = (subaccountId: number | null) => {
     const stored = getStoredEncryptedDeriveSession()
     if (stored?.networkMode !== networkMode()) {
@@ -583,6 +767,9 @@ export const WalletProvider = (props: ParentProps) => {
   }
 
   const setNetworkMode = (mode: NetworkMode) => {
+    if (networkMode() !== mode) {
+      markWalletContextChanged()
+    }
     setNetworkModeState(mode)
     localStorage.setItem(NETWORK_STORAGE_KEY, mode)
     const unlocked = untrack(() => deriveCredentials())
@@ -593,6 +780,7 @@ export const WalletProvider = (props: ParentProps) => {
 
   const handleStorageChange = (event: StorageEvent) => {
     if (event.key === WALLET_STORAGE_KEY) {
+      markWalletContextChanged()
       setCredentials(null)
       const nextSession = getStoredEncryptedSession()
       syncStoredSessionState()
@@ -601,63 +789,78 @@ export const WalletProvider = (props: ParentProps) => {
       }
     }
     if (event.key === DERIVE_WALLET_STORAGE_KEY) {
+      markWalletContextChanged()
       setDeriveCredentials(null)
       syncStoredSessionState()
     }
     if (event.key === NETWORK_STORAGE_KEY) {
-      setNetworkMode(getStoredNetworkMode())
+      const storedNetworkMode = getStoredNetworkMode()
+      if (networkMode() !== storedNetworkMode) {
+        markWalletContextChanged()
+      }
+      setNetworkModeState(storedNetworkMode)
+      const unlocked = untrack(() => deriveCredentials())
+      if (unlocked !== null && unlocked.networkMode !== storedNetworkMode) {
+        setDeriveCredentials(null)
+      }
     }
   }
 
   onMount(() => {
-    // Defer CCXT until after the first paint so dockview/UI can render without
-    // competing with a ~500KB module download+eval on the same turn.
-    const startClientLoad = () => {
-      prefetchHyperliquidClientModule()
-      void ensureHyperliquidClientModule()
-        .then(clientModule => {
-          setHyperliquidClientClass(() => clientModule.HyperliquidClient)
-        })
-        .catch((error: unknown) => {
-          console.error("Failed to load Hyperliquid client module:", error)
-        })
-    }
-
     let idleCallbackId: number | undefined
     let timeoutId: ReturnType<typeof setTimeout> | undefined
     let unsubscribeAccount: (() => void) | undefined
     let accountSubscriptionCancelled = false
 
+    // Defer CCXT until after the first paint so dockview/UI can render without
+    // competing with a ~500KB module download+eval on the same turn.
     if (typeof window.requestIdleCallback === "function") {
-      idleCallbackId = window.requestIdleCallback(startClientLoad, {
+      idleCallbackId = window.requestIdleCallback(loadHyperliquidClientModule, {
         timeout: 2_000,
       })
     } else {
-      timeoutId = setTimeout(startClientLoad, 0)
+      timeoutId = setTimeout(loadHyperliquidClientModule, 0)
     }
 
     window.addEventListener("storage", handleStorageChange)
 
+    // AppKit resolve/subscribe run outside Solid's tracked scope; signal writes
+    // intentionally apply when each account event arrives.
     void ensureEvmAppKit()
+      // eslint-disable-next-line solid/reactivity -- external AppKit callback
       .then(modal => {
         if (accountSubscriptionCancelled || modal === null) {
           return
         }
 
-        unsubscribeAccount = modal.subscribeAccount(accountState => {
-          const nextAddress = readEvmAddressFromAccountState(accountState)
-          const connected =
-            readEvmWalletConnectedFromAccountState(accountState) ||
-            nextAddress !== null
+        const existingAddress = modal.getAddress("eip155")
+        if (existingAddress) {
+          setMainAddress(existingAddress)
+        }
 
-          if (connected && nextAddress !== null) {
-            setMainAddress(nextAddress)
-            return
-          }
+        unsubscribeAccount = modal.subscribeAccount(
+          // eslint-disable-next-line solid/reactivity -- external AppKit callback
+          accountState => {
+            const nextAddress = readEvmAddressFromAccountState(accountState)
+            const connected =
+              readEvmWalletConnectedFromAccountState(accountState) ||
+              nextAddress !== null
 
-          const stored = getStoredWalletAddresses()
-          setMainAddress(stored?.accountAddress ?? null)
-        }, "eip155")
+            if (connected && nextAddress !== null) {
+              setMainAddress(nextAddress)
+              return
+            }
+
+            const currentProviderAddress = modal.getAddress("eip155") ?? null
+            if (currentProviderAddress !== null) {
+              setMainAddress(currentProviderAddress)
+              return
+            }
+
+            setMainAddress(null)
+          },
+          "eip155",
+        )
       })
       .catch((error: unknown) => {
         console.error("Failed to subscribe to wallet account changes:", error)
@@ -693,6 +896,8 @@ export const WalletProvider = (props: ParentProps) => {
         hasVerifiedSessionPin,
         canTrade,
         client,
+        hyperliquidClientLoad,
+        retryHyperliquidClientLoad,
         connect,
         connectDerive,
         authorizeAgent,

@@ -17,7 +17,10 @@ import { WalletHeader } from "@/components/wallet-header"
 import { WalletProvider } from "@/contexts/WalletProvider"
 import { cn } from "@/lib/cn"
 import { useDockviewPanelProviders } from "@/lib/dockviewPanelProviders"
-import { bindDockviewSolidOwner } from "@/lib/dockviewSolidOwner"
+import {
+  bindDockviewSolidOwner,
+  releaseDockviewSolidOwner,
+} from "@/lib/dockviewSolidOwner"
 import { getErrorMessage } from "@/lib/error-message"
 import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
@@ -45,12 +48,7 @@ import { HyperliquidPanel } from "./components/HyperliquidPanel"
 import { PerformancePanel } from "./components/PerformancePanel"
 import { PortfolioSettingsMenu } from "./components/PortfolioSettingsMenu"
 import { PositionsPanel } from "./components/PositionsPanel/PositionsPanel"
-import {
-  readPortfolioMetricVisibility,
-  writePortfolioMetricVisibility,
-  type PortfolioMetricColumnId,
-  type PortfolioMetricVisibility,
-} from "./components/PositionsPanel/portfolioMetricVisibility"
+import { usePortfolioMetricVisibility } from "./components/PositionsPanel/portfolioMetricVisibility"
 import {
   readDeriveGreeksVisible,
   writeDeriveGreeksVisible,
@@ -68,15 +66,19 @@ import {
   writePreciseToggle,
 } from "./hooks/usePortfolioState"
 import {
-  readPortfolioDockviewLayout,
+  persistPortfolioDockviewLayout,
+  restorePortfolioDockviewLayout,
   writePortfolioDockviewLayout,
+  type PortfolioLayoutHost,
 } from "./portfolioLayoutStorage"
 import {
   PortfolioShellProvider,
   usePortfolioShell,
 } from "./portfolioShellContext"
 import {
+  isKeyboardPanelId,
   PANEL_DIGIT_BY_ID,
+  panelDigitForId,
   PortfolioHotkeyBar,
   PortfolioKeyboardContext,
   PortfolioKeyboardProvider,
@@ -86,10 +88,7 @@ import {
   usePortfolioKeyboardContext,
 } from "./keyboard"
 import { positionStatus } from "./components/PositionsPanel/positionRowModel"
-import {
-  allSymbolPortfolioState,
-  resolveAllSymbolClick,
-} from "./components/PositionsPanel/allSymbolRowModel"
+import { dispatchAllSymbolClick } from "./components/PositionsPanel/allSymbolRowModel"
 import "./portfolio-dockview.css"
 
 type PortfolioPanelId =
@@ -241,7 +240,9 @@ const useDockviewPanelTitle = (props: IDockviewPanelHeaderProps) => {
   // subscription and dispose the listener on cleanup.
   createEffect(() => {
     const api = props.api
-    setTitle(api.title)
+    if (api.title !== undefined) {
+      setTitle(api.title)
+    }
     const disposable = api.onDidTitleChange(event => {
       setTitle(event.title)
     })
@@ -254,18 +255,7 @@ const useDockviewPanelTitle = (props: IDockviewPanelHeaderProps) => {
 }
 
 const LockedTab = (props: IDockviewPanelHeaderProps) => {
-  const digit = () => {
-    const panelId = props.api.id
-    if (
-      panelId === "portfolio" ||
-      panelId === "hyperliquid" ||
-      panelId === "derive" ||
-      panelId === "staged"
-    ) {
-      return PANEL_DIGIT_BY_ID[panelId]
-    }
-    return undefined
-  }
+  const digit = () => panelDigitForId(props.api.id)
 
   return (
     <Show when={digit()} fallback={<DockviewDefaultTab {...props} hideClose />}>
@@ -277,7 +267,10 @@ const LockedTab = (props: IDockviewPanelHeaderProps) => {
 }
 
 const LockedTabWithDigit = (
-  props: IDockviewPanelHeaderProps & { digit: string },
+  props: IDockviewPanelHeaderProps & {
+    digit: string
+    trailing?: import("solid-js").JSX.Element
+  },
 ) => {
   const title = useDockviewPanelTitle(props)
 
@@ -292,6 +285,7 @@ const LockedTabWithDigit = (
       <kbd class="ml-1 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
         {props.digit}
       </kbd>
+      {props.trailing}
     </div>
   )
 }
@@ -410,17 +404,28 @@ const PortfolioPage = () => {
   const portfolio = usePortfolioState()
 
   const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
-  const [metricVisibility, setMetricVisibility] =
-    createSignal<PortfolioMetricVisibility>(readPortfolioMetricVisibility())
+  const { metricVisibility, setMetricColumnVisible } =
+    usePortfolioMetricVisibility()
   const [deriveGreeksVisible, setDeriveGreeksVisible] = createSignal(
     readDeriveGreeksVisible(),
   )
 
-  let dockviewApi: DockviewApi | undefined
   let dockviewContainer: HTMLDivElement | undefined
   let layoutChangeDisposable: { dispose: () => void } | undefined
+  let pendingLayoutFrame: number | undefined
+  let pendingLayoutSnapshot: ReturnType<DockviewApi["toJSON"]> | undefined
+  let defaultLayoutSizingTimeout: number | undefined
+  let defaultLayoutSizingCancelled = false
+  const [dockviewApi, setDockviewApi] = createSignal<DockviewApi | undefined>()
   const [containerWidth, setContainerWidth] = createSignal(0)
   const [containerHeight, setContainerHeight] = createSignal(0)
+  const [defaultLayoutSizing, setDefaultLayoutSizing] = createSignal<{
+    api: DockviewApi
+    portfolioPanel: ReturnType<DockviewApi["addPanel"]>
+    performancePanel: ReturnType<DockviewApi["addPanel"]>
+    stagedPanel: ReturnType<DockviewApi["addPanel"]>
+    factorsPanel: ReturnType<DockviewApi["addPanel"]>
+  } | null>(null)
 
   const stagedConnectionState = (): StagedConnectionState => {
     if (!isHyperliquidConnected()) {
@@ -516,11 +521,6 @@ const PortfolioPage = () => {
     writeManualWeightEntry(portfolio.isManualWeightEntry)
   })
 
-  // createEffect: persist metric visibility when gear toggles change
-  createEffect(() => {
-    writePortfolioMetricVisibility(metricVisibility())
-  })
-
   // createEffect: persist Derive greeks visibility when gear / close toggle changes
   createEffect(() => {
     writeDeriveGreeksVisible(deriveGreeksVisible())
@@ -542,20 +542,10 @@ const PortfolioPage = () => {
     () => Object.keys(portfolio.targetPortfolio).length,
   )
 
-  const setMetricColumnVisible = (
-    columnId: PortfolioMetricColumnId,
-    visible: boolean,
-  ) => {
-    setMetricVisibility(previous => ({
-      ...previous,
-      [columnId]: visible,
-    }))
-  }
-
   // createEffect: keep PORTFOLIO tab title count in sync
   createEffect(() => {
     const count = targetPositionCount()
-    dockviewApi?.getPanel("portfolio")?.api.setTitle(`PORTFOLIO (${count})`)
+    dockviewApi()?.getPanel("portfolio")?.api.setTitle(`PORTFOLIO (${count})`)
   })
 
   onMount(() => {
@@ -595,21 +585,12 @@ const PortfolioPage = () => {
     )
   }
 
-  const PortfolioTab = (props: IDockviewPanelHeaderProps) => {
-    const title = useDockviewPanelTitle(props)
-
-    return (
-      <KeyboardAwareDockviewProviders>
-        <div
-          data-testid="dockview-dv-default-tab"
-          class="dv-default-tab portfolio-dockview-tab"
-        >
-          <span class="dv-default-tab-content portfolio-dockview-tab-title">
-            {title()}
-          </span>
-          <kbd class="ml-1 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-            {PANEL_DIGIT_BY_ID.portfolio}
-          </kbd>
+  const PortfolioTab = (props: IDockviewPanelHeaderProps) => (
+    <KeyboardAwareDockviewProviders>
+      <LockedTabWithDigit
+        {...props}
+        digit={PANEL_DIGIT_BY_ID.portfolio}
+        trailing={
           <PortfolioSettingsMenu
             isPrecise={portfolio.isPrecise}
             onPreciseChange={value => {
@@ -622,10 +603,10 @@ const PortfolioPage = () => {
             metricVisibility={metricVisibility()}
             onMetricVisibilityChange={setMetricColumnVisible}
           />
-        </div>
-      </KeyboardAwareDockviewProviders>
-    )
-  }
+        }
+      />
+    </KeyboardAwareDockviewProviders>
+  )
 
   const HyperliquidTab = (props: IDockviewPanelHeaderProps) => (
     <KeyboardAwareDockviewProviders>
@@ -812,124 +793,202 @@ const PortfolioPage = () => {
   }
 
   const applyDefaultLayout = (api: DockviewApi) => {
-    const layoutWidth = containerWidth()
-    const layoutHeight = containerHeight()
+    const portfolioConfig = findPanelCatalogEntry("portfolio")
+    const hyperliquidConfig = findPanelCatalogEntry("hyperliquid")
+    const deriveConfig = findPanelCatalogEntry("derive")
+    const performanceConfig = findPanelCatalogEntry("performance")
+    const stagedConfig = findPanelCatalogEntry("staged")
+    const factorsConfig = findPanelCatalogEntry("factors")
+    const riskConfig = findPanelCatalogEntry("risk")
+
+    if (
+      portfolioConfig === undefined ||
+      hyperliquidConfig === undefined ||
+      deriveConfig === undefined ||
+      performanceConfig === undefined ||
+      stagedConfig === undefined ||
+      factorsConfig === undefined ||
+      riskConfig === undefined
+    ) {
+      return
+    }
 
     const portfolioPanel = api.addPanel({
-      id: "portfolio",
-      component: "portfolio",
-      tabComponent: "portfolioTab",
+      id: portfolioConfig.id,
+      component: portfolioConfig.component,
+      tabComponent: portfolioConfig.tabComponent,
       title: `PORTFOLIO (${targetPositionCount()})`,
     })
 
     api.addPanel({
-      id: "hyperliquid",
-      component: "hyperliquid",
-      tabComponent: "hyperliquidTab",
-      title: "HYPERLIQUID",
-      position: { referencePanel: "portfolio", direction: "within" },
+      id: hyperliquidConfig.id,
+      component: hyperliquidConfig.component,
+      tabComponent: hyperliquidConfig.tabComponent,
+      title: hyperliquidConfig.title,
+      position: { referencePanel: portfolioConfig.id, direction: "within" },
     })
 
     api.addPanel({
-      id: "derive",
-      component: "derive",
-      tabComponent: "deriveTab",
-      title: "DERIVE",
-      position: { referencePanel: "portfolio", direction: "within" },
+      id: deriveConfig.id,
+      component: deriveConfig.component,
+      tabComponent: deriveConfig.tabComponent,
+      title: deriveConfig.title,
+      position: { referencePanel: portfolioConfig.id, direction: "within" },
     })
 
     const performancePanel = api.addPanel({
-      id: "performance",
-      component: "performance",
-      tabComponent: "closableTab",
-      title: "PERFORMANCE",
-      position: { referencePanel: "portfolio", direction: "right" },
+      id: performanceConfig.id,
+      component: performanceConfig.component,
+      tabComponent: performanceConfig.tabComponent,
+      title: performanceConfig.title,
+      position: { referencePanel: portfolioConfig.id, direction: "right" },
     })
 
     const stagedPanel = api.addPanel({
-      id: "staged",
-      component: "staged",
-      tabComponent: "stagedTab",
-      title: "STAGED CHANGES",
-      position: { referencePanel: "performance", direction: "below" },
+      id: stagedConfig.id,
+      component: stagedConfig.component,
+      tabComponent: stagedConfig.tabComponent,
+      title: stagedConfig.title,
+      position: { referencePanel: performanceConfig.id, direction: "below" },
     })
 
     const factorsPanel = api.addPanel({
-      id: "factors",
-      component: "factors",
-      tabComponent: "closableTab",
-      title: "FACTORS",
-      position: { referencePanel: "staged", direction: "right" },
+      id: factorsConfig.id,
+      component: factorsConfig.component,
+      tabComponent: factorsConfig.tabComponent,
+      title: factorsConfig.title,
+      position: { referencePanel: stagedConfig.id, direction: "right" },
     })
 
     api.addPanel({
-      id: "risk",
-      component: "risk",
-      tabComponent: "closableTab",
-      title: "RISK",
-      position: { referencePanel: "factors", direction: "right" },
+      id: riskConfig.id,
+      component: riskConfig.component,
+      tabComponent: riskConfig.tabComponent,
+      title: riskConfig.title,
+      position: { referencePanel: factorsConfig.id, direction: "right" },
     })
 
+    setDefaultLayoutSizing({
+      api,
+      portfolioPanel,
+      performancePanel,
+      stagedPanel,
+      factorsPanel,
+    })
+  }
+
+  // createEffect: retry default panel sizing until the dockview host is large
+  // enough; cancel any pending timeout when the pending target changes.
+  createEffect(() => {
+    const pending = defaultLayoutSizing()
+    if (pending === null) {
+      return
+    }
+
+    const layoutWidth = containerWidth()
+    const layoutHeight = containerHeight()
     if (layoutWidth < 100 || layoutHeight < 100) {
       return
     }
 
-    window.setTimeout(() => {
+    if (defaultLayoutSizingTimeout !== undefined) {
+      window.clearTimeout(defaultLayoutSizingTimeout)
+      defaultLayoutSizingTimeout = undefined
+    }
+
+    const activeApi = dockviewApi()
+    // setTimeout: wait one macrotask so Dockview finishes inserting panels
+    // before setSize.
+    defaultLayoutSizingTimeout = window.setTimeout(() => {
+      defaultLayoutSizingTimeout = undefined
+      if (defaultLayoutSizingCancelled) {
+        return
+      }
+      if (activeApi !== pending.api) {
+        setDefaultLayoutSizing(null)
+        return
+      }
+
       const leftWidth = Math.floor(layoutWidth * 0.48)
       const rightWidth = Math.max(layoutWidth - leftWidth, 1)
       const topHeight = Math.floor(layoutHeight * 0.45)
       const bottomHeight = Math.max(layoutHeight - topHeight, 1)
 
-      portfolioPanel.group.api.setSize({ width: leftWidth })
-      performancePanel.group.api.setSize({ width: rightWidth })
-      performancePanel.api.setSize({ height: topHeight })
-      stagedPanel.group.api.setSize({
+      pending.portfolioPanel.group.api.setSize({ width: leftWidth })
+      pending.performancePanel.group.api.setSize({ width: rightWidth })
+      pending.performancePanel.api.setSize({ height: topHeight })
+      pending.stagedPanel.group.api.setSize({
         width: Math.floor(rightWidth * 0.4),
         height: bottomHeight,
       })
-      factorsPanel.group.api.setSize({
+      pending.factorsPanel.group.api.setSize({
         width: Math.floor(rightWidth * 0.25),
       })
+      setDefaultLayoutSizing(null)
     }, 0)
-  }
+
+    onCleanup(() => {
+      if (defaultLayoutSizingTimeout !== undefined) {
+        window.clearTimeout(defaultLayoutSizingTimeout)
+        defaultLayoutSizingTimeout = undefined
+      }
+    })
+  })
 
   const handleReady = (event: DockviewReadyEvent) => {
-    dockviewApi = event.api
+    setDockviewApi(event.api)
 
-    const hasRequiredPanels = (): boolean =>
-      (["portfolio", "hyperliquid", "derive", "staged"] as const).every(
-        panelId => event.api.getPanel(panelId) !== undefined,
-      )
-
-    const savedLayout = readPortfolioDockviewLayout()
-    if (savedLayout !== null) {
-      try {
-        event.api.fromJSON(savedLayout)
-        if (!hasRequiredPanels()) {
-          event.api.clear()
-          applyDefaultLayout(event.api)
-        }
-      } catch {
+    const layoutHost: PortfolioLayoutHost = {
+      fromJSON: layout => {
+        event.api.fromJSON(layout)
+      },
+      clear: () => {
         event.api.clear()
-        applyDefaultLayout(event.api)
-      }
-    } else {
+      },
+      toJSON: () => event.api.toJSON(),
+      hasPanel: panelId => event.api.getPanel(panelId) !== undefined,
+    }
+
+    if (
+      restorePortfolioDockviewLayout(layoutHost) === "requires-default-layout"
+    ) {
       applyDefaultLayout(event.api)
+      persistPortfolioDockviewLayout(layoutHost)
+    }
+
+    const flushPendingLayoutWrite = () => {
+      if (pendingLayoutFrame !== undefined) {
+        window.cancelAnimationFrame(pendingLayoutFrame)
+        pendingLayoutFrame = undefined
+      }
+      if (pendingLayoutSnapshot === undefined) {
+        return
+      }
+      const layout = pendingLayoutSnapshot
+      pendingLayoutSnapshot = undefined
+      writePortfolioDockviewLayout(layout)
     }
 
     const layoutChange = event.api.onDidLayoutChange(() => {
-      writePortfolioDockviewLayout(event.api.toJSON())
+      pendingLayoutSnapshot = event.api.toJSON()
+      if (pendingLayoutFrame !== undefined) {
+        return
+      }
+      pendingLayoutFrame = window.requestAnimationFrame(() => {
+        pendingLayoutFrame = undefined
+        flushPendingLayoutWrite()
+      })
     })
-    layoutChangeDisposable = layoutChange
+    layoutChangeDisposable = {
+      dispose: () => {
+        flushPendingLayoutWrite()
+        layoutChange.dispose()
+      },
+    }
 
     const activeChange = event.api.onDidActivePanelChange(panel => {
       const panelId = panel?.id
-      if (
-        panelId === "portfolio" ||
-        panelId === "hyperliquid" ||
-        panelId === "derive" ||
-        panelId === "staged"
-      ) {
+      if (panelId !== undefined && isKeyboardPanelId(panelId)) {
         keyboardBridge?.onPanelActivated(panelId)
       }
     })
@@ -937,13 +996,18 @@ const PortfolioPage = () => {
   }
 
   onCleanup(() => {
+    defaultLayoutSizingCancelled = true
+    if (defaultLayoutSizingTimeout !== undefined) {
+      window.clearTimeout(defaultLayoutSizingTimeout)
+      defaultLayoutSizingTimeout = undefined
+    }
     layoutChangeDisposable?.dispose()
     activePanelChangeDisposable?.dispose()
   })
 
   const keyboardActions = (): PortfolioKeyboardActions => ({
     activatePanel: (panelId: KeyboardPanelId) => {
-      dockviewApi?.getPanel(panelId)?.api.setActive()
+      dockviewApi()?.getPanel(panelId)?.api.setActive()
     },
     getPortfolioSymbols: () =>
       Object.keys({
@@ -981,22 +1045,18 @@ const PortfolioPage = () => {
         portfolio.targetPortfolio,
       ) === "closing",
     onAllSymbolEnter: symbol => {
-      const action = resolveAllSymbolClick(
-        allSymbolPortfolioState(
-          symbol,
-          portfolio.targetPortfolio,
-          portfolio.deletedArchive,
-        ),
+      dispatchAllSymbolClick(
+        symbol,
+        portfolio.targetPortfolio,
+        portfolio.deletedArchive,
+        {
+          onAdd: addSymbol => {
+            portfolio.handleAddToken(addSymbol, "perp", "hyperliquid")
+          },
+          onRemove: portfolio.handleRemoveToken,
+          onUndoRemove: portfolio.handleUndoRemoveToken,
+        },
       )
-      if (action === "remove") {
-        portfolio.handleRemoveToken(symbol)
-        return
-      }
-      if (action === "undoRemove") {
-        portfolio.handleUndoRemoveToken(symbol)
-        return
-      }
-      portfolio.handleAddToken(symbol, "perp", "hyperliquid")
     },
     onStagedSubmit: handlePrimaryStagedAction,
     onStagedClearAll: portfolio.handleResetToCurrent,
@@ -1023,7 +1083,7 @@ const PortfolioPage = () => {
         return
       }
       const panelId = request.venue === "hyperliquid" ? "hyperliquid" : "derive"
-      dockviewApi?.getPanel(panelId)?.api.setActive()
+      dockviewApi()?.getPanel(panelId)?.api.setActive()
       keyboardBridge?.onPanelActivated(panelId)
     })
 
@@ -1037,10 +1097,9 @@ const PortfolioPage = () => {
 
   /** Bind dockview portals under the keyboard provider owner so panels see hotkeys. */
   const DockviewOwnerBinder = () => {
-    const owner = getOwner()
-    bindDockviewSolidOwner(owner)
+    const ownerToken = bindDockviewSolidOwner(getOwner())
     onCleanup(() => {
-      bindDockviewSolidOwner(null)
+      releaseDockviewSolidOwner(ownerToken)
     })
     return null
   }
@@ -1056,6 +1115,7 @@ const PortfolioPage = () => {
             <span class="font-semibold">Moneymentum</span>
             <div class="h-4 border-l border-border" />
             <WalletHeader
+              handleDisconnect={portfolio.handleDisconnect}
               handleNetworkSwitch={
                 portfolio.resetPortfolioStateForNetworkChange
               }

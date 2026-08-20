@@ -35,7 +35,10 @@ import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
 import { prefetchEvmAppKit } from "@/reown/evmAppKit"
-import { copyWalletAddressToClipboard } from "@/services/wallet"
+import {
+  WalletOperationContextChanged,
+  copyWalletAddressToClipboard,
+} from "@/services/wallet"
 import { toast } from "solid-sonner"
 import { tryUsePortfolioShell } from "@/pages/Portfolio/portfolioShellContext"
 
@@ -65,6 +68,7 @@ const formatUsd = (value: number): string =>
   })
 
 interface WalletHeaderProps {
+  handleDisconnect?: () => void
   handleNetworkSwitch?: () => void
 }
 
@@ -81,6 +85,9 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     canTrade,
     deriveCredentials,
     setDeriveSubaccountId,
+    mainAddress,
+    hyperliquidClientLoad,
+    retryHyperliquidClientLoad,
   } = useWallet()
   const accountSnapshot = useDeriveAccountSnapshot()
   const shell = tryUsePortfolioShell()
@@ -90,6 +97,7 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     "hyperliquid" | "derive" | null
   >(null)
   const [copiedAddress, setCopiedAddress] = createSignal<string | null>(null)
+  let networkSwitchRevision = 0
   let copiedTimeoutId: ReturnType<typeof setTimeout> | undefined
 
   onCleanup(() => {
@@ -160,27 +168,56 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     return `${String(connected.length)} venues`
   }
 
-  const handleTestnetToggle = async (checked: boolean) => {
+  const handleTestnetToggle = (checked: boolean) => {
     if (!isConnected()) {
       toast.error("Please connect a venue first")
       return
     }
 
-    if (switchNetworkMutation.isPending || isNetworkSwitching()) {
+    if (
+      switchNetworkMutation.isPending ||
+      isNetworkSwitching() ||
+      disconnectingVenue() !== null ||
+      isRevokingAgent()
+    ) {
       return
     }
 
+    const accountAddress = mainAddress()?.toLowerCase() ?? null
+    const operationRevision = ++networkSwitchRevision
     setIsNetworkSwitching(true)
-
-    try {
-      await switchNetworkMutation.mutateAsync(checked ? "testnet" : "mainnet")
-      props.handleNetworkSwitch?.()
-    } catch (error) {
-      console.error("Failed to toggle testnet/mainnet:", error)
-      toast.error("Failed to toggle network. Please try again.")
-    } finally {
-      setIsNetworkSwitching(false)
-    }
+    void Effect.runPromise(
+      Effect.tryPromise({
+        try: () =>
+          switchNetworkMutation.mutateAsync(checked ? "testnet" : "mainnet"),
+        catch: cause => new WalletOperationContextChanged({ cause }),
+      }).pipe(
+        Effect.tap(() =>
+          // The completion intentionally validates current wallet signals.
+          // eslint-disable-next-line solid/reactivity
+          Effect.sync(() => {
+            const currentAddress = mainAddress()?.toLowerCase() ?? null
+            if (
+              operationRevision === networkSwitchRevision &&
+              currentAddress === accountAddress &&
+              isConnected()
+            ) {
+              props.handleNetworkSwitch?.()
+            }
+          }),
+        ),
+        Effect.catchAll(error =>
+          Effect.sync(() => {
+            toast.error(getErrorMessage(error))
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            setIsNetworkSwitching(false)
+          }),
+        ),
+      ),
+    )
   }
 
   const onHyperliquidDisconnect = () => {
@@ -192,7 +229,10 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     void Effect.runPromise(
       disconnect().pipe(
         Effect.tap(() =>
+          // This post-disconnect callback runs from the click handler's Effect.
+          // eslint-disable-next-line solid/reactivity
           Effect.sync(() => {
+            props.handleDisconnect?.()
             setMenuOpen(false)
             toast.success("Hyperliquid disconnected")
           }),
@@ -271,6 +311,11 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     )
   }
 
+  const failedHyperliquidClientLoad = () => {
+    const load = hyperliquidClientLoad()
+    return load.state === "failed" ? load : null
+  }
+
   const currentIsTestnet = () => walletSettings().isTestnet
   const isDisabled = () =>
     !isConnected() || switchNetworkMutation.isPending || isNetworkSwitching()
@@ -318,6 +363,25 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     <div class="flex items-center gap-4">
       <Show when={isNetworkSwitching()}>
         <span class="text-[11px] text-muted-foreground">Switching...</span>
+      </Show>
+
+      <Show when={failedHyperliquidClientLoad()}>
+        {failedLoad => (
+          <div class="flex items-center gap-2" role="alert">
+            <span class="text-[11px] text-rose-500">
+              {getErrorMessage(failedLoad().error)}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              class="h-6 px-2 text-[11px]"
+              onClick={retryHyperliquidClientLoad}
+            >
+              Retry
+            </Button>
+          </div>
+        )}
       </Show>
 
       <DropdownMenu open={menuOpen()} onOpenChange={setMenuOpen}>

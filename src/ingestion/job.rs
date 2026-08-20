@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use crate::hyperliquid::{CandleIngester, FundingRateIngester, Hyperliquid};
+use crate::hyperliquid::{CandleIngester, FundingRateIngester, Hyperliquid, IngestBatchOutcome};
 use crate::market_metadata::RefreshError;
 
 use super::orchestration::LOST_RACE_REASON;
@@ -33,6 +33,134 @@ pub(crate) struct IngestionJob {
 impl IngestionJob {
     pub(crate) fn new(run_id: IngestionRunId, work: IngestionWork) -> Self {
         Self { run_id, work }
+    }
+
+    /// A run abandoned by startup recovery must not resurrect: skip the work
+    /// and leave its terminal state untouched.
+    async fn run_still_running(
+        &self,
+        store: &Store<IngestionRun>,
+    ) -> Result<bool, IngestionJobError> {
+        match store.load(&self.run_id).await {
+            Ok(Some(run)) if run.status == IngestionRunStatus::Running => Ok(true),
+            Ok(_) => {
+                warn!(run_id = %self.run_id, "skipping ingestion for a finished run");
+                Ok(false)
+            }
+            // A load failure leaves the run's state unknown -- surface it so the
+            // worker retries rather than silently marking the job done.
+            Err(err) => {
+                error!(error = %err, run_id = %self.run_id, "failed to load ingestion run");
+                Err(err.into())
+            }
+        }
+    }
+
+    async fn holds_running_slot(
+        &self,
+        context: &IngestionJobContext,
+    ) -> Result<bool, IngestionJobError> {
+        match holds_one_running_slot(&context.run_projection, &self.run_id, self.work).await {
+            Ok(holds_slot) => Ok(holds_slot),
+            Err(err) => {
+                error!(
+                    error = %err,
+                    run_id = %self.run_id,
+                    "failed to verify the one-running slot"
+                );
+                Err(err.into())
+            }
+        }
+    }
+
+    async fn abandon_race_loser(
+        &self,
+        store: &Store<IngestionRun>,
+    ) -> Result<(), IngestionJobError> {
+        match store.load(&self.run_id).await {
+            Ok(Some(run)) if run.status == IngestionRunStatus::Running => {
+                store
+                    .send(
+                        &self.run_id,
+                        IngestionRunCommand::Abandon {
+                            reason: LOST_RACE_REASON.to_string(),
+                            reconciled_at: Utc::now(),
+                        },
+                    )
+                    .await?;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                error!(
+                    error = %err,
+                    run_id = %self.run_id,
+                    "failed to load ingestion run before abandoning race loser"
+                );
+                return Err(err.into());
+            }
+        }
+        warn!(
+            run_id = %self.run_id,
+            "skipping ingestion for a run that lost the one-running race"
+        );
+        Ok(())
+    }
+
+    async fn record_ingestion_success(
+        &self,
+        store: &Store<IngestionRun>,
+        last_record: DateTime<Utc>,
+        batch_outcome: IngestBatchOutcome,
+    ) -> Result<(), IngestionJobError> {
+        // The run stays Running until this commits; surface a
+        // terminalization failure so the worker retries instead of
+        // leaving the slot wedged until the next startup reconcile.
+        if let Err(err) = complete_run(store, &self.run_id, last_record).await {
+            error!(error = %err, run_id = %self.run_id, "failed to record ingestion completion");
+            return Err(err.into());
+        }
+        match batch_outcome {
+            IngestBatchOutcome::Written { fetched_rows } => {
+                info!(
+                    run_id = %self.run_id,
+                    work = self.work.schedule_key(),
+                    fetched_rows,
+                    "ingestion complete"
+                );
+            }
+            IngestBatchOutcome::Unchanged => {
+                info!(
+                    run_id = %self.run_id,
+                    work = self.work.schedule_key(),
+                    "ingestion complete with unchanged data"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn record_ingestion_failure(
+        &self,
+        store: &Store<IngestionRun>,
+        err: &RefreshError,
+    ) -> Result<(), IngestionJobError> {
+        error!(
+            error = %err,
+            run_id = %self.run_id,
+            work = self.work.schedule_key(),
+            "ingestion failed"
+        );
+        // If we cannot even record the failure the run stays Running;
+        // surface it so the worker retries rather than wedging the slot.
+        if let Err(record_err) = fail_run(store, &self.run_id, &err.to_string()).await {
+            error!(
+                error = %record_err,
+                run_id = %self.run_id,
+                "failed to record ingestion failure"
+            );
+            return Err(record_err.into());
+        }
+        Ok(())
     }
 }
 
@@ -66,65 +194,16 @@ impl Job for IngestionJob {
         let store = &context.run_store;
         let services = &context.services;
 
-        // A run abandoned by startup recovery must not resurrect: skip the work
-        // and leave its terminal state untouched.
-        match store.load(&self.run_id).await {
-            Ok(Some(run)) if run.status == IngestionRunStatus::Running => {}
-            Ok(_) => {
-                warn!(run_id = %self.run_id, "skipping ingestion for a finished run");
-                return Ok(());
-            }
-            // A load failure leaves the run's state unknown -- surface it so the
-            // worker retries rather than silently marking the job done.
-            Err(err) => {
-                error!(error = %err, run_id = %self.run_id, "failed to load ingestion run");
-                return Err(err.into());
-            }
+        if !self.run_still_running(store).await? {
+            return Ok(());
         }
 
         // Both concurrent `create_run` losers and winners enqueue a job atomically
         // with `Start`. The aggregate can still read Running for a loser until its
         // `Abandon` commits, so verify this run_id is the projection's sole winner
         // before any ingestion I/O.
-        let holds_slot =
-            match holds_one_running_slot(&context.run_projection, &self.run_id, self.work).await {
-                Ok(holds_slot) => holds_slot,
-                Err(err) => {
-                    error!(
-                        error = %err,
-                        run_id = %self.run_id,
-                        "failed to verify the one-running slot"
-                    );
-                    return Err(err.into());
-                }
-            };
-        if !holds_slot {
-            match store.load(&self.run_id).await {
-                Ok(Some(run)) if run.status == IngestionRunStatus::Running => {
-                    store
-                        .send(
-                            &self.run_id,
-                            IngestionRunCommand::Abandon {
-                                reason: LOST_RACE_REASON.to_string(),
-                                reconciled_at: Utc::now(),
-                            },
-                        )
-                        .await?;
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    error!(
-                        error = %err,
-                        run_id = %self.run_id,
-                        "failed to load ingestion run before abandoning race loser"
-                    );
-                    return Err(err.into());
-                }
-            }
-            warn!(
-                run_id = %self.run_id,
-                "skipping ingestion for a run that lost the one-running race"
-            );
+        if !self.holds_running_slot(context).await? {
+            self.abandon_race_loser(store).await?;
             return Ok(());
         }
 
@@ -138,37 +217,12 @@ impl Job for IngestionJob {
         );
 
         match ingest_work(self.work, &candle_ingester, &funding_ingester, services).await {
-            Ok(last_record) => {
-                // The run stays Running until this commits; surface a
-                // terminalization failure so the worker retries instead of
-                // leaving the slot wedged until the next startup reconcile.
-                if let Err(err) = complete_run(store, &self.run_id, last_record).await {
-                    error!(error = %err, run_id = %self.run_id, "failed to record ingestion completion");
-                    return Err(err.into());
-                }
-                info!(
-                    run_id = %self.run_id,
-                    work = self.work.schedule_key(),
-                    "ingestion complete"
-                );
+            Ok((last_record, batch_outcome)) => {
+                self.record_ingestion_success(store, last_record, batch_outcome)
+                    .await?;
             }
             Err(err) => {
-                error!(
-                    error = %err,
-                    run_id = %self.run_id,
-                    work = self.work.schedule_key(),
-                    "ingestion failed"
-                );
-                // If we cannot even record the failure the run stays Running;
-                // surface it so the worker retries rather than wedging the slot.
-                if let Err(record_err) = fail_run(store, &self.run_id, &err.to_string()).await {
-                    error!(
-                        error = %record_err,
-                        run_id = %self.run_id,
-                        "failed to record ingestion failure"
-                    );
-                    return Err(record_err.into());
-                }
+                self.record_ingestion_failure(store, &err).await?;
             }
         }
 
@@ -181,7 +235,7 @@ async fn ingest_work(
     candle_ingester: &CandleIngester<dyn Hyperliquid>,
     funding_ingester: &FundingRateIngester<dyn Hyperliquid>,
     services: &IngestionServices,
-) -> Result<DateTime<Utc>, RefreshError> {
+) -> Result<(DateTime<Utc>, IngestBatchOutcome), RefreshError> {
     let markets = crate::market_metadata::refresh_markets(
         services.hyperliquid.as_ref(),
         &services.market_catalog,
@@ -190,20 +244,20 @@ async fn ingest_work(
     )
     .await?;
 
-    match work {
+    let batch_outcome = match work {
         IngestionWork::Funding => {
             funding_ingester
                 .ingest_with_markets(&services.data_dir, &markets)
-                .await?;
+                .await?
         }
         IngestionWork::Candles { timeframe } => {
             candle_ingester
                 .ingest_with_markets(timeframe, &services.data_dir, &markets)
-                .await?;
+                .await?
         }
-    }
+    };
 
-    Ok(Utc::now())
+    Ok((Utc::now(), batch_outcome))
 }
 
 async fn holds_one_running_slot(

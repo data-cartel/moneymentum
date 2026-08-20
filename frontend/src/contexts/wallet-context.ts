@@ -2,7 +2,9 @@ import { createContext, type Accessor } from "solid-js"
 import type * as Effect from "effect/Effect"
 import type { HyperliquidClient } from "@/services/hyperliquid-client"
 import type {
+  HyperliquidClientLoadFailed,
   WalletConnectError,
+  WalletDisconnectFailure,
   WalletDisconnectFailed,
   WalletUnlockFailure,
 } from "@/services/wallet"
@@ -10,6 +12,12 @@ import type {
 export type NetworkMode = "testnet" | "mainnet"
 
 export type PortfolioVenueId = "hyperliquid" | "derive"
+
+/** Load state of the lazily imported module that constructs Hyperliquid clients. */
+export type HyperliquidClientLoad =
+  | { readonly state: "loading" }
+  | { readonly state: "ready" }
+  | { readonly state: "failed"; readonly error: HyperliquidClientLoadFailed }
 
 export interface WalletCredentials {
   accountAddress: string // Main wallet where positions/funds are
@@ -51,7 +59,10 @@ export interface WalletContextType {
   hasStoredSession: Accessor<boolean>
   /** True when an encrypted Derive session is stored. */
   hasStoredDeriveSession: Accessor<boolean>
-  /** True when the agent private key is unlocked in memory (can submit HL trades). */
+  /**
+   * True when the agent private key is unlocked in memory and the lazily loaded
+   * Hyperliquid client is available (can submit trades).
+   */
   canTrade: Accessor<boolean>
   /**
    * True when this browser tab has already verified the shared local PIN
@@ -59,6 +70,10 @@ export interface WalletContextType {
    */
   hasVerifiedSessionPin: Accessor<boolean>
   client: Accessor<HyperliquidClient | null>
+  /** Load state of the lazy Hyperliquid client module; trading needs "ready". */
+  hyperliquidClientLoad: Accessor<HyperliquidClientLoad>
+  /** Restart the lazy Hyperliquid client module load after a failure. */
+  retryHyperliquidClientLoad: () => void
   /** Persist agent credentials encrypted with the local PIN (legacy + agent flows). */
   connect: (
     credentials: WalletCredentials,
@@ -91,7 +106,7 @@ export interface WalletContextType {
   /** Unlock all stored venue sessions that share this PIN. */
   unlock: (pin: string) => Effect.Effect<void, WalletUnlockFailure>
   /** Disconnect Hyperliquid (Reown + local agent session). */
-  disconnect: () => Effect.Effect<void, WalletDisconnectFailed>
+  disconnect: () => Effect.Effect<void, WalletDisconnectFailure>
   /** Clear the local encrypted Derive session. */
   disconnectDerive: () => Effect.Effect<void, WalletDisconnectFailed>
   setNetworkMode: (mode: NetworkMode) => void

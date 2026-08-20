@@ -206,8 +206,8 @@ async fn local_ingest_writes_candles() {
     let toml_str = format!(
         r#"
         port = 0
-        data_dir = "{}"
-        database_url = "sqlite://{}?mode=rwc"
+        data_dir = '{}'
+        database_url = 'sqlite://{}?mode=rwc'
         hyperliquid_base_url = "{}"
         hyperliquid_testnet_base_url = "{}"
         log_level = "debug"
@@ -222,10 +222,53 @@ async fn local_ingest_writes_candles() {
     let config: Config = toml::from_str(&toml_str).unwrap();
     moneymentum::run_local_ingest(config).await.unwrap();
 
-    let candles_path = data_dir.path().join("ohlcv_1h.csv");
+    let candles_csv = std::fs::read_to_string(data_dir.path().join("ohlcv_1h.csv"))
+        .expect("local ingest should write the 1h candle csv");
+    let mut candle_lines = candles_csv.lines().filter(|line| !line.is_empty());
+    let candle_header = candle_lines
+        .next()
+        .expect("candle csv should include a header");
+    for column in [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "symbol",
+        "ticker",
+    ] {
+        assert!(
+            candle_header.split(',').any(|name| name == column),
+            "candle csv missing column {column}: {candle_header}"
+        );
+    }
+    let candle_row = candle_lines
+        .next()
+        .expect("candle csv should include at least one data row");
     assert!(
-        candles_path.exists(),
-        "local ingest should write the 1h candle csv"
+        candle_row.contains("BTC") && candle_row.contains("42000"),
+        "candle row should carry BTC open from the mock: {candle_row}"
+    );
+
+    let funding_csv = std::fs::read_to_string(data_dir.path().join("funding_rate1h.csv"))
+        .expect("local ingest should write the funding csv");
+    let mut funding_lines = funding_csv.lines().filter(|line| !line.is_empty());
+    let funding_header = funding_lines
+        .next()
+        .expect("funding csv should include a header");
+    for column in ["timestamp", "funding_rate", "symbol"] {
+        assert!(
+            funding_header.split(',').any(|name| name == column),
+            "funding csv missing column {column}: {funding_header}"
+        );
+    }
+    let funding_row = funding_lines
+        .next()
+        .expect("funding csv should include at least one data row");
+    assert!(
+        funding_row.contains("BTC") && funding_row.contains("0.0001"),
+        "funding row should carry BTC rate from the mock: {funding_row}"
     );
 }
 

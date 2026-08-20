@@ -14,10 +14,7 @@ import type { StagedConnectionState } from "@/pages/Portfolio/components/StagedC
 import { steppedCrossAccountLeverage } from "@/pages/Portfolio/components/PositionsPanel/crossAccountLeverage"
 
 import { panelIdForDigitKey, type KeyboardPanelId } from "./hotkeyHints"
-import {
-  isEditableKeyboardTarget,
-  isKeyboardSuppressed,
-} from "./isKeyboardSuppressed"
+import { isEditableKeyboardTarget } from "./isKeyboardSuppressed"
 import { isPrimaryModifierPressed } from "./modifierLabel"
 import {
   blurActiveElement,
@@ -26,6 +23,7 @@ import {
   focusPanelContainer,
   focusPortfolioCell,
   focusStagedPin,
+  scheduleFocusStagedPin,
   STAGED_PIN_ATTR,
 } from "./portfolioCellFocus"
 
@@ -224,10 +222,7 @@ export const PortfolioKeyboardProvider = (props: {
 
     focusPanelContainer("staged")
     if (props.actions.connectionState() === "agentLocked") {
-      // Defer so the PIN field is mounted when switching into staged.
-      queueMicrotask(() => {
-        focusStagedPin()
-      })
+      scheduleFocusStagedPin()
     }
   }
 
@@ -498,11 +493,13 @@ export const PortfolioKeyboardProvider = (props: {
     }
 
     // While typing in an input, only allow Enter/Esc blur (keeps query / value).
+    // Staged PIN Enter submits locally -- do not blur/refocus the panel.
     if (isEditableKeyboardTarget(event.target)) {
       if (
         (event.key === "Enter" || event.key === "Escape") &&
         event.target instanceof HTMLInputElement &&
-        !isPrimaryModifierPressed(event)
+        !isPrimaryModifierPressed(event) &&
+        !(event.key === "Enter" && isPinField)
       ) {
         event.preventDefault()
         blurActiveElement()
@@ -511,12 +508,7 @@ export const PortfolioKeyboardProvider = (props: {
       return
     }
 
-    if (
-      isKeyboardSuppressed({
-        eventTarget: event.target,
-        isPinDialogOpen: props.actions.isPinDialogOpen(),
-      })
-    ) {
+    if (props.actions.isPinDialogOpen()) {
       return
     }
 

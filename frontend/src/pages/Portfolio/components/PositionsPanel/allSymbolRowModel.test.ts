@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import type { FactorScore } from "../../hooks/useFactorScores"
 
@@ -6,6 +6,7 @@ import {
   allSymbolPortfolioState,
   betaClassName,
   buildAllSymbolRows,
+  dispatchAllSymbolClick,
   filterAllSymbolRows,
   fundingRateClassName,
   resolveAllSymbolClick,
@@ -146,6 +147,56 @@ describe("fundingRateClassName", () => {
     expect(fundingRateClassName(-0.03)).toBe("text-rose-500")
     expect(fundingRateClassName(null)).toBe("text-muted-foreground")
     expect(fundingRateClassName(0)).toBe("text-muted-foreground")
+  })
+})
+
+describe("dispatchAllSymbolClick", () => {
+  it("routes add, remove, and undoRemove through the shared handlers", () => {
+    const onAdd = vi.fn()
+    const onRemove = vi.fn()
+    const onUndoRemove = vi.fn()
+
+    dispatchAllSymbolClick(
+      "BTC",
+      {},
+      {},
+      {
+        onAdd,
+        onRemove,
+        onUndoRemove,
+      },
+    )
+    expect(onAdd).toHaveBeenCalledWith("BTC")
+
+    dispatchAllSymbolClick(
+      "ETH",
+      {
+        ETH: {
+          symbol: "ETH",
+          side: "long",
+          leverage: 1,
+          notional: 1,
+        },
+      },
+      {},
+      { onAdd, onRemove, onUndoRemove },
+    )
+    expect(onRemove).toHaveBeenCalledWith("ETH")
+
+    dispatchAllSymbolClick(
+      "SOL",
+      {},
+      {
+        SOL: {
+          symbol: "SOL",
+          side: "long",
+          leverage: 1,
+          notional: 1,
+        },
+      },
+      { onAdd, onRemove, onUndoRemove },
+    )
+    expect(onUndoRemove).toHaveBeenCalledWith("SOL")
   })
 })
 

@@ -385,7 +385,12 @@ describe("HyperliquidClient", () => {
         json: async () => ({
           tickers: ["BTC/USDC:USDC"],
           leverageLimits: [
-            { symbol: "BTC/USDC:USDC", maxLeverage: 50, assetIndex: 0 },
+            {
+              symbol: "BTC/USDC:USDC",
+              maxLeverage: 50,
+              assetIndex: 0,
+              onlyIsolated: false,
+            },
           ],
           refreshedAt: new Date().toISOString(),
         }),
@@ -424,7 +429,12 @@ describe("HyperliquidClient", () => {
         json: async () => ({
           tickers: ["BTC/USDC:USDC"],
           leverageLimits: [
-            { symbol: "BTC/USDC:USDC", maxLeverage: 50, assetIndex: 0 },
+            {
+              symbol: "BTC/USDC:USDC",
+              maxLeverage: 50,
+              assetIndex: 0,
+              onlyIsolated: false,
+            },
           ],
           refreshedAt: new Date().toISOString(),
         }),

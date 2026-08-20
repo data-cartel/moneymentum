@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { render, screen, cleanup, fireEvent } from "@solidjs/testing-library"
 import { createSignal, For, type JSX } from "solid-js"
+import * as Effect from "effect/Effect"
 
 import {
   PortfolioHotkeyBar,
@@ -22,8 +23,19 @@ import {
   type PortfolioKeyboardActions,
   type KeyboardPanelId,
 } from "./index"
-import type { StagedConnectionState } from "../components/StagedChangesPanel"
+import {
+  StagedChangesPanel,
+  type StagedConnectionState,
+} from "../components/StagedChangesPanel"
 import type { OrderSide } from "@/hooks/useTrading"
+
+const unlockWallet = vi.fn(() => Effect.void)
+
+vi.mock("@/hooks/useWallet", () => ({
+  useWallet: () => ({
+    unlock: unlockWallet,
+  }),
+}))
 
 const activatePanel = vi.fn<(panelId: KeyboardPanelId) => void>()
 const onRemove = vi.fn()
@@ -305,14 +317,14 @@ describe("portfolio keyboard workflow", () => {
       code: "BracketRight",
       shiftKey: true,
     })
-    expect(onCrossAccountLeverageChange).toHaveBeenCalledWith(1.1)
+    expect(onCrossAccountLeverageChange).toHaveBeenCalledWith(1.101)
 
     fireEvent.keyDown(window, {
       key: "{",
       code: "BracketLeft",
       shiftKey: true,
     })
-    expect(onCrossAccountLeverageChange).toHaveBeenCalledWith(1)
+    expect(onCrossAccountLeverageChange).toHaveBeenCalledWith(1.001)
 
     setPortfolioSymbols([])
     onCrossAccountLeverageChange.mockClear()
@@ -321,7 +333,7 @@ describe("portfolio keyboard workflow", () => {
       code: "BracketRight",
       shiftKey: true,
     })
-    expect(onCrossAccountLeverageChange).toHaveBeenCalledWith(1.1)
+    expect(onCrossAccountLeverageChange).toHaveBeenCalledWith(1.101)
   })
 
   it("navigates all symbols and Enter toggles", () => {
@@ -438,5 +450,33 @@ describe("portfolio keyboard workflow", () => {
 
     fireEvent.keyDown(window, { key: "4" })
     expect(bar.textContent).toContain("rebalance")
+  })
+
+  it("keeps Enter on the real staged PIN field without global blur", () => {
+    setConnectionState("agentLocked")
+    render(() => (
+      <Harness>
+        <StagedChangesPanel
+          stagedTrades={[]}
+          currentTotalNotional={0}
+          targetTotalNotional={0}
+          currentCrossAccountLeverage={1}
+          targetCrossAccountLeverage={1}
+          canSubmit={false}
+          connectionState="agentLocked"
+        />
+      </Harness>
+    ))
+
+    fireEvent.keyDown(window, { key: "3" })
+    const pinInput = screen.getByPlaceholderText(
+      "Enter 6-digit PIN to rebalance",
+    )
+    pinInput.focus()
+    expect(document.activeElement).toBe(pinInput)
+
+    fireEvent.keyDown(pinInput, { key: "Enter" })
+    expect(document.activeElement).toBe(pinInput)
+    expect(unlockWallet).not.toHaveBeenCalled()
   })
 })

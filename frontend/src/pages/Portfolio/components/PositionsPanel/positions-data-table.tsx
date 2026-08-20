@@ -259,12 +259,8 @@ export const PositionsDataTable = (
   createEffect(() => {
     const symbols = rowSymbols()
     keyboard?.setPortfolioSymbolOrder(symbols)
-    if (
-      keyboard?.focusedPanel() === "portfolio" &&
-      keyboard.selectedPortfolioSymbol() === null &&
-      symbols.length > 0
-    ) {
-      keyboard.setSelectedPortfolioSymbol(symbols[0] ?? null)
+    if (keyboard?.focusedPanel() === "portfolio") {
+      keyboard.ensurePortfolioSelection()
     }
   })
 

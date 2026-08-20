@@ -65,6 +65,13 @@ export const focusDerivePin = (): boolean => {
   return true
 }
 
+/** Defer PIN focus until after the staged panel mounts the unlock field. */
+export const scheduleFocusStagedPin = (): void => {
+  queueMicrotask(() => {
+    focusStagedPin()
+  })
+}
+
 export const blurActiveElement = (): void => {
   const active = document.activeElement
   if (active instanceof HTMLElement) {

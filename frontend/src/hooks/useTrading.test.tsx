@@ -32,8 +32,18 @@ const mockMethods = {
 const mockMarketsResponse = {
   tickers: ["BTC/USDC:USDC", "ETH/USDC:USDC", "SOL/USDC:USDC"],
   leverageLimits: [
-    { symbol: "BTC/USDC:USDC", maxLeverage: 50, assetIndex: 0 },
-    { symbol: "ETH/USDC:USDC", maxLeverage: 25, assetIndex: 1 },
+    {
+      symbol: "BTC/USDC:USDC",
+      maxLeverage: 50,
+      assetIndex: 0,
+      onlyIsolated: false,
+    },
+    {
+      symbol: "ETH/USDC:USDC",
+      maxLeverage: 25,
+      assetIndex: 1,
+      onlyIsolated: false,
+    },
   ],
   refreshedAt: new Date().toISOString(),
   marketsMaxAgeMs: millisecondsUntilNextUtcMidnight(),
@@ -344,8 +354,18 @@ describe("useTrading hooks", () => {
       })
 
       expect(result.data).toEqual([
-        { symbol: "BTC/USDC:USDC", maxLeverage: 50, assetIndex: 0 },
-        { symbol: "ETH/USDC:USDC", maxLeverage: 25, assetIndex: 1 },
+        {
+          symbol: "BTC/USDC:USDC",
+          maxLeverage: 50,
+          assetIndex: 0,
+          onlyIsolated: false,
+        },
+        {
+          symbol: "ETH/USDC:USDC",
+          maxLeverage: 25,
+          assetIndex: 1,
+          onlyIsolated: false,
+        },
       ])
     })
   })

@@ -7,11 +7,12 @@ export const steppedCrossAccountLeverage = (
   current: number,
   deltaSteps: number,
 ): number => {
+  const stepsFromMin = Math.round(
+    (current - CROSS_ACCOUNT_LEVERAGE_MIN) / CROSS_ACCOUNT_LEVERAGE_STEP,
+  )
   const unclamped =
-    Math.round(
-      (current + deltaSteps * CROSS_ACCOUNT_LEVERAGE_STEP) /
-        CROSS_ACCOUNT_LEVERAGE_STEP,
-    ) * CROSS_ACCOUNT_LEVERAGE_STEP
+    CROSS_ACCOUNT_LEVERAGE_MIN +
+    (stepsFromMin + deltaSteps) * CROSS_ACCOUNT_LEVERAGE_STEP
 
   return Math.min(
     CROSS_ACCOUNT_LEVERAGE_MAX,
