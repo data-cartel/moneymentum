@@ -20,7 +20,7 @@ use tracing::debug;
 /// Dropping the lease (or the process dying) releases the sidecar lock so a
 /// later owner can recover abandoned runs.
 pub(crate) struct IngestionOwnerLease {
-    _connection: SqliteConnection,
+    connection: SqliteConnection,
 }
 
 /// Why acquiring the ingestion owner lease fails.
@@ -55,13 +55,25 @@ impl IngestionOwnerLease {
         {
             Ok(_) => {
                 debug!("ingestion owner lease acquired");
-                Ok(Self {
-                    _connection: connection,
-                })
+                Ok(Self { connection })
             }
             Err(error) if is_lock_held(&error) => Err(OwnerLeaseError::HeldByLiveOwner),
             Err(error) => Err(OwnerLeaseError::Sqlx(error)),
         }
+    }
+
+    /// Ends the exclusive transaction and closes the sidecar connection.
+    ///
+    /// Prefer this over relying on [`Drop`]: sqlx closes SQLite on a worker
+    /// thread, so a bare drop can leave the lock held briefly and race a
+    /// following [`Self::try_acquire`].
+    pub(crate) async fn release(self) -> Result<(), OwnerLeaseError> {
+        let mut connection = self.connection;
+        // Best-effort end of BEGIN EXCLUSIVE before close.
+        let _ = sqlx::query("ROLLBACK").execute(&mut connection).await;
+        connection.close().await?;
+        debug!("ingestion owner lease released");
+        Ok(())
     }
 }
 
@@ -132,9 +144,10 @@ mod tests {
             Level::DEBUG,
             &["ingestion owner lease acquired"]
         ));
-        drop(lease);
+        lease.release().await.unwrap();
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn dropping_the_lease_allows_a_later_owner_to_acquire() {
         let data_dir = tempfile::TempDir::new().unwrap();
@@ -146,10 +159,18 @@ mod tests {
         let lease = IngestionOwnerLease::try_acquire(&database_url)
             .await
             .unwrap();
-        drop(lease);
+        lease.release().await.unwrap();
 
         IngestionOwnerLease::try_acquire(&database_url)
             .await
             .unwrap();
+        assert!(logs_contain_at(
+            Level::DEBUG,
+            &["ingestion owner lease released"]
+        ));
+        assert!(logs_contain_at(
+            Level::DEBUG,
+            &["ingestion owner lease acquired"]
+        ));
     }
 }
