@@ -646,6 +646,14 @@ const PortfolioPage = () => {
         panelId => event.api.getPanel(panelId) !== undefined,
       )
 
+    const persistRepairedLayout = () => {
+      try {
+        writePortfolioDockviewLayout(event.api.toJSON())
+      } catch {
+        // QuotaExceededError / SecurityError: keep trading; drop persistence.
+      }
+    }
+
     const savedLayout = readPortfolioDockviewLayout()
     if (savedLayout !== null) {
       try {
@@ -653,13 +661,16 @@ const PortfolioPage = () => {
         if (!hasRequiredPanels()) {
           event.api.clear()
           applyDefaultLayout(event.api)
+          persistRepairedLayout()
         }
       } catch {
         event.api.clear()
         applyDefaultLayout(event.api)
+        persistRepairedLayout()
       }
     } else {
       applyDefaultLayout(event.api)
+      persistRepairedLayout()
     }
 
     const layoutChange = event.api.onDidLayoutChange(() => {
