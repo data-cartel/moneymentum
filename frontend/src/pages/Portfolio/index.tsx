@@ -299,9 +299,18 @@ const PortfolioPage = () => {
   let layoutChangeDisposable: { dispose: () => void } | undefined
   let pendingLayoutFrame: number | undefined
   let pendingLayoutSnapshot: ReturnType<DockviewApi["toJSON"]> | undefined
+  let defaultLayoutSizingTimeout: number | undefined
+  let defaultLayoutSizingCancelled = false
   const [dockviewApi, setDockviewApi] = createSignal<DockviewApi | undefined>()
   const [containerWidth, setContainerWidth] = createSignal(0)
   const [containerHeight, setContainerHeight] = createSignal(0)
+  const [defaultLayoutSizing, setDefaultLayoutSizing] = createSignal<{
+    api: DockviewApi
+    portfolioPanel: ReturnType<DockviewApi["addPanel"]>
+    performancePanel: ReturnType<DockviewApi["addPanel"]>
+    stagedPanel: ReturnType<DockviewApi["addPanel"]>
+    factorsPanel: ReturnType<DockviewApi["addPanel"]>
+  } | null>(null)
 
   const stagedConnectionState = (): StagedConnectionState => {
     if (!isConnected()) {
@@ -549,9 +558,6 @@ const PortfolioPage = () => {
   }
 
   const applyDefaultLayout = (api: DockviewApi) => {
-    const layoutWidth = containerWidth()
-    const layoutHeight = containerHeight()
-
     const portfolioConfig = findPanelCatalogEntry("portfolio")
     const allSymbolsConfig = findPanelCatalogEntry("allSymbols")
     const performanceConfig = findPanelCatalogEntry("performance")
@@ -617,28 +623,72 @@ const PortfolioPage = () => {
       position: { referencePanel: factorsConfig.id, direction: "right" },
     })
 
+    setDefaultLayoutSizing({
+      api,
+      portfolioPanel,
+      performancePanel,
+      stagedPanel,
+      factorsPanel,
+    })
+  }
+
+  // createEffect: retry default panel sizing until the dockview host is large
+  // enough; cancel any pending timeout when the pending target changes.
+  createEffect(() => {
+    const pending = defaultLayoutSizing()
+    if (pending === null) {
+      return
+    }
+
+    const layoutWidth = containerWidth()
+    const layoutHeight = containerHeight()
     if (layoutWidth < 100 || layoutHeight < 100) {
       return
     }
 
-    window.setTimeout(() => {
+    if (defaultLayoutSizingTimeout !== undefined) {
+      window.clearTimeout(defaultLayoutSizingTimeout)
+      defaultLayoutSizingTimeout = undefined
+    }
+
+    const activeApi = dockviewApi()
+    // setTimeout: wait one macrotask so Dockview finishes inserting panels
+    // before setSize.
+    defaultLayoutSizingTimeout = window.setTimeout(() => {
+      defaultLayoutSizingTimeout = undefined
+      if (defaultLayoutSizingCancelled) {
+        return
+      }
+      if (activeApi !== pending.api) {
+        setDefaultLayoutSizing(null)
+        return
+      }
+
       const leftWidth = Math.floor(layoutWidth * 0.48)
       const rightWidth = Math.max(layoutWidth - leftWidth, 1)
       const topHeight = Math.floor(layoutHeight * 0.45)
       const bottomHeight = Math.max(layoutHeight - topHeight, 1)
 
-      portfolioPanel.group.api.setSize({ width: leftWidth })
-      performancePanel.group.api.setSize({ width: rightWidth })
-      performancePanel.api.setSize({ height: topHeight })
-      stagedPanel.group.api.setSize({
+      pending.portfolioPanel.group.api.setSize({ width: leftWidth })
+      pending.performancePanel.group.api.setSize({ width: rightWidth })
+      pending.performancePanel.api.setSize({ height: topHeight })
+      pending.stagedPanel.group.api.setSize({
         width: Math.floor(rightWidth * 0.4),
         height: bottomHeight,
       })
-      factorsPanel.group.api.setSize({
+      pending.factorsPanel.group.api.setSize({
         width: Math.floor(rightWidth * 0.25),
       })
+      setDefaultLayoutSizing(null)
     }, 0)
-  }
+
+    onCleanup(() => {
+      if (defaultLayoutSizingTimeout !== undefined) {
+        window.clearTimeout(defaultLayoutSizingTimeout)
+        defaultLayoutSizingTimeout = undefined
+      }
+    })
+  })
 
   const handleReady = (event: DockviewReadyEvent) => {
     setDockviewApi(event.api)
@@ -711,6 +761,11 @@ const PortfolioPage = () => {
   }
 
   onCleanup(() => {
+    defaultLayoutSizingCancelled = true
+    if (defaultLayoutSizingTimeout !== undefined) {
+      window.clearTimeout(defaultLayoutSizingTimeout)
+      defaultLayoutSizingTimeout = undefined
+    }
     layoutChangeDisposable?.dispose()
   })
 
