@@ -550,51 +550,69 @@ const PortfolioPage = () => {
     const layoutWidth = containerWidth()
     const layoutHeight = containerHeight()
 
+    const portfolioConfig = findPanelCatalogEntry("portfolio")
+    const allSymbolsConfig = findPanelCatalogEntry("allSymbols")
+    const performanceConfig = findPanelCatalogEntry("performance")
+    const stagedConfig = findPanelCatalogEntry("staged")
+    const factorsConfig = findPanelCatalogEntry("factors")
+    const riskConfig = findPanelCatalogEntry("risk")
+
+    if (
+      portfolioConfig === undefined ||
+      allSymbolsConfig === undefined ||
+      performanceConfig === undefined ||
+      stagedConfig === undefined ||
+      factorsConfig === undefined ||
+      riskConfig === undefined
+    ) {
+      return
+    }
+
     const portfolioPanel = api.addPanel({
-      id: "portfolio",
-      component: "portfolio",
-      tabComponent: "portfolioTab",
+      id: portfolioConfig.id,
+      component: portfolioConfig.component,
+      tabComponent: portfolioConfig.tabComponent,
       title: `PORTFOLIO (${targetPositionCount()})`,
     })
 
     api.addPanel({
-      id: "allSymbols",
-      component: "allSymbols",
-      tabComponent: "lockedTab",
-      title: "ALL SYMBOLS",
-      position: { referencePanel: "portfolio", direction: "within" },
+      id: allSymbolsConfig.id,
+      component: allSymbolsConfig.component,
+      tabComponent: allSymbolsConfig.tabComponent,
+      title: allSymbolsConfig.title,
+      position: { referencePanel: portfolioConfig.id, direction: "within" },
     })
 
     const performancePanel = api.addPanel({
-      id: "performance",
-      component: "performance",
-      tabComponent: "closableTab",
-      title: "PERFORMANCE",
-      position: { referencePanel: "portfolio", direction: "right" },
+      id: performanceConfig.id,
+      component: performanceConfig.component,
+      tabComponent: performanceConfig.tabComponent,
+      title: performanceConfig.title,
+      position: { referencePanel: portfolioConfig.id, direction: "right" },
     })
 
     const stagedPanel = api.addPanel({
-      id: "staged",
-      component: "staged",
-      tabComponent: "lockedTab",
-      title: "STAGED CHANGES",
-      position: { referencePanel: "performance", direction: "below" },
+      id: stagedConfig.id,
+      component: stagedConfig.component,
+      tabComponent: stagedConfig.tabComponent,
+      title: stagedConfig.title,
+      position: { referencePanel: performanceConfig.id, direction: "below" },
     })
 
     const factorsPanel = api.addPanel({
-      id: "factors",
-      component: "factors",
-      tabComponent: "closableTab",
-      title: "FACTORS",
-      position: { referencePanel: "staged", direction: "right" },
+      id: factorsConfig.id,
+      component: factorsConfig.component,
+      tabComponent: factorsConfig.tabComponent,
+      title: factorsConfig.title,
+      position: { referencePanel: stagedConfig.id, direction: "right" },
     })
 
     api.addPanel({
-      id: "risk",
-      component: "risk",
-      tabComponent: "closableTab",
-      title: "RISK",
-      position: { referencePanel: "factors", direction: "right" },
+      id: riskConfig.id,
+      component: riskConfig.component,
+      tabComponent: riskConfig.tabComponent,
+      title: riskConfig.title,
+      position: { referencePanel: factorsConfig.id, direction: "right" },
     })
 
     if (layoutWidth < 100 || layoutHeight < 100) {
