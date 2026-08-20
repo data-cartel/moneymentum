@@ -645,7 +645,11 @@ const PortfolioPage = () => {
     }
 
     const layoutChange = event.api.onDidLayoutChange(() => {
-      writePortfolioDockviewLayout(event.api.toJSON())
+      try {
+        writePortfolioDockviewLayout(event.api.toJSON())
+      } catch {
+        // QuotaExceededError / SecurityError: keep trading; drop persistence.
+      }
     })
     layoutChangeDisposable = layoutChange
   }
