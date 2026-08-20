@@ -95,8 +95,7 @@ const PortfolioPage = () => {
   })
   const betaResult = useBeta(
     () => portfolio.targetPortfolio,
-    () => portfolio.targetTotalNotional,
-    () => portfolio.readonlyBetaPositions,
+    () => portfolio.readonlyBtcRows,
     () => bitcoinBetaBenchmark,
   )
 
@@ -313,6 +312,7 @@ const PortfolioPage = () => {
                   beta={betaResult.beta}
                   isBetaLoading={betaResult.isLoading}
                   betaError={betaResult.error}
+                  betaDegradedReason={betaResult.degradedReason}
                   excludedBetaSymbols={betaResult.excludedSymbols}
                   betaDataAgeHours={betaResult.dataAgeHours}
                   isBetaDataStale={betaResult.isDataStale}

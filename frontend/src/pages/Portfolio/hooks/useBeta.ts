@@ -1,9 +1,9 @@
 import * as Effect from "effect/Effect"
 import { useQuery } from "@tanstack/solid-query"
 import { createMemo } from "solid-js"
+import { getErrorMessage } from "@/lib/error-message"
 import { postJson } from "@/lib/http"
 import type { PortfolioInterface } from "./usePortfolioState"
-import type { ReadonlyBetaPosition } from "./useReadonlyPortfolioState"
 
 export interface BetaBenchmark {
   symbol: string
@@ -13,59 +13,57 @@ export interface BetaBenchmark {
 }
 const STALE_BETA_DATA_THRESHOLD_HOURS = 24
 
-const symbolToTicker = (symbol: string): string =>
-  symbol.includes("/") ? (symbol.split("/")[0] ?? symbol) : symbol
-
-const weightsFromPortfolio = (
-  portfolio: Record<string, PortfolioInterface | undefined>,
-  portfolioTotalNotional: number,
-  readonlyPositions: ReadonlyBetaPosition[],
-): Record<string, number> => {
-  const exchangePositions = Object.values(portfolio).filter(
-    (position): position is PortfolioInterface => position !== undefined,
-  )
-  const includedReadonlyPositions = readonlyPositions.filter(
-    position =>
-      position.includeInBeta &&
-      Number.isFinite(position.notionalUsd) &&
-      position.notionalUsd > 0,
-  )
-
-  const readonlyTotalNotional = includedReadonlyPositions.reduce(
-    (notionalSum, position) => notionalSum + position.notionalUsd,
-    0,
-  )
-  const totalNotional = portfolioTotalNotional + readonlyTotalNotional
-
-  if (totalNotional <= 0) return {}
-
-  const signedWeights: Record<string, number> = {}
-
-  for (const position of exchangePositions) {
-    const ticker = symbolToTicker(position.symbol)
-    const signedWeight =
-      (position.notional / totalNotional) * (position.side === "buy" ? 1 : -1)
-    signedWeights[ticker] = (signedWeights[ticker] ?? 0) + signedWeight
-  }
-
-  for (const position of includedReadonlyPositions) {
-    const signedWeight =
-      (position.notionalUsd / totalNotional) *
-      (position.side === "buy" ? 1 : -1)
-    signedWeights[position.symbol] =
-      (signedWeights[position.symbol] ?? 0) + signedWeight
-  }
-
-  return signedWeights
+export interface ReadonlyBetaEntry {
+  address: string
+  includeInBeta: boolean
 }
 
-const queryKeyFromWeights = (weights: Record<string, number>): string =>
-  Object.entries(weights)
-    .sort(([leftTicker], [rightTicker]) =>
-      leftTicker.localeCompare(rightTicker),
-    )
-    .map(([ticker, weight]) => `${ticker}:${weight}`)
-    .join("|")
+interface BetaPositionInput {
+  symbol: string
+  side: "buy" | "sell"
+  notionalUsd: string
+}
+
+interface BetaRequest {
+  positions: BetaPositionInput[]
+  readOnlyBtc: ReadonlyBetaEntry[]
+  benchmark: string
+}
+
+export type BetaDegradedReason =
+  | "missing_bitcoin_balance"
+  | "btc_price_unavailable"
+
+const betaRequestFromPortfolio = (
+  portfolio: Record<string, PortfolioInterface | undefined>,
+  readonlyEntries: ReadonlyBetaEntry[],
+  benchmark: string,
+): BetaRequest => ({
+  positions: Object.values(portfolio).flatMap(position =>
+    position === undefined
+      ? []
+      : [
+          {
+            symbol: position.symbol,
+            side: position.side,
+            notionalUsd: String(position.notional),
+          },
+        ],
+  ),
+  readOnlyBtc: readonlyEntries,
+  benchmark,
+})
+
+const degradedReasonFromError = (
+  error: unknown,
+): BetaDegradedReason | null => {
+  const message = getErrorMessage(error)
+
+  return message === "missing_bitcoin_balance" ||
+    message === "btc_price_unavailable"
+    ? message
+    : null
+}
 
 interface BetaResponse {
   beta: number | null
@@ -74,14 +72,10 @@ interface BetaResponse {
   data_age_hours: number
 }
 
-const fetchBeta = (
-  weights: Record<string, number>,
-  benchmark: string,
-  signal?: AbortSignal,
-) =>
+const fetchBeta = (request: BetaRequest, signal?: AbortSignal) =>
   postJson<BetaResponse>(
     `${import.meta.env.BASE_URL}api/beta`,
-    { weights, benchmark },
+    request,
     {
       signal: signal
         ? AbortSignal.any([signal, AbortSignal.timeout(10_000)])
@@ -91,18 +85,16 @@ const fetchBeta = (
 
 export const useBeta = (
   portfolio: () => Record<string, PortfolioInterface | undefined>,
-  portfolioTotalNotional: () => number,
-  readonlyPositions: () => ReadonlyBetaPosition[],
+  readonlyEntries: () => ReadonlyBetaEntry[],
   selectedBenchmark: () => BetaBenchmark,
 ) => {
-  const weights = createMemo(() =>
-    weightsFromPortfolio(
+  const request = createMemo(() =>
+    betaRequestFromPortfolio(
       portfolio(),
-      portfolioTotalNotional(),
-      readonlyPositions(),
+      readonlyEntries(),
+      selectedBenchmark().symbol,
     ),
   )
-  const weightsKey = createMemo(() => queryKeyFromWeights(weights()))
   const methodology = createMemo(() => {
     const benchmark = selectedBenchmark()
 
@@ -115,19 +107,19 @@ export const useBeta = (
   })
 
   const query = useQuery(() => {
-    const currentWeights = weights()
-    const currentWeightsKey = weightsKey()
-    const currentBenchmark = selectedBenchmark()
-    const hasData = Object.keys(currentWeights).length > 0
+    const currentRequest = request()
+    const hasIncludedExposure =
+      currentRequest.positions.length > 0 ||
+      currentRequest.readOnlyBtc.some(entry => entry.includeInBeta)
 
     return {
-      queryKey: ["beta", currentBenchmark.symbol, currentWeightsKey] as const,
+      queryKey: ["beta", currentRequest] as const,
       queryFn: (ctx: { signal: AbortSignal }) =>
-        Effect.runPromise(
-          fetchBeta(currentWeights, currentBenchmark.symbol, ctx.signal),
-        ),
-      enabled: hasData,
-      retry: 2,
+        Effect.runPromise(fetchBeta(currentRequest, ctx.signal)),
+      enabled: hasIncludedExposure,
+      retry: (failureCount: number, error: unknown) =>
+        degradedReasonFromError(error) === null && failureCount < 2,
+      placeholderData: (previousData: BetaResponse | undefined) => previousData,
     }
   })
 
@@ -140,6 +132,9 @@ export const useBeta = (
     },
     get error() {
       return query.error
+    },
+    get degradedReason() {
+      return degradedReasonFromError(query.error)
     },
     get excludedSymbols() {
       return query.data?.excluded_symbols ?? []

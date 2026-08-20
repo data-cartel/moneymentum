@@ -995,6 +995,203 @@ mod tests {
 
     #[traced_test]
     #[tokio::test]
+    async fn post_beta_accepts_separate_positions_and_readonly_btc_sources() {
+        let data_dir = TempDir::new().unwrap();
+        std::fs::copy(
+            std::path::Path::new("fixtures/ohlcv_1d_beta.csv"),
+            data_dir.path().join("ohlcv_1d.csv"),
+        )
+        .unwrap();
+        let router = test_router(data_dir.path()).await;
+
+        let response = router
+            .oneshot(post_json(
+                "/beta",
+                &serde_json::json!({
+                    "positions": [{
+                        "symbol": "BTC/USDC:USDC",
+                        "side": "buy",
+                        "notionalUsd": "100"
+                    }],
+                    "readOnlyBtc": [],
+                    "benchmark": "BTC"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+        assert_eq!(payload["effective_weights"]["BTC"], 1.0);
+        assert!(logs_contain_at(
+            tracing::Level::DEBUG,
+            &[
+                "portfolio beta weights derived",
+                "exchange_positions=1",
+                "readonly_positions=0",
+            ]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn post_beta_preserves_the_legacy_weights_contract() {
+        let data_dir = TempDir::new().unwrap();
+        std::fs::copy(
+            std::path::Path::new("fixtures/ohlcv_1d_beta.csv"),
+            data_dir.path().join("ohlcv_1d.csv"),
+        )
+        .unwrap();
+        let router = test_router(data_dir.path()).await;
+
+        let response = router
+            .oneshot(post_json(
+                "/beta",
+                &serde_json::json!({
+                    "weights": { "BTC": 1.0 },
+                    "benchmark": "BTC"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(logs_contain_at(
+            tracing::Level::INFO,
+            &["portfolio beta calculated"]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn post_beta_legacy_contract_tolerates_extension_fields() {
+        let data_dir = TempDir::new().unwrap();
+        std::fs::copy(
+            std::path::Path::new("fixtures/ohlcv_1d_beta.csv"),
+            data_dir.path().join("ohlcv_1d.csv"),
+        )
+        .unwrap();
+        let router = test_router(data_dir.path()).await;
+
+        let response = router
+            .oneshot(post_json(
+                "/beta",
+                &serde_json::json!({
+                    "weights": { "BTC": 1.0 },
+                    "benchmark": "BTC",
+                    "clientExtension": { "version": 1 }
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(logs_contain_at(
+            tracing::Level::INFO,
+            &["portfolio beta calculated"]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn post_beta_rejects_negative_position_notional_before_external_calls() {
+        let data_dir = TempDir::new().unwrap();
+        let router = test_router(data_dir.path()).await;
+
+        let response = router
+            .oneshot(post_json(
+                "/beta",
+                &serde_json::json!({
+                    "positions": [{
+                        "symbol": "BTC",
+                        "side": "buy",
+                        "notionalUsd": "-1"
+                    }],
+                    "readOnlyBtc": [],
+                    "benchmark": "BTC"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(logs_contain_at(
+            tracing::Level::DEBUG,
+            &["portfolio beta exposure rejected", "reason=InvalidNotional",]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn post_beta_rejects_request_notional_overflow() {
+        let data_dir = TempDir::new().unwrap();
+        let router = test_router(data_dir.path()).await;
+        let max_notional = rust_decimal::Decimal::MAX.to_string();
+
+        let response = router
+            .oneshot(post_json(
+                "/beta",
+                &serde_json::json!({
+                    "positions": [
+                        {
+                            "symbol": "BTC",
+                            "side": "buy",
+                            "notionalUsd": max_notional
+                        },
+                        {
+                            "symbol": "ETH",
+                            "side": "buy",
+                            "notionalUsd": max_notional
+                        }
+                    ],
+                    "readOnlyBtc": [{
+                        "address": "1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
+                        "includeInBeta": true
+                    }],
+                    "benchmark": "BTC"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(logs_contain_at(
+            tracing::Level::DEBUG,
+            &["portfolio beta request rejected", "reason=NotionalOverflow",]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn post_beta_rejects_duplicate_readonly_addresses_before_external_calls() {
+        let data_dir = TempDir::new().unwrap();
+        let router = test_router(data_dir.path()).await;
+        let address = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT";
+
+        let response = router
+            .oneshot(post_json(
+                "/beta",
+                &serde_json::json!({
+                    "positions": [],
+                    "readOnlyBtc": [
+                        { "address": address, "includeInBeta": true },
+                        { "address": address, "includeInBeta": false }
+                    ],
+                    "benchmark": "BTC"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(logs_contain_at(
+            tracing::Level::DEBUG,
+            &["portfolio beta request rejected", "reason=DuplicateAddress",]
+        ));
+    }
+
+    #[traced_test]
+    #[tokio::test]
     async fn get_factors_returns_per_ticker_factor_scores_json() {
         let data_dir = TempDir::new().unwrap();
         std::fs::copy(

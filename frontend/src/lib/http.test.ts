@@ -60,6 +60,24 @@ describe("http", () => {
       }
     })
 
+    it("uses an API error code as HttpStatusError detail", async () => {
+      mockFetch().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: () => Promise.resolve({ error: "missing_bitcoin_balance" }),
+      })
+
+      const exit = await Effect.runPromiseExit(fetchJson("/api/test"))
+
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure" && exit.cause._tag === "Fail") {
+        expect(exit.cause.error).toBeInstanceOf(HttpStatusError)
+        expect((exit.cause.error as HttpStatusError).detail).toBe(
+          "missing_bitcoin_balance",
+        )
+      }
+    })
+
     it("returns HttpStatusError without detail when body is unparseable", async () => {
       mockFetch().mockResolvedValue({
         ok: false,
