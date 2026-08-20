@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use crate::hyperliquid::{CandleIngester, FundingRateIngester, Hyperliquid};
+use crate::hyperliquid::{CandleIngester, FundingRateIngester, Hyperliquid, IngestBatchOutcome};
 use crate::market_metadata::RefreshError;
 
 use super::orchestration::LOST_RACE_REASON;
@@ -138,7 +138,7 @@ impl Job for IngestionJob {
         );
 
         match ingest_work(self.work, &candle_ingester, &funding_ingester, services).await {
-            Ok(last_record) => {
+            Ok((last_record, batch_outcome)) => {
                 // The run stays Running until this commits; surface a
                 // terminalization failure so the worker retries instead of
                 // leaving the slot wedged until the next startup reconcile.
@@ -146,11 +146,23 @@ impl Job for IngestionJob {
                     error!(error = %err, run_id = %self.run_id, "failed to record ingestion completion");
                     return Err(err.into());
                 }
-                info!(
-                    run_id = %self.run_id,
-                    work = self.work.schedule_key(),
-                    "ingestion complete"
-                );
+                match batch_outcome {
+                    IngestBatchOutcome::Written { fetched_rows } => {
+                        info!(
+                            run_id = %self.run_id,
+                            work = self.work.schedule_key(),
+                            fetched_rows,
+                            "ingestion complete"
+                        );
+                    }
+                    IngestBatchOutcome::Unchanged => {
+                        info!(
+                            run_id = %self.run_id,
+                            work = self.work.schedule_key(),
+                            "ingestion complete with unchanged data"
+                        );
+                    }
+                }
             }
             Err(err) => {
                 error!(
@@ -181,7 +193,7 @@ async fn ingest_work(
     candle_ingester: &CandleIngester<dyn Hyperliquid>,
     funding_ingester: &FundingRateIngester<dyn Hyperliquid>,
     services: &IngestionServices,
-) -> Result<DateTime<Utc>, RefreshError> {
+) -> Result<(DateTime<Utc>, IngestBatchOutcome), RefreshError> {
     let markets = crate::market_metadata::refresh_markets(
         services.hyperliquid.as_ref(),
         &services.market_catalog,
@@ -190,20 +202,20 @@ async fn ingest_work(
     )
     .await?;
 
-    match work {
+    let batch_outcome = match work {
         IngestionWork::Funding => {
             funding_ingester
                 .ingest_with_markets(&services.data_dir, &markets)
-                .await?;
+                .await?
         }
         IngestionWork::Candles { timeframe } => {
             candle_ingester
                 .ingest_with_markets(timeframe, &services.data_dir, &markets)
-                .await?;
+                .await?
         }
-    }
+    };
 
-    Ok(Utc::now())
+    Ok((Utc::now(), batch_outcome))
 }
 
 async fn holds_one_running_slot(
