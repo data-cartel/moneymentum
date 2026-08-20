@@ -295,9 +295,9 @@ const PortfolioPage = () => {
   const [metricVisibility, setMetricVisibility] =
     createSignal<PortfolioMetricVisibility>(readPortfolioMetricVisibility())
 
-  let dockviewApi: DockviewApi | undefined
   let dockviewContainer: HTMLDivElement | undefined
   let layoutChangeDisposable: { dispose: () => void } | undefined
+  const [dockviewApi, setDockviewApi] = createSignal<DockviewApi | undefined>()
   const [containerWidth, setContainerWidth] = createSignal(0)
   const [containerHeight, setContainerHeight] = createSignal(0)
 
@@ -384,7 +384,7 @@ const PortfolioPage = () => {
   // createEffect: keep PORTFOLIO tab title count in sync
   createEffect(() => {
     const count = targetPositionCount()
-    dockviewApi?.getPanel("portfolio")?.api.setTitle(`PORTFOLIO (${count})`)
+    dockviewApi()?.getPanel("portfolio")?.api.setTitle(`PORTFOLIO (${count})`)
   })
 
   onMount(() => {
@@ -639,7 +639,7 @@ const PortfolioPage = () => {
   }
 
   const handleReady = (event: DockviewReadyEvent) => {
-    dockviewApi = event.api
+    setDockviewApi(event.api)
 
     const hasRequiredPanels = (): boolean =>
       (["portfolio", "allSymbols", "staged"] as const).every(
