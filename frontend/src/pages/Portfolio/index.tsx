@@ -297,6 +297,8 @@ const PortfolioPage = () => {
 
   let dockviewContainer: HTMLDivElement | undefined
   let layoutChangeDisposable: { dispose: () => void } | undefined
+  let pendingLayoutFrame: number | undefined
+  let pendingLayoutSnapshot: ReturnType<DockviewApi["toJSON"]> | undefined
   const [dockviewApi, setDockviewApi] = createSignal<DockviewApi | undefined>()
   const [containerWidth, setContainerWidth] = createSignal(0)
   const [containerHeight, setContainerHeight] = createSignal(0)
@@ -673,14 +675,39 @@ const PortfolioPage = () => {
       persistRepairedLayout()
     }
 
-    const layoutChange = event.api.onDidLayoutChange(() => {
+    const flushPendingLayoutWrite = () => {
+      if (pendingLayoutFrame !== undefined) {
+        window.cancelAnimationFrame(pendingLayoutFrame)
+        pendingLayoutFrame = undefined
+      }
+      if (pendingLayoutSnapshot === undefined) {
+        return
+      }
+      const layout = pendingLayoutSnapshot
+      pendingLayoutSnapshot = undefined
       try {
-        writePortfolioDockviewLayout(event.api.toJSON())
+        writePortfolioDockviewLayout(layout)
       } catch {
         // QuotaExceededError / SecurityError: keep trading; drop persistence.
       }
+    }
+
+    const layoutChange = event.api.onDidLayoutChange(() => {
+      pendingLayoutSnapshot = event.api.toJSON()
+      if (pendingLayoutFrame !== undefined) {
+        return
+      }
+      pendingLayoutFrame = window.requestAnimationFrame(() => {
+        pendingLayoutFrame = undefined
+        flushPendingLayoutWrite()
+      })
     })
-    layoutChangeDisposable = layoutChange
+    layoutChangeDisposable = {
+      dispose: () => {
+        flushPendingLayoutWrite()
+        layoutChange.dispose()
+      },
+    }
   }
 
   onCleanup(() => {
