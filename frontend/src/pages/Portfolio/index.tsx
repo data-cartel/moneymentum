@@ -328,11 +328,6 @@ const AddPanelMenu = (props: IDockviewHeaderActionsProps) => {
 }
 
 const PortfolioPage = () => {
-  const portfolioOwnerToken = bindDockviewSolidOwner(getOwner())
-  onCleanup(() => {
-    releaseDockviewSolidOwner(portfolioOwnerToken)
-  })
-
   const { isNetworkSwitching } = useNetwork()
   const { hasStoredSession, isLocked, canTrade, isConnected } = useWallet()
   const DockviewProviders = useDockviewPanelProviders()
@@ -893,10 +888,9 @@ const PortfolioPage = () => {
 
   /** Bind dockview portals under the keyboard provider owner so panels see hotkeys. */
   const DockviewOwnerBinder = () => {
-    const owner = getOwner()
-    bindDockviewSolidOwner(owner)
+    const ownerToken = bindDockviewSolidOwner(getOwner())
     onCleanup(() => {
-      bindDockviewSolidOwner(null)
+      releaseDockviewSolidOwner(ownerToken)
     })
     return null
   }
