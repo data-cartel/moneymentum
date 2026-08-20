@@ -25,7 +25,7 @@ pub(crate) struct IngestionOwnerLease {
 
 /// Why acquiring the ingestion owner lease fails.
 #[derive(Debug, Error)]
-pub(crate) enum OwnerLeaseError {
+pub enum OwnerLeaseError {
     #[error("another moneymentum process holds the ingestion owner lease")]
     HeldByLiveOwner,
     #[error("ingestion owner lease requires a sqlite database_url")]

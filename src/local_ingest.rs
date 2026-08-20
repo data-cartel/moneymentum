@@ -33,7 +33,7 @@ const LOCAL_INGEST_COMPLETION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// Why a local on-demand ingestion pass fails.
 #[derive(Debug, Error)]
-pub(crate) enum LocalIngestError {
+pub enum LocalIngestError {
     #[error("no idle ingestion units available; every unit already has a running run")]
     NothingEnqueued,
     #[error("ingestion run {run_id} finished with status {status:?}, expected Completed")]
@@ -48,7 +48,7 @@ pub(crate) enum LocalIngestError {
     #[error(transparent)]
     OwnerLease(#[from] OwnerLeaseError),
     #[error(transparent)]
-    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
+    Bootstrap(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Runs a full on-demand ingestion pass for every idle active work unit and
@@ -59,18 +59,17 @@ pub(crate) enum LocalIngestError {
 ///
 /// # Errors
 ///
-/// Returns an error when bootstrap fails, every unit is already busy, or a
-/// started run does not complete successfully.
-pub async fn run_local_ingest(
-    config: Config,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    run_local_ingest_inner(config).await.map_err(Into::into)
+/// Returns an error when bootstrap fails, every unit is already busy, a started
+/// run does not complete successfully, the worker exits early, or the wait
+/// times out.
+pub async fn run_local_ingest(config: Config) -> Result<(), LocalIngestError> {
+    run_local_ingest_inner(config).await
 }
 
 fn local_ingest_err(
     error: impl Into<Box<dyn std::error::Error + Send + Sync>>,
 ) -> LocalIngestError {
-    LocalIngestError::Other(error.into())
+    LocalIngestError::Bootstrap(error.into())
 }
 
 struct LocalIngestRuntime {

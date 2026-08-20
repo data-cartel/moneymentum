@@ -14,7 +14,7 @@ use super::work::IngestionWork;
 /// state; every other state is final.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "TEXT")]
-pub(crate) enum IngestionRunStatus {
+pub enum IngestionRunStatus {
     Running,
     Completed,
     Failed,

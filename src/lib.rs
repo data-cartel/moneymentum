@@ -15,7 +15,7 @@ mod screener;
 mod timeframe;
 mod venue;
 
-pub use local_ingest::run_local_ingest;
+pub use local_ingest::{LocalIngestError, run_local_ingest};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
