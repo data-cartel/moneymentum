@@ -49,6 +49,10 @@ import {
   type PortfolioMetricColumnId,
 } from "./portfolioMetricVisibility"
 import { positionCellInputProps } from "./positionCellInput"
+import {
+  PORTFOLIO_CELL_ATTR,
+  PORTFOLIO_SYMBOL_ATTR,
+} from "../../keyboard/portfolioCellFocus"
 
 export interface PositionRowMetrics {
   signedFundingRate: number | null
@@ -90,6 +94,10 @@ export const PositionsPanelRow = (props: {
   symbolsDeltaBelowMinimum: string[]
   symbolDelta: number
   rebalanceError?: string
+  isSelected?: boolean
+  leverageEditorRequested?: boolean
+  onSelect?: () => void
+  onLeverageEditorClosed?: () => void
 }): JSX.Element => {
   const notional = () => props.position().notional
   const weight = createMemo(() => {
@@ -124,8 +132,7 @@ export const PositionsPanelRow = (props: {
   const baseSymbol = () =>
     props.position().symbol.split("/")[0] ?? props.position().symbol
 
-  const leverageEditorSpan = () =>
-    leverageEditorColumnSpan(props.visibleMetricColumns)
+  const leverageEditorSpan = () => leverageEditorColumnSpan()
 
   const tableColumnCount = () =>
     positionTableColumnIds(props.visibleMetricColumns).length
@@ -135,10 +142,18 @@ export const PositionsPanelRow = (props: {
   const stickyErrorBackgroundClass = () =>
     rebalanceError() && !isClosing() && positionStickyErrorBackground
 
-  const stickyCellStyle = () =>
-    rebalanceError() && !isClosing()
+  const stickyCellStyle = () => {
+    if (props.isSelected) {
+      return {
+        "background-color":
+          "color-mix(in oklch, var(--primary) 14%, var(--background))",
+      }
+    }
+
+    return rebalanceError() && !isClosing()
       ? positionStickyErrorBackgroundStyle
       : positionStickyRowBackgroundStyle(props.status)
+  }
 
   const metricSkeleton = () => (
     <Skeleton class="ml-auto h-3 w-[3rem] inline-block align-middle" />
@@ -271,6 +286,9 @@ export const PositionsPanelRow = (props: {
     leverageKeyboardEntry = ""
   }
 
+  let rowElement: HTMLTableRowElement | undefined
+  let openedByKeyboardRequest = false
+
   const openLeverageEditor = () => {
     clearLeverageEditorTimers()
     resetLeverageKeyboardEntry()
@@ -286,7 +304,44 @@ export const PositionsPanelRow = (props: {
     resetLeverageKeyboardEntry()
     setIsLeverageEditorExpanded(false)
     setIsLeverageEditorMounted(false)
+    openedByKeyboardRequest = false
+    props.onLeverageEditorClosed?.()
   }
+
+  // createEffect: open/close leverage editor from keyboard controller request
+  createEffect(() => {
+    if (props.leverageEditorRequested) {
+      openedByKeyboardRequest = true
+      if (!isLeverageEditorMounted()) {
+        openLeverageEditor()
+      }
+      return
+    }
+
+    if (openedByKeyboardRequest && isLeverageEditorMounted()) {
+      openedByKeyboardRequest = false
+      clearLeverageEditorTimers()
+      resetLeverageKeyboardEntry()
+      setIsLeverageEditorExpanded(false)
+      setIsLeverageEditorMounted(false)
+    }
+  })
+
+  // createEffect: scroll selected row into view
+  createEffect(() => {
+    if (!props.isSelected) {
+      return
+    }
+    rowElement?.scrollIntoView({ block: "nearest" })
+  })
+
+  const showRowHints = () => props.isSelected === true
+
+  const rowHintClass = () =>
+    cn(
+      "inline-flex w-3 shrink-0 justify-center font-mono text-[8px] text-muted-foreground",
+      showRowHints() ? "opacity-60" : "opacity-0",
+    )
 
   const applyLeverageKeyboardEntry = (digit: string) => {
     const maxLeverage = Math.floor(props.maxLeverage ?? 1)
@@ -378,13 +433,25 @@ export const PositionsPanelRow = (props: {
   return (
     <>
       <tr
+        ref={element => {
+          rowElement = element
+        }}
+        onClick={() => {
+          props.onSelect?.()
+        }}
         class={cn(
-          "border-b border-border/30 position-row h-7 transition-[height,opacity] duration-200 ease-out",
+          "border-b border-border/30 position-row h-7 transition-[height,opacity,background-color] duration-200 ease-out",
           isLeverageEditorExpanded() && "h-14",
-          isClosing() && "bg-red-500/5",
-          isNew() && "bg-green-500/5",
-          rebalanceError() && !isClosing() && "bg-destructive/5",
+          isClosing() && !props.isSelected && "bg-red-500/5",
+          isNew() && !props.isSelected && "bg-green-500/5",
+          rebalanceError() &&
+            !isClosing() &&
+            !props.isSelected &&
+            "bg-destructive/5",
+          props.isSelected && "bg-primary/15",
         )}
+        data-portfolio-row={props.symbol}
+        aria-selected={props.isSelected === true}
       >
         <td
           class={cn(
@@ -418,6 +485,7 @@ export const PositionsPanelRow = (props: {
               >
                 {baseSymbol()}
               </span>
+              <kbd class={rowHintClass()}>l</kbd>
               <LeverageEditorTrigger
                 isOpen={isLeverageEditorMounted()}
                 onOpen={openLeverageEditor}
@@ -437,6 +505,7 @@ export const PositionsPanelRow = (props: {
             <>
               <td class={positionBodyCellClass("side")}>
                 <div class={positionBodyCellInnerClass}>
+                  <kbd class={rowHintClass()}>t</kbd>
                   <button
                     type="button"
                     disabled={isClosing()}
@@ -465,9 +534,14 @@ export const PositionsPanelRow = (props: {
                       <span class="text-rose-500 text-[10px]">→ 0%</span>
                     }
                   >
+                    <kbd class={rowHintClass()}>w</kbd>
                     <input
                       type="number"
                       {...positionCellInputProps}
+                      {...{
+                        [PORTFOLIO_CELL_ATTR]: "weight",
+                        [PORTFOLIO_SYMBOL_ATTR]: props.symbol,
+                      }}
                       value={weightInput()}
                       onFocus={() => {
                         setIsWeightFocused(true)
@@ -502,10 +576,15 @@ export const PositionsPanelRow = (props: {
               </td>
               <td class={positionBodyCellClass("notional")}>
                 <div class={positionBodyCellInnerClass}>
+                  <kbd class={rowHintClass()}>n</kbd>
                   <span class="text-muted-foreground text-[10px]">$</span>
                   <input
                     type="number"
                     {...positionCellInputProps}
+                    {...{
+                      [PORTFOLIO_CELL_ATTR]: "notional",
+                      [PORTFOLIO_SYMBOL_ATTR]: props.symbol,
+                    }}
                     value={notionalInput()}
                     onFocus={() => {
                       setIsNotionalFocused(true)
@@ -570,6 +649,7 @@ export const PositionsPanelRow = (props: {
                 style={stickyCellStyle()}
               >
                 <div class={positionBodyCellInnerClass}>
+                  <kbd class={rowHintClass()}>d</kbd>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -612,34 +692,51 @@ export const PositionsPanelRow = (props: {
             )}
           >
             <Show when={isLeverageEditorExpanded()}>
-              <LeverageSliderEditor
-                symbol={props.position().symbol}
-                leverage={props.position().leverage}
-                maxLeverage={props.maxLeverage}
-                onLeverageChange={props.onLeverageChange}
-              />
+              <div class="w-full max-w-[13.875rem]">
+                <LeverageSliderEditor
+                  symbol={props.position().symbol}
+                  leverage={props.position().leverage}
+                  maxLeverage={props.maxLeverage}
+                  onLeverageChange={props.onLeverageChange}
+                />
+              </div>
             </Show>
           </td>
+          <For each={props.visibleMetricColumns}>
+            {columnId => (
+              <td class={positionBodyCellClass(columnId)} aria-hidden="true" />
+            )}
+          </For>
           <td
             class={cn(
               positionStickyLeverageCloseClass(props.status),
               stickyErrorBackgroundClass(),
-              "transition-[padding] duration-200 ease-out",
+              "w-auto min-w-9 transition-[padding] duration-200 ease-out",
               isLeverageEditorExpanded() ? "py-2" : "py-0",
             )}
             style={stickyCellStyle()}
           >
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-6 w-6"
-              aria-label={`Close leverage editor for ${props.position().symbol}`}
-              onClick={() => {
-                closeLeverageEditor()
-              }}
-            >
-              <X class="h-3 w-3" />
-            </Button>
+            <div class="flex items-center justify-end gap-0.5">
+              <kbd
+                class={cn(
+                  "inline-flex shrink-0 justify-center font-mono text-[8px] text-muted-foreground",
+                  isLeverageEditorExpanded() ? "opacity-60" : "opacity-0",
+                )}
+              >
+                esc
+              </kbd>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-6 w-6"
+                aria-label={`Close leverage editor for ${props.position().symbol}`}
+                onClick={() => {
+                  closeLeverageEditor()
+                }}
+              >
+                <X class="h-3 w-3" />
+              </Button>
+            </div>
           </td>
         </Show>
       </tr>

@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from "solid-js"
+import { For, Show, createSignal, createEffect, onCleanup } from "solid-js"
 import * as Effect from "effect/Effect"
 import * as Either from "effect/Either"
 import { cn } from "@/lib/cn"
@@ -14,6 +14,11 @@ import {
   normalizeWalletPinInput,
   WALLET_PIN_LENGTH,
 } from "@/services/walletCredentialCrypto"
+import {
+  PORTFOLIO_PANEL_ATTR,
+  STAGED_PIN_ATTR,
+  tryUsePortfolioKeyboardContext,
+} from "@/pages/Portfolio/keyboard"
 
 /** Mutually exclusive wallet/agent readiness for the staged-changes primary action. */
 export type StagedConnectionState =
@@ -60,6 +65,7 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
   const [unlockError, setUnlockError] = createSignal<string | null>(null)
   const [isUnlocking, setIsUnlocking] = createSignal(false)
   let unlockPinInput: HTMLInputElement | undefined
+  const keyboard = tryUsePortfolioKeyboardContext()
 
   const stagedTrades = () => props.stagedTrades
   const hasStaged = () => stagedTrades().length > 0
@@ -69,6 +75,19 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
   const connectionState = () => props.connectionState
 
   const showUnlockPinField = () => connectionState() === "agentLocked"
+
+  // createEffect: register unlock submit for Cmd/Ctrl+Enter while agent locked
+  createEffect(() => {
+    if (!keyboard) {
+      return
+    }
+    keyboard.registerStagedUnlockSubmit(() => {
+      void submitUnlockPin()
+    })
+    onCleanup(() => {
+      keyboard.registerStagedUnlockSubmit(null)
+    })
+  })
 
   const primaryLabel = () => {
     if (isRebalancing()) {
@@ -161,7 +180,11 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
   }
 
   return (
-    <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
+    <div
+      class="flex h-full min-h-0 w-full min-w-0 flex-col outline-none"
+      tabIndex={0}
+      {...{ [PORTFOLIO_PANEL_ATTR]: "staged" }}
+    >
       <Show when={hasStaged() && props.onClearAll}>
         <div class="flex shrink-0 items-center justify-end border-b border-border/40 px-2 py-1">
           <button
@@ -342,6 +365,7 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
                 unlockError() !== null ? UNLOCK_PIN_ERROR_ID : undefined
               }
               class="h-8 font-mono text-[11px] tracking-[0.25em] placeholder:tracking-normal placeholder:font-sans"
+              {...{ [STAGED_PIN_ATTR]: "" }}
               onAnimationEnd={event => {
                 event.currentTarget.classList.remove(PIN_SHAKE_CLASS)
               }}
@@ -358,6 +382,7 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
               onKeyDown={event => {
                 if (event.key === "Enter") {
                   event.preventDefault()
+                  event.stopPropagation()
                   void submitUnlockPin()
                 }
               }}

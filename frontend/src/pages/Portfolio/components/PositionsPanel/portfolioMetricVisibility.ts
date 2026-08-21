@@ -54,19 +54,19 @@ export const isPortfolioMetricColumnId = (
 ): value is PortfolioMetricColumnId => portfolioMetricColumnIds.has(value)
 
 export const readPortfolioMetricVisibility = (): PortfolioMetricVisibility => {
-  if (
-    typeof localStorage === "undefined" ||
-    typeof localStorage.getItem !== "function"
-  ) {
-    return { ...DEFAULT_PORTFOLIO_METRIC_VISIBILITY }
-  }
-
-  const raw = localStorage.getItem(PORTFOLIO_METRIC_COLUMNS_STORAGE_KEY)
-  if (raw === null) {
-    return { ...DEFAULT_PORTFOLIO_METRIC_VISIBILITY }
-  }
-
   try {
+    if (
+      typeof localStorage === "undefined" ||
+      typeof localStorage.getItem !== "function"
+    ) {
+      return { ...DEFAULT_PORTFOLIO_METRIC_VISIBILITY }
+    }
+
+    const raw = localStorage.getItem(PORTFOLIO_METRIC_COLUMNS_STORAGE_KEY)
+    if (raw === null) {
+      return { ...DEFAULT_PORTFOLIO_METRIC_VISIBILITY }
+    }
+
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== "object" || parsed === null) {
       return { ...DEFAULT_PORTFOLIO_METRIC_VISIBILITY }
@@ -145,6 +145,4 @@ export const visiblePortfolioMetricColumns = (
 ): PortfolioMetricColumnId[] =>
   PORTFOLIO_METRIC_COLUMN_ORDER.filter(columnId => visibility[columnId])
 
-export const leverageEditorColumnSpan = (
-  visibleMetricColumns: PortfolioMetricColumnId[],
-): number => 3 + visibleMetricColumns.length
+export const leverageEditorColumnSpan = (): number => 3

@@ -30,11 +30,12 @@ import {
 } from "./portfolioMetricVisibility"
 import { PositionsDataTable } from "./positions-data-table"
 import type { PositionsTableMeta } from "./positions-data-table"
+import {
+  CROSS_ACCOUNT_LEVERAGE_MAX,
+  CROSS_ACCOUNT_LEVERAGE_MIN,
+  CROSS_ACCOUNT_LEVERAGE_STEP,
+} from "./crossAccountLeverage"
 import { ReadonlyBtcPanel } from "./ReadonlyBtcPanel"
-
-const LEVERAGE_MIN = 0.001
-const LEVERAGE_MAX = 5
-const LEVERAGE_STEP = 0.1
 
 interface PositionsPanelProps {
   hasTotalWeightExceeded: boolean
@@ -168,7 +169,10 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
     }
     const value = parseFloat(raw)
     if (!Number.isNaN(value)) {
-      const clamped = Math.max(LEVERAGE_MIN, Math.min(LEVERAGE_MAX, value))
+      const clamped = Math.max(
+        CROSS_ACCOUNT_LEVERAGE_MIN,
+        Math.min(CROSS_ACCOUNT_LEVERAGE_MAX, value),
+      )
       props.onCrossAccountLeverageChange(clamped)
     }
   }
@@ -197,7 +201,11 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
   )
 
   return (
-    <div class="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
+    <div
+      class="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      tabIndex={0}
+      data-portfolio-panel="portfolio"
+    >
       <div class="flex min-h-0 flex-1 flex-col">
         <Show
           when={!props.isLoading}
@@ -256,7 +264,7 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
         currentPortfolio={props.currentPortfolio}
       />
 
-      <div class="shrink-0 border-t border-border bg-background/80 backdrop-blur">
+      <div class="shrink-0 border-t border-border bg-background/80 backdrop-blur px-3 pb-3">
         <div class="flex items-center pt-3 text-[12px]">
           <div class="flex flex-1 items-center gap-3">
             <span class="whitespace-nowrap font-semibold text-muted-foreground">
@@ -271,9 +279,9 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
                 onChange={([selectedLeverage]) => {
                   props.onCrossAccountLeverageChange(selectedLeverage)
                 }}
-                minValue={LEVERAGE_MIN}
-                maxValue={LEVERAGE_MAX}
-                step={LEVERAGE_STEP}
+                minValue={CROSS_ACCOUNT_LEVERAGE_MIN}
+                maxValue={CROSS_ACCOUNT_LEVERAGE_MAX}
+                step={CROSS_ACCOUNT_LEVERAGE_STEP}
                 class="flex-1"
               />
               <input
@@ -289,9 +297,9 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
                     leverageInputChangeEvent.currentTarget.value,
                   )
                 }}
-                min={LEVERAGE_MIN}
-                max={LEVERAGE_MAX}
-                step={LEVERAGE_STEP}
+                min={CROSS_ACCOUNT_LEVERAGE_MIN}
+                max={CROSS_ACCOUNT_LEVERAGE_MAX}
+                step={CROSS_ACCOUNT_LEVERAGE_STEP}
                 class="w-16 rounded-md border border-border bg-transparent px-2 py-1 text-center font-medium [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
               />
               <span class="text-sm font-medium">x</span>

@@ -12,6 +12,7 @@ import {
   Show,
   createMemo,
   createRenderEffect,
+  createEffect,
   createSignal,
   splitProps,
   type Accessor,
@@ -22,6 +23,10 @@ import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/cn"
 
 import type { PortfolioInterface } from "../../hooks/usePortfolioState"
+import {
+  ALL_SYMBOLS_SEARCH_ATTR,
+  tryUsePortfolioKeyboardContext,
+} from "../../keyboard"
 
 import { AllSymbolsRow } from "./AllSymbolsRow"
 import type { AllSymbolRowData } from "./allSymbolRowModel"
@@ -54,6 +59,8 @@ interface AllSymbolsVirtualRowProps {
   fundingIsLoading: boolean
   factorsIsLoading: boolean
   onSymbolClick: (symbol: string) => void
+  isSelected: boolean
+  onSelect: () => void
 }
 
 const AllSymbolsVirtualRow = (
@@ -78,6 +85,8 @@ const AllSymbolsVirtualRow = (
           fundingIsLoading={props.fundingIsLoading}
           factorsIsLoading={props.factorsIsLoading}
           onSymbolClick={props.onSymbolClick}
+          isSelected={props.isSelected}
+          onSelect={props.onSelect}
         />
       )}
     </Show>
@@ -113,6 +122,7 @@ export const AllSymbolsDataTable = (
   ])
   const [searchQuery, setSearchQuery] = createSignal("")
   let tableContainerRef!: HTMLDivElement
+  const keyboard = tryUsePortfolioKeyboardContext()
 
   const filteredData = createMemo(() =>
     filterAllSymbolRows(local.data(), searchQuery()),
@@ -196,7 +206,48 @@ export const AllSymbolsDataTable = (
     rowVirtualizer.scrollToOffset(0)
   })
 
+  // createEffect: keep keyboard order in sync with filtered/sorted rows
+  createEffect(() => {
+    const symbols = rows().map(row => row.original.symbol)
+    keyboard?.setAllSymbolOrder(symbols)
+    if (keyboard?.focusedPanel() === "allSymbols") {
+      keyboard.ensureAllSymbolsSelection()
+    }
+  })
+
+  // createEffect: scroll selected virtual row into view
+  createEffect(() => {
+    if (keyboard?.focusedPanel() !== "allSymbols") {
+      return
+    }
+    const index = keyboard.selectedAllSymbolsIndex()
+    if (index === null) {
+      return
+    }
+    rowVirtualizer.scrollToIndex(index, { align: "auto" })
+  })
+
   const totalSize = () => rowVirtualizer.getTotalSize()
+
+  const isSymbolSelected = (symbol: string): boolean => {
+    if (keyboard?.focusedPanel() !== "allSymbols") {
+      return false
+    }
+    const index = keyboard.selectedAllSymbolsIndex()
+    if (index === null) {
+      return false
+    }
+    return rows()[index]?.original.symbol === symbol
+  }
+
+  const selectSymbol = (symbol: string) => {
+    const index = rows().findIndex(row => row.original.symbol === symbol)
+    if (index < 0) {
+      return
+    }
+    keyboard?.setSelectedAllSymbolsIndex(index)
+    keyboard?.setFocusedPanel("allSymbols")
+  }
 
   const paddingTop = () => {
     const items = virtualRows()
@@ -222,9 +273,13 @@ export const AllSymbolsDataTable = (
             onInput={event => {
               setSearchQuery(event.currentTarget.value)
             }}
-            class="h-7 pl-7 text-[11px]"
+            class="h-7 pl-7 pr-8 text-[11px]"
             aria-label="Search symbols"
+            {...{ [ALL_SYMBOLS_SEARCH_ATTR]: "" }}
           />
+          <kbd class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+            s
+          </kbd>
         </div>
       </div>
       <div
@@ -302,6 +357,10 @@ export const AllSymbolsDataTable = (
                     fundingIsLoading={local.fundingIsLoading}
                     factorsIsLoading={local.factorsIsLoading}
                     onSymbolClick={local.onSymbolClick}
+                    isSelected={isSymbolSelected(symbol)}
+                    onSelect={() => {
+                      selectSymbol(symbol)
+                    }}
                   />
                 )}
               </For>

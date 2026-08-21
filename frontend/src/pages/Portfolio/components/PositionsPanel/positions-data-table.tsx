@@ -10,6 +10,7 @@ import {
   Show,
   createMemo,
   createSignal,
+  createEffect,
   splitProps,
   type Accessor,
   type JSX,
@@ -34,6 +35,7 @@ import {
   isPortfolioMetricColumnId,
   type PortfolioMetricColumnId,
 } from "./portfolioMetricVisibility"
+import { tryUsePortfolioKeyboardContext } from "../../keyboard"
 
 export interface PositionsTableMeta {
   currentPortfolio: Record<string, PortfolioInterface | undefined>
@@ -87,6 +89,14 @@ const PositionsTableBodyRow = (
   props: PositionsTableBodyRowProps,
 ): JSX.Element => {
   const row = createMemo(() => props.rowDataBySymbol().get(props.symbol))
+  const keyboard = tryUsePortfolioKeyboardContext()
+
+  const isSelected = () =>
+    keyboard?.focusedPanel() === "portfolio" &&
+    keyboard.selectedPortfolioSymbol() === props.symbol
+
+  const leverageEditorRequested = () =>
+    keyboard?.leverageEditorSymbol() === props.symbol
 
   return (
     <Show when={row()}>
@@ -130,6 +140,17 @@ const PositionsTableBodyRow = (
           symbolsDeltaBelowMinimum={props.meta.symbolsDeltaBelowMinimum}
           symbolDelta={resolvedRow().symbolDelta}
           rebalanceError={props.meta.errorsBySymbol[props.symbol]}
+          isSelected={isSelected()}
+          leverageEditorRequested={leverageEditorRequested()}
+          onSelect={() => {
+            keyboard?.setSelectedPortfolioSymbol(props.symbol)
+            keyboard?.setFocusedPanel("portfolio")
+          }}
+          onLeverageEditorClosed={() => {
+            if (keyboard?.leverageEditorSymbol() === props.symbol) {
+              keyboard.setLeverageEditorSymbol(null)
+            }
+          }}
         />
       )}
     </Show>
@@ -231,6 +252,17 @@ export const PositionsDataTable = (
     positionTableColumnIds(local.visibleMetricColumns)
   const rowSymbols = (): string[] =>
     displayRows().map(row => row.original.symbol)
+
+  const keyboard = tryUsePortfolioKeyboardContext()
+
+  // createEffect: keep keyboard navigation order in sync with displayed rows
+  createEffect(() => {
+    const symbols = rowSymbols()
+    keyboard?.setPortfolioSymbolOrder(symbols)
+    if (keyboard?.focusedPanel() === "portfolio") {
+      keyboard.ensurePortfolioSelection()
+    }
+  })
 
   return (
     <div class={cn("w-full", local.class)}>
