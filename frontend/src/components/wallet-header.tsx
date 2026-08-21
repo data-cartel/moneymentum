@@ -17,6 +17,7 @@ import { useWalletSettings, useSwitchNetwork } from "@/hooks/useTrading"
 import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
+import { prefetchEvmAppKit } from "@/reown/evmAppKit"
 import {
   WalletOperationContextChanged,
   copyWalletAddressToClipboard,
@@ -54,6 +55,8 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     isConnected,
     hasStoredSession,
     mainAddress,
+    hyperliquidClientLoad,
+    retryHyperliquidClientLoad,
   } = useWallet()
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [isDisconnecting, setIsDisconnecting] = createSignal(false)
@@ -188,6 +191,11 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     )
   }
 
+  const failedHyperliquidClientLoad = () => {
+    const load = hyperliquidClientLoad()
+    return load.state === "failed" ? load : null
+  }
+
   const currentAccountAddress = () =>
     walletSettings()?.accountAddress ?? mainAddress() ?? ""
   const currentIsTestnet = () => walletSettings()?.isTestnet ?? true
@@ -234,6 +242,25 @@ export const WalletHeader = (props: WalletHeaderProps) => {
         <span class="text-[11px] text-muted-foreground">Switching...</span>
       </Show>
 
+      <Show when={failedHyperliquidClientLoad()}>
+        {failedLoad => (
+          <div class="flex items-center gap-2" role="alert">
+            <span class="text-[11px] text-rose-500">
+              {getErrorMessage(failedLoad().error)}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              class="h-6 px-2 text-[11px]"
+              onClick={retryHyperliquidClientLoad}
+            >
+              Retry
+            </Button>
+          </div>
+        )}
+      </Show>
+
       <Show
         when={isConnected()}
         fallback={<span class={walletStatusClass}>No wallet configured</span>}
@@ -242,6 +269,9 @@ export const WalletHeader = (props: WalletHeaderProps) => {
           <DropdownMenuTrigger
             as="button"
             class={`${walletStatusClass} cursor-pointer transition-colors hover:border-foreground/50 hover:text-foreground`}
+            onPointerEnter={() => {
+              prefetchEvmAppKit()
+            }}
           >
             {currentAccountAddress()
               ? formatPublicKey(currentAccountAddress())
@@ -300,11 +330,15 @@ export const WalletHeader = (props: WalletHeaderProps) => {
                     <Button
                       type="button"
                       variant="outline"
-                      class="w-full"
+                      class="w-full transition-opacity"
+                      classList={{ "opacity-50": isRevokingAgent() }}
                       disabled={!canRevokeAgent()}
+                      onPointerEnter={() => {
+                        prefetchEvmAppKit()
+                      }}
                       onClick={onRevokeAgentClick}
                     >
-                      {isRevokingAgent() ? "Revoking..." : "Revoke Agent"}
+                      {isRevokingAgent() ? "Loading wallet..." : "Revoke Agent"}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent class="max-w-[240px] text-xs leading-snug">
@@ -316,15 +350,20 @@ export const WalletHeader = (props: WalletHeaderProps) => {
               <Button
                 type="button"
                 variant="outline"
+                class="transition-opacity"
+                classList={{ "opacity-50": isDisconnecting() }}
                 disabled={
                   isDisconnecting() ||
                   isRevokingAgent() ||
                   switchNetworkMutation.isPending ||
                   isNetworkSwitching()
                 }
+                onPointerEnter={() => {
+                  prefetchEvmAppKit()
+                }}
                 onClick={onDisconnectClick}
               >
-                {isDisconnecting() ? "Disconnecting..." : "Disconnect"}
+                {isDisconnecting() ? "Loading wallet..." : "Disconnect"}
               </Button>
             </div>
           </DropdownMenuContent>

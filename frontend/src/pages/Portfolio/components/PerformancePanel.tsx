@@ -7,17 +7,8 @@ export const PerformancePanel = () => {
   const [isMetricSelectorOpen, setIsMetricSelectorOpen] = createSignal(false)
 
   return (
-    <div
-      class="border border-border rounded flex flex-col"
-      style={{ height: "45%" }}
-    >
-      <div class="px-2 py-1 border-b border-border bg-muted/30 font-medium flex justify-between items-center">
-        <span>PERFORMANCE</span>
-        <kbd class="px-1.5 py-0.5 text-[10px] font-mono bg-muted rounded">
-          3
-        </kbd>
-      </div>
-      <div class="flex-1 flex min-h-0">
+    <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
+      <div class="flex min-h-0 flex-1">
         {/* Metrics column */}
         <div class="w-[180px] shrink-0 border-r border-border/30 p-3 overflow-auto scrollbar-hide flex flex-col gap-2">
           <MetricSelector

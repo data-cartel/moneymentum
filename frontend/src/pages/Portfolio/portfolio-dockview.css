@@ -1,0 +1,134 @@
+.portfolio-dockview-shell {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+}
+
+.portfolio-dockview-shell > .dv-dockview {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Match app tokens (old panel chrome: border-border, rounded, bg-muted/30 tabs).
+   Do not use dockview-theme-dark -- its #1e1e1e palette fights oklch --background. */
+.portfolio-dockview-theme {
+  --dv-background-color: var(--background);
+  --dv-group-view-background-color: var(--background);
+  --dv-tabs-and-actions-container-background-color: color-mix(
+    in oklch,
+    var(--muted) 30%,
+    transparent
+  );
+  --dv-tabs-and-actions-container-height: 32px;
+  --dv-tabs-and-actions-container-font-size: 11px;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--background);
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--background);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-activegroup-visiblepanel-tab-color: var(--foreground);
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--foreground);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--muted-foreground);
+  --dv-tab-divider-color: transparent;
+  --dv-separator-border: var(--border);
+  --dv-paneview-header-border-color: var(--border);
+  --dv-border-radius: 0.25rem;
+  --dv-tab-margin: 0;
+  --dv-icon-hover-background-color: color-mix(
+    in oklch,
+    var(--muted) 80%,
+    transparent
+  );
+  --dv-floating-box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+  --dv-drag-over-background-color: color-mix(
+    in oklch,
+    var(--primary) 20%,
+    transparent
+  );
+  --dv-sash-color: transparent;
+  --dv-active-sash-color: var(--border);
+}
+
+.portfolio-dockview-theme .dv-groupview {
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  overflow: hidden;
+  background-color: var(--background);
+}
+
+.portfolio-dockview-theme .dv-tabs-and-actions-container {
+  border-bottom: 1px solid var(--border);
+}
+
+.portfolio-dockview-theme .dv-default-tab,
+.portfolio-dockview-theme .portfolio-dockview-tab {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.portfolio-dockview-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-inline: 8px;
+  height: 100%;
+}
+
+.portfolio-dockview-tab-title {
+  white-space: nowrap;
+}
+
+.portfolio-dockview-add-button {
+  display: inline-flex;
+  height: 22px;
+  width: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.portfolio-dockview-add-button:hover {
+  background: var(--muted);
+}
+
+.portfolio-dockview-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 160px;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+}
+
+.portfolio-dockview-menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 11px;
+  color: var(--foreground);
+}
+
+.portfolio-dockview-menu-item:hover {
+  background: var(--muted);
+}
+
+.portfolio-dockview-panel-body {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background-color: var(--background);
+  color: var(--foreground);
+}

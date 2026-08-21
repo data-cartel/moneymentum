@@ -15,6 +15,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
+import { prefetchEvmAppKit } from "@/reown/evmAppKit"
 import {
   normalizeWalletPinInput,
   WALLET_PIN_LENGTH,
@@ -116,6 +117,13 @@ export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
     props.onSuccess?.()
   }
 
+  const primaryLabel = () => {
+    if (isSubmitting()) {
+      return props.mode === "authorize" ? "Loading wallet..." : "Unlocking..."
+    }
+    return props.mode === "authorize" ? "Continue" : "Unlock"
+  }
+
   return (
     <Dialog open={props.open} onOpenChange={handleOpenChange}>
       <DialogContent class="max-w-sm">
@@ -165,18 +173,19 @@ export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
           </Button>
           <Button
             type="button"
+            class="transition-opacity"
+            classList={{ "opacity-50": isSubmitting() }}
             disabled={isSubmitting() || pin().length !== WALLET_PIN_LENGTH}
+            onPointerEnter={() => {
+              if (props.mode === "authorize") {
+                prefetchEvmAppKit()
+              }
+            }}
             onClick={() => {
               void submitPin()
             }}
           >
-            {isSubmitting()
-              ? props.mode === "authorize"
-                ? "Connecting..."
-                : "Unlocking..."
-              : props.mode === "authorize"
-                ? "Continue"
-                : "Unlock"}
+            {primaryLabel()}
           </Button>
         </DialogFooter>
       </DialogContent>

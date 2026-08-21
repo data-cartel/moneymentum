@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useWallet } from "@/hooks/useWallet"
 import type { StagedTradeItem } from "@/pages/Portfolio/hooks/usePortfolioState"
+import { prefetchEvmAppKit } from "@/reown/evmAppKit"
 import {
   normalizeWalletPinInput,
   WALLET_PIN_LENGTH,
@@ -160,33 +161,30 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
   }
 
   return (
-    <div class="flex-1 border border-border rounded flex flex-col min-w-0">
-      <div class="px-2 py-1.5 bg-muted/30 flex items-center justify-between border-b border-border">
-        <div class="flex items-center gap-2">
-          <span class="font-medium">STAGED CHANGES</span>
-        </div>
-        <Show when={hasStaged() && props.onClearAll}>
+    <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
+      <Show when={hasStaged() && props.onClearAll}>
+        <div class="flex shrink-0 items-center justify-end border-b border-border/40 px-2 py-1">
           <button
             type="button"
-            class="text-muted-foreground hover:text-destructive text-[10px]"
+            class="text-[10px] text-muted-foreground hover:text-destructive"
             onClick={() => {
               props.onClearAll?.()
             }}
           >
             Clear all
           </button>
-        </Show>
-      </div>
+        </div>
+      </Show>
 
       <Show
         when={hasStaged()}
         fallback={
-          <div class="px-2 py-3 text-muted-foreground text-center text-[10px] h-full">
+          <div class="h-full px-2 py-3 text-center text-[10px] text-muted-foreground">
             No pending trades. Edit weights or adjust leverage to stage trades.
           </div>
         }
       >
-        <div class="overflow-auto scrollbar-hide h-full">
+        <div class="h-full min-h-0 overflow-auto scrollbar-hide">
           <For each={stagedTrades()}>
             {stagedTrade => {
               const baseSymbol = stagedTrade.underlying.split("/")[0] || "???"
@@ -306,6 +304,11 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
             <Button
               size="sm"
               class="w-full h-8 text-[11px] gap-1"
+              onPointerEnter={() => {
+                if (connectionState() === "agentMissing") {
+                  prefetchEvmAppKit()
+                }
+              }}
               onClick={() => {
                 if (isPrimaryDisabled() || !props.onPrimaryAction) {
                   return

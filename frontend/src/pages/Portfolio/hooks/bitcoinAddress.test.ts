@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import * as Effect from "effect/Effect"
 
 import {
   EMPTY_BITCOIN_ADDRESS_MESSAGE,
@@ -52,21 +53,25 @@ const validAddressCases: ValidAddressCase[] = [
 describe("validateBitcoinAddress", () => {
   it.each(validAddressCases)(
     "accepts $kind addresses on $network",
-    validAddressCase => {
-      expect(
-        validateBitcoinAddress(
-          validAddressCase.address,
-          validAddressCase.network,
+    async validAddressCase => {
+      await expect(
+        Effect.runPromise(
+          validateBitcoinAddress(
+            validAddressCase.address,
+            validAddressCase.network,
+          ),
         ),
-      ).toEqual({
+      ).resolves.toEqual({
         ok: true,
         kind: validAddressCase.kind,
       })
     },
   )
 
-  it("rejects empty addresses with the exact empty-address message", () => {
-    const validation = validateBitcoinAddress("   ", "mainnet")
+  it("rejects empty addresses with the exact empty-address message", async () => {
+    const validation = await Effect.runPromise(
+      validateBitcoinAddress("   ", "mainnet"),
+    )
 
     expect(validation).toEqual({
       ok: false,
@@ -77,22 +82,9 @@ describe("validateBitcoinAddress", () => {
     })
   })
 
-  it("rejects truncated addresses with the exact UI error message", () => {
-    const validation = validateBitcoinAddress("1BoatSLR", "mainnet")
-
-    expect(validation).toEqual({
-      ok: false,
-      error: {
-        kind: "invalid",
-        message: INVALID_BITCOIN_ADDRESS_MESSAGE,
-      },
-    })
-  })
-
-  it("rejects wrong checksums with the exact UI error message", () => {
-    const validation = validateBitcoinAddress(
-      "1BoatSLRHtKNngkdXEeobR76b53LETtpyU",
-      "mainnet",
+  it("rejects truncated addresses with the exact UI error message", async () => {
+    const validation = await Effect.runPromise(
+      validateBitcoinAddress("1BoatSLR", "mainnet"),
     )
 
     expect(validation).toEqual({
@@ -104,10 +96,23 @@ describe("validateBitcoinAddress", () => {
     })
   })
 
-  it("rejects testnet addresses on mainnet with the exact network mismatch message", () => {
-    const validation = validateBitcoinAddress(
-      "mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn",
-      "mainnet",
+  it("rejects wrong checksums with the exact UI error message", async () => {
+    const validation = await Effect.runPromise(
+      validateBitcoinAddress("1BoatSLRHtKNngkdXEeobR76b53LETtpyU", "mainnet"),
+    )
+
+    expect(validation).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid",
+        message: INVALID_BITCOIN_ADDRESS_MESSAGE,
+      },
+    })
+  })
+
+  it("rejects testnet addresses on mainnet with the exact network mismatch message", async () => {
+    const validation = await Effect.runPromise(
+      validateBitcoinAddress("mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn", "mainnet"),
     )
 
     expect(validation).toEqual({
@@ -119,10 +124,9 @@ describe("validateBitcoinAddress", () => {
     })
   })
 
-  it("rejects mainnet addresses on testnet with the exact network mismatch message", () => {
-    const validation = validateBitcoinAddress(
-      "1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
-      "testnet",
+  it("rejects mainnet addresses on testnet with the exact network mismatch message", async () => {
+    const validation = await Effect.runPromise(
+      validateBitcoinAddress("1BoatSLRHtKNngkdXEeobR76b53LETtpyT", "testnet"),
     )
 
     expect(validation).toEqual({

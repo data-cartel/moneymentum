@@ -41,40 +41,37 @@ const mockExchange = {
   fetchOrders: vi.fn(),
 }
 
-vi.mock("ccxt", () => ({
-  default: {},
-  pro: {
-    hyperliquid: class {
-      setSandboxMode = mockExchange.setSandboxMode
-      options = mockExchange.options
-      urls = mockExchange.urls
-      walletAddress = mockExchange.walletAddress
+vi.mock("ccxt/hyperliquid", () => ({
+  default: class {
+    setSandboxMode = mockExchange.setSandboxMode
+    options = mockExchange.options
+    urls = mockExchange.urls
+    walletAddress = mockExchange.walletAddress
 
-      get markets() {
-        return mockExchange.markets
-      }
-      set markets(value) {
-        mockExchange.markets = value
-      }
-      get markets_by_id() {
-        return mockExchange.markets_by_id
-      }
-      set markets_by_id(value) {
-        mockExchange.markets_by_id = value
-      }
+    get markets() {
+      return mockExchange.markets
+    }
+    set markets(value) {
+      mockExchange.markets = value
+    }
+    get markets_by_id() {
+      return mockExchange.markets_by_id
+    }
+    set markets_by_id(value) {
+      mockExchange.markets_by_id = value
+    }
 
-      setMarkets = mockExchange.setMarkets
-      fetchBalance = mockExchange.fetchBalance
-      fetchTickers = mockExchange.fetchTickers
-      fetchTicker = mockExchange.fetchTicker
-      fetchPositions = mockExchange.fetchPositions
-      setLeverage = mockExchange.setLeverage
-      createOrder = mockExchange.createOrder
-      createOrdersWs = mockExchange.createOrdersWs
-      watchOrders = mockExchange.watchOrders
-      unWatchOrders = mockExchange.unWatchOrders
-      fetchOrders = mockExchange.fetchOrders
-    },
+    setMarkets = mockExchange.setMarkets
+    fetchBalance = mockExchange.fetchBalance
+    fetchTickers = mockExchange.fetchTickers
+    fetchTicker = mockExchange.fetchTicker
+    fetchPositions = mockExchange.fetchPositions
+    setLeverage = mockExchange.setLeverage
+    createOrder = mockExchange.createOrder
+    createOrdersWs = mockExchange.createOrdersWs
+    watchOrders = mockExchange.watchOrders
+    unWatchOrders = mockExchange.unWatchOrders
+    fetchOrders = mockExchange.fetchOrders
   },
 }))
 
@@ -374,7 +371,12 @@ describe("HyperliquidClient", () => {
         json: async () => ({
           tickers: ["BTC/USDC:USDC"],
           leverageLimits: [
-            { symbol: "BTC/USDC:USDC", maxLeverage: 50, assetIndex: 0 },
+            {
+              symbol: "BTC/USDC:USDC",
+              maxLeverage: 50,
+              assetIndex: 0,
+              onlyIsolated: false,
+            },
           ],
           refreshedAt: new Date().toISOString(),
         }),
@@ -413,7 +415,12 @@ describe("HyperliquidClient", () => {
         json: async () => ({
           tickers: ["BTC/USDC:USDC"],
           leverageLimits: [
-            { symbol: "BTC/USDC:USDC", maxLeverage: 50, assetIndex: 0 },
+            {
+              symbol: "BTC/USDC:USDC",
+              maxLeverage: 50,
+              assetIndex: 0,
+              onlyIsolated: false,
+            },
           ],
           refreshedAt: new Date().toISOString(),
         }),

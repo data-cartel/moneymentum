@@ -1,24 +1,66 @@
-import { For, Show, createMemo, createSignal } from "solid-js"
+import { For, Show, createMemo, createSignal, onMount } from "solid-js"
 import type { JSX } from "solid-js"
+import * as Data from "effect/Data"
+import * as Effect from "effect/Effect"
+import * as Either from "effect/Either"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 
+import { prefetchBitcoinAddressValidator } from "../../hooks/bitcoinAddress"
 import type { ReadonlyBtcRow } from "../../hooks/useReadonlyPortfolioState"
+
+class ReadonlyBtcAddressAddFailed extends Data.TaggedError(
+  "ReadonlyBtcAddressAddFailed",
+)<{
+  readonly cause: unknown
+}> {}
 
 interface ReadonlyBtcPanelProps {
   rows: ReadonlyBtcRow[]
   isLoading: boolean
   error: string | null
   validationError: string | null
-  onAddAddress: (address: string) => boolean
+  onAddAddress: (address: string) => boolean | Promise<boolean>
   onRemoveAddress: (address: string) => void
   onIncludeInBetaChange: (address: string, includeInBeta: boolean) => void
 }
 
 export const ReadonlyBtcPanel = (props: ReadonlyBtcPanelProps): JSX.Element => {
   const [addressInput, setAddressInput] = createSignal("")
+  const [isAddingAddress, setIsAddingAddress] = createSignal(false)
   const rowCount = createMemo(() => props.rows.length)
+
+  onMount(() => {
+    prefetchBitcoinAddressValidator()
+  })
+
+  const submitAddress = async () => {
+    if (isAddingAddress()) {
+      return
+    }
+    setIsAddingAddress(true)
+
+    const addResult = await Effect.runPromise(
+      Effect.either(
+        Effect.tryPromise({
+          try: () => Promise.resolve(props.onAddAddress(addressInput())),
+          catch: cause => new ReadonlyBtcAddressAddFailed({ cause }),
+        }),
+      ),
+    )
+
+    if (Either.isLeft(addResult)) {
+      console.error("Failed to add readonly BTC address:", addResult.left)
+      setIsAddingAddress(false)
+      return
+    }
+
+    if (addResult.right) {
+      setAddressInput("")
+    }
+    setIsAddingAddress(false)
+  }
 
   return (
     <div class="border-t border-border/30 p-2 space-y-2 shrink-0">
@@ -33,20 +75,27 @@ export const ReadonlyBtcPanel = (props: ReadonlyBtcPanelProps): JSX.Element => {
             onInput={inputEvent => {
               setAddressInput(inputEvent.currentTarget.value)
             }}
+            onKeyDown={event => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                void submitAddress()
+              }
+            }}
             placeholder="BTC address"
             class="h-7 w-[260px] rounded border border-border bg-transparent px-2 text-[11px]"
+            disabled={isAddingAddress()}
           />
           <Button
             variant="outline"
             size="sm"
-            class="h-7 px-2 text-[11px]"
+            class="h-7 px-2 text-[11px] transition-opacity"
+            classList={{ "opacity-50": isAddingAddress() }}
+            disabled={isAddingAddress()}
             onClick={() => {
-              if (props.onAddAddress(addressInput())) {
-                setAddressInput("")
-              }
+              void submitAddress()
             }}
           >
-            +
+            {isAddingAddress() ? "…" : "+"}
           </Button>
         </div>
       </div>
@@ -82,39 +131,41 @@ export const ReadonlyBtcPanel = (props: ReadonlyBtcPanelProps): JSX.Element => {
                 </span>
                 <Show
                   when={!props.isLoading}
-                  fallback={<Skeleton class="h-4 w-[108px] justify-self-end" />}
+                  fallback={<Skeleton class="h-3 w-24" />}
                 >
-                  <span class="inline-grid grid-cols-[10ch_auto] items-baseline justify-self-end font-mono text-muted-foreground tabular-nums">
-                    <span class="text-right">{row.quantityBtc.toFixed(6)}</span>
-                    <span class="pl-1">BTC</span>
+                  <span class="font-mono text-muted-foreground">
+                    {row.quantityBtc.toFixed(6)} BTC
                   </span>
                 </Show>
                 <Show
                   when={!props.isLoading}
-                  fallback={<Skeleton class="h-4 w-[72px] justify-self-end" />}
+                  fallback={<Skeleton class="h-3 w-16" />}
                 >
-                  <span class="font-mono text-right">
-                    ${row.notionalUsd.toFixed(2)}
+                  <span class="font-mono">
+                    $
+                    {row.notionalUsd.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
                   </span>
                 </Show>
-                <label class="flex items-center gap-1 text-muted-foreground">
-                  beta
+                <div class="flex items-center gap-1">
+                  <span class="text-muted-foreground">Beta</span>
                   <Switch
                     checked={row.includeInBeta}
-                    onChange={value => {
-                      props.onIncludeInBetaChange(row.address, value)
+                    onChange={checked => {
+                      props.onIncludeInBetaChange(row.address, checked)
                     }}
                   />
-                </label>
+                </div>
                 <Button
                   variant="ghost"
                   size="sm"
-                  class="h-6 px-2"
+                  class="h-6 px-2 text-[11px] text-rose-500"
                   onClick={() => {
                     props.onRemoveAddress(row.address)
                   }}
                 >
-                  x
+                  Remove
                 </Button>
               </div>
             )}

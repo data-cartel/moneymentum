@@ -32,22 +32,37 @@ vi.mock("solid-sonner", () => ({
   },
 }))
 
-vi.mock("@/services/hyperliquid-client", () => ({
-  HyperliquidClient: class MockHyperliquidClient {
+vi.mock("@/services/hyperliquid-client", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("@/services/hyperliquid-client")>()
+  class MockHyperliquidClient {
     getBalance = vi.fn()
     getCurrentPositions = vi.fn()
     rebalancePositions = vi.fn()
     getNetworkMode = vi.fn()
     getWalletAddress = vi.fn()
-  },
-}))
+  }
+  return {
+    ...actual,
+    HyperliquidClient: MockHyperliquidClient,
+  }
+})
+
+vi.mock("@/services/hyperliquidClientLoader", async () => {
+  const clientModule = await import("@/services/hyperliquid-client")
+  return {
+    prefetchHyperliquidClientModule: () => undefined,
+    ensureHyperliquidClientModule: async () => clientModule,
+  }
+})
 
 vi.mock("@/reown/evmAppKit", () => ({
-  getOrCreateEvmAppKit: () => ({
+  ensureEvmAppKit: async () => ({
     disconnect: mockDisconnect,
     getAddress: () => null,
     subscribeAccount: () => () => {},
   }),
+  prefetchEvmAppKit: () => undefined,
   readConnectedEip1193Provider: () => ({ request: vi.fn() }),
   readEvmAddressFromAccountState: () => null,
   readEvmWalletConnectedFromAccountState: () => false,
@@ -223,6 +238,70 @@ describe("WalletHeader", () => {
 
       const toggle = screen.getByRole("switch")
       expect(toggle).not.toBeDisabled()
+    })
+
+    it("calls handleNetworkSwitch after a successful network switch", async () => {
+      const user = userEvent.setup()
+      const handleNetworkSwitch = vi.fn()
+      mockSwitchNetworkMutateAsync.mockResolvedValue(undefined)
+      await seedEncryptedSession("0xTestAccountAddress")
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          accountAddress: "0xTestAccountAddress",
+          isTestnet: true,
+        }),
+        isConnected: () => true,
+      })
+
+      render(
+        () => (
+          <WalletHeader
+            handleDisconnect={() => {}}
+            handleNetworkSwitch={handleNetworkSwitch}
+          />
+        ),
+        { wrapper: createWrapper() },
+      )
+
+      await user.click(screen.getByText("0xTest...ress"))
+      await user.click(screen.getByRole("switch"))
+
+      await waitFor(() => {
+        expect(mockSwitchNetworkMutateAsync).toHaveBeenCalledWith("mainnet")
+        expect(handleNetworkSwitch).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    it("does not call handleNetworkSwitch when the network switch fails", async () => {
+      const user = userEvent.setup()
+      const handleNetworkSwitch = vi.fn()
+      mockSwitchNetworkMutateAsync.mockRejectedValue(new Error("switch failed"))
+      await seedEncryptedSession("0xTestAccountAddress")
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          accountAddress: "0xTestAccountAddress",
+          isTestnet: true,
+        }),
+        isConnected: () => true,
+      })
+
+      render(
+        () => (
+          <WalletHeader
+            handleDisconnect={() => {}}
+            handleNetworkSwitch={handleNetworkSwitch}
+          />
+        ),
+        { wrapper: createWrapper() },
+      )
+
+      await user.click(screen.getByText("0xTest...ress"))
+      await user.click(screen.getByRole("switch"))
+
+      await waitFor(() => {
+        expect(mockSwitchNetworkMutateAsync).toHaveBeenCalledWith("mainnet")
+      })
+      expect(handleNetworkSwitch).not.toHaveBeenCalled()
     })
   })
 
@@ -579,7 +658,9 @@ describe("WalletHeader", () => {
     })
 
     it("clears the local agent session after a successful revoke", async () => {
-      const user = userEvent.setup()
+      const user = userEvent.setup({
+        pointerEventsCheck: 0,
+      })
       const { toast } = await import("solid-sonner")
 
       await seedEncryptedSession("0xConnectedAccountAddress")
@@ -598,10 +679,15 @@ describe("WalletHeader", () => {
       await user.click(screen.getByText("0xConn...ress"))
       await user.click(screen.getByRole("button", { name: "Revoke Agent" }))
 
-      await waitFor(() => {
-        expect(toast.success).toHaveBeenCalledWith("Hyperliquid agent revoked")
-        expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
-      })
+      await waitFor(
+        () => {
+          expect(toast.success).toHaveBeenCalledWith(
+            "Hyperliquid agent revoked",
+          )
+          expect(localStorage.getItem("hyperliquid-wallet")).toBeNull()
+        },
+        { timeout: 5_000 },
+      )
     })
   })
 

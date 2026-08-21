@@ -2,15 +2,17 @@ import * as Effect from "effect/Effect"
 import { createMemo } from "solid-js"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/solid-query"
 import { useWallet } from "./useWallet"
+import type {
+  OrderResult,
+  CurrentPosition,
+  OrderSide,
+} from "@/services/hyperliquid-client"
 import {
   fetchHyperliquidMarkets,
   millisecondsUntilNextUtcMidnight,
-  type OrderResult,
-  type CurrentPosition,
-  type LeverageLimit,
-  type OrderSide,
   type HyperliquidMarketsResponse,
-} from "@/services/hyperliquid-client"
+  type LeverageLimit,
+} from "@/services/hyperliquid-markets"
 import * as Hyperliquid from "@/services/hyperliquid"
 import type { RebalanceAction } from "@/pages/Portfolio/hooks/portfolioRebalancer"
 
@@ -46,7 +48,8 @@ export const useHyperliquidMarkets = () => {
 
     return {
       queryKey: [...QUERY_KEYS.markets, network()],
-      queryFn: () => fetchHyperliquidMarkets(network()),
+      queryFn: ({ signal }) =>
+        Effect.runPromise(fetchHyperliquidMarkets(network(), signal)),
       staleTime: marketsCacheDurationMs,
       gcTime: marketsCacheDurationMs,
     }

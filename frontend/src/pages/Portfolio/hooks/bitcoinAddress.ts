@@ -1,4 +1,5 @@
-import WAValidator from "multicoin-address-validator"
+import * as Data from "effect/Data"
+import * as Effect from "effect/Effect"
 
 import type { NetworkMode } from "@/contexts/wallet-context"
 
@@ -24,6 +25,44 @@ export interface BitcoinAddressValidationError {
 export type BitcoinAddressValidationResult =
   | { ok: true; kind: BitcoinAddressKind }
   | { ok: false; error: BitcoinAddressValidationError }
+
+export class BitcoinAddressValidatorLoadFailed extends Data.TaggedError(
+  "BitcoinAddressValidatorLoadFailed",
+)<{
+  readonly cause: unknown
+}> {}
+
+type BitcoinAddressValidator = {
+  validate: (
+    address: string,
+    currencyNameOrSymbol: string,
+    networkType?: "prod" | "testnet",
+  ) => boolean
+}
+
+let validatorLoadPromise: Promise<BitcoinAddressValidator> | null = null
+
+const loadBitcoinAddressValidator = (): Effect.Effect<
+  BitcoinAddressValidator,
+  BitcoinAddressValidatorLoadFailed
+> =>
+  Effect.tryPromise({
+    try: () => {
+      validatorLoadPromise ??= import("multicoin-address-validator").then(
+        module => module.default,
+      )
+      return validatorLoadPromise
+    },
+    catch: cause => {
+      validatorLoadPromise = null
+      return new BitcoinAddressValidatorLoadFailed({ cause })
+    },
+  })
+
+/** Prefetch the multicoin validator chunk (e.g. when the BTC panel mounts). */
+export const prefetchBitcoinAddressValidator = (): void => {
+  void Effect.runPromise(loadBitcoinAddressValidator()).catch(() => undefined)
+}
 
 const validatorNetwork = (network: NetworkMode): "prod" | "testnet" =>
   network === "mainnet" ? "prod" : "testnet"
@@ -60,32 +99,50 @@ const addressKind = (
   return "p2sh"
 }
 
+/**
+ * Canonicalize a previously validated stored address without loading the
+ * multicoin validator (bech32 is lowercased; other forms keep trim only).
+ */
+export const canonicalizeStoredBitcoinAddress = (address: string): string => {
+  const trimmedAddress = address.trim()
+  const lowercased = trimmedAddress.toLowerCase()
+  if (lowercased.startsWith("bc1") || lowercased.startsWith("tb1")) {
+    return lowercased
+  }
+  return trimmedAddress
+}
+
 export const validateBitcoinAddress = (
   address: string,
   network: NetworkMode,
-): BitcoinAddressValidationResult => {
-  const normalizedAddress = address.trim()
-  if (normalizedAddress.length === 0) {
-    return invalid("empty", EMPTY_BITCOIN_ADDRESS_MESSAGE)
-  }
+): Effect.Effect<
+  BitcoinAddressValidationResult,
+  BitcoinAddressValidatorLoadFailed
+> =>
+  Effect.gen(function* () {
+    const normalizedAddress = address.trim()
+    if (normalizedAddress.length === 0) {
+      return invalid("empty", EMPTY_BITCOIN_ADDRESS_MESSAGE)
+    }
 
-  const isValid = WAValidator.validate(
-    normalizedAddress,
-    "BTC",
-    validatorNetwork(network),
-  )
-  if (!isValid) {
-    const otherNetwork = oppositeNetwork(network)
-    const isValidOnOtherNetwork = WAValidator.validate(
+    const validator = yield* loadBitcoinAddressValidator()
+    const isValid = validator.validate(
       normalizedAddress,
       "BTC",
-      validatorNetwork(otherNetwork),
+      validatorNetwork(network),
     )
-    if (isValidOnOtherNetwork) {
-      return invalid("wrong_network", wrongNetworkMessage(otherNetwork))
+    if (!isValid) {
+      const otherNetwork = oppositeNetwork(network)
+      const isValidOnOtherNetwork = validator.validate(
+        normalizedAddress,
+        "BTC",
+        validatorNetwork(otherNetwork),
+      )
+      if (isValidOnOtherNetwork) {
+        return invalid("wrong_network", wrongNetworkMessage(otherNetwork))
+      }
+      return invalid("invalid")
     }
-    return invalid("invalid")
-  }
 
-  return { ok: true, kind: addressKind(normalizedAddress, network) }
-}
+    return { ok: true, kind: addressKind(normalizedAddress, network) }
+  })

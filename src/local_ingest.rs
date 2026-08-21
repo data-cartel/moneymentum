@@ -75,7 +75,7 @@ fn local_ingest_err(
 
 struct LocalIngestRuntime {
     /// Held for the CLI lifetime so a concurrent server cannot steal schedule slots.
-    _owner_lease: IngestionOwnerLease,
+    owner_lease: IngestionOwnerLease,
     ingestion_store: Arc<Store<IngestionRun>>,
     ingestion_projection: Arc<Projection<IngestionRun>>,
     worker: JoinHandle<()>,
@@ -163,7 +163,7 @@ async fn bootstrap_local_ingest(config: &Config) -> Result<LocalIngestRuntime, L
     debug!("ingestion worker started");
 
     Ok(LocalIngestRuntime {
-        _owner_lease: owner_lease,
+        owner_lease,
         ingestion_store,
         ingestion_projection,
         worker,
@@ -316,7 +316,13 @@ async fn run_local_ingest_inner(config: Config) -> Result<(), LocalIngestError> 
     let outcome =
         create_runs_for_active_units(&runtime.ingestion_store, &runtime.ingestion_projection).await;
 
-    finalize_enqueued_runs(&mut runtime, outcome, LOCAL_INGEST_COMPLETION_TIMEOUT).await
+    let result =
+        finalize_enqueued_runs(&mut runtime, outcome, LOCAL_INGEST_COMPLETION_TIMEOUT).await;
+
+    // Close the sidecar lock before returning so a following CLI/server acquire
+    // does not race sqlx's async Drop worker.
+    runtime.owner_lease.release().await?;
+    result
 }
 
 #[cfg(test)]
@@ -352,7 +358,7 @@ mod tests {
         std::mem::forget(data_dir);
 
         LocalIngestRuntime {
-            _owner_lease: owner_lease,
+            owner_lease,
             ingestion_store,
             ingestion_projection,
             worker: tokio::spawn(std::future::pending()),
@@ -476,7 +482,7 @@ mod tests {
         .unwrap();
 
         let mut runtime = LocalIngestRuntime {
-            _owner_lease: owner_lease,
+            owner_lease,
             ingestion_store,
             ingestion_projection,
             worker: tokio::spawn(async {}),

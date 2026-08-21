@@ -1,6 +1,7 @@
 import { cn } from "@/lib/cn"
 
 import type { PortfolioMetricColumnId } from "./portfolioMetricVisibility"
+import "./position-sticky-bg.css"
 
 export type PositionColumnId =
   | "asset"
@@ -31,13 +32,33 @@ const stickyHeaderBackground = "bg-muted/90 backdrop-blur-sm"
 
 export type PositionRowHighlight = "new" | "unchanged" | "changed" | "closing"
 
+/** Opaque sticky fills so horizontal scroll does not show underlap through alpha. */
 export const positionStickyRowBackground = (
   status: PositionRowHighlight,
 ): string => {
-  if (status === "new") return "bg-green-500/5"
-  if (status === "closing") return "bg-red-500/5"
-  return "bg-background"
+  if (status === "new") return "position-sticky-bg-new"
+  if (status === "closing") return "position-sticky-bg-closing"
+  return "position-sticky-bg-default"
 }
+
+export const positionStickyErrorBackground = "position-sticky-bg-error"
+
+/** Inline fallback so sticky tint cannot be dropped by CSS load order. */
+export const positionStickyRowBackgroundStyle = (
+  status: PositionRowHighlight,
+): { "background-color": string } => {
+  if (status === "new") {
+    return { "background-color": "var(--position-sticky-bg-new)" }
+  }
+  if (status === "closing") {
+    return { "background-color": "var(--position-sticky-bg-closing)" }
+  }
+  return { "background-color": "var(--background)" }
+}
+
+export const positionStickyErrorBackgroundStyle = {
+  "background-color": "var(--position-sticky-bg-error)",
+} as const
 
 export const positionStickyBodyClass = (
   columnId: "asset" | "actions",

@@ -1,36 +1,19 @@
 import {
   For,
   Show,
-  createEffect,
   createMemo,
   createSignal,
-  type Accessor,
+  createEffect,
   type JSX,
 } from "solid-js"
-import { Settings } from "lucide-solid"
-import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
+import { Slider } from "@/components/ui/slider"
 import type { OrderSide } from "@/hooks/useTrading"
 import { useWallet } from "@/hooks/useWallet"
 import { WalletInlineConnect } from "./WalletInlineConnect"
-import { cn } from "@/lib/cn"
-
 import { useFactorScores } from "../../hooks/useFactorScores"
 import { type PortfolioInterface } from "../../hooks/usePortfolioState"
 import type { ReadonlyBtcRow } from "../../hooks/useReadonlyPortfolioState"
-import { AllSymbolsDataTable } from "./all-symbols-data-table"
-import {
-  allSymbolPortfolioState,
-  buildAllSymbolRows,
-  resolveAllSymbolClick,
-} from "./allSymbolRowModel"
 import { PositionsPanelAlerts } from "./PositionsPanelAlerts"
 import {
   displayPosition,
@@ -42,18 +25,16 @@ import {
 } from "./positionRowModel"
 import { buildPositionsColumns } from "./positionsColumns"
 import {
-  PORTFOLIO_METRIC_COLUMN_ORDER,
-  PORTFOLIO_METRIC_COLUMN_LABELS,
-  readPortfolioMetricVisibility,
   visiblePortfolioMetricColumns,
-  writePortfolioMetricVisibility,
-  type PortfolioMetricColumnId,
+  type PortfolioMetricVisibility,
 } from "./portfolioMetricVisibility"
 import { PositionsDataTable } from "./positions-data-table"
 import type { PositionsTableMeta } from "./positions-data-table"
 import { ReadonlyBtcPanel } from "./ReadonlyBtcPanel"
 
-export type PositionsPanelView = "portfolio" | "all"
+const LEVERAGE_MIN = 0.001
+const LEVERAGE_MAX = 5
+const LEVERAGE_STEP = 0.1
 
 interface PositionsPanelProps {
   hasTotalWeightExceeded: boolean
@@ -67,9 +48,6 @@ interface PositionsPanelProps {
   leverageLimitsMap: Record<string, number>
   _isRebalancing?: boolean
   isPrecise: boolean
-  onPreciseChange: (value: boolean) => void
-  isManualWeightEntry: boolean
-  onManualWeightEntryChange: (value: boolean) => void
   onRemove: (symbol: string) => void
   onUndoRemove: (symbol: string) => void
   onSideChange: (symbol: string, side: OrderSide) => void
@@ -86,32 +64,35 @@ interface PositionsPanelProps {
   isReadonlyBtcLoading: boolean
   readonlyBtcError: string | null
   readonlyBtcValidationError: string | null
-  onAddReadonlyBtcAddress: (address: string) => boolean
+  onAddReadonlyBtcAddress: (address: string) => boolean | Promise<boolean>
   onRemoveReadonlyBtcAddress: (address: string) => void
   onReadonlyBtcIncludeInBetaChange: (
     address: string,
     includeInBeta: boolean,
   ) => void
-  screenerSymbols: Accessor<string[]>
-  onAddSymbol: (symbol: string) => void
+  metricVisibility: PortfolioMetricVisibility
+  isBalanceLoading: boolean
+  targetCrossAccountLeverage: number
+  onCrossAccountLeverageChange: (leverage: number) => void
 }
 
 export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
   const { isConnected } = useWallet()
   const factorScoresQuery = useFactorScores()
-  const [panelView, setPanelView] =
-    createSignal<PositionsPanelView>("portfolio")
-  const [metricVisibility, setMetricVisibility] = createSignal(
-    readPortfolioMetricVisibility(),
-  )
 
-  // createEffect: persist metricVisibility to localStorage when gear toggles change (imperative storage sync -- valid side-effect, not expressible via createMemo)
+  const [leverageInput, setLeverageInput] = createSignal("")
+  const [isLeverageInputFocused, setIsLeverageInputFocused] =
+    createSignal(false)
+
+  // createEffect: keep leverage input in sync when not focused
   createEffect(() => {
-    writePortfolioMetricVisibility(metricVisibility())
+    if (!isLeverageInputFocused()) {
+      setLeverageInput(props.targetCrossAccountLeverage.toFixed(2))
+    }
   })
 
   const visibleMetricColumns = createMemo(() =>
-    visiblePortfolioMetricColumns(metricVisibility()),
+    visiblePortfolioMetricColumns(props.metricVisibility),
   )
 
   const portfolioColumns = createMemo(() =>
@@ -131,10 +112,6 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
       ...Object.keys(props.targetPortfolio),
     ]),
   ])
-
-  const targetPositionCount = createMemo(
-    () => Object.keys(props.targetPortfolio).length,
-  )
 
   const hasRenderablePortfolioRows = createMemo(
     () => renderableSymbols().length > 0,
@@ -184,46 +161,16 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
     }),
   )
 
-  const allSymbolRows = createMemo(() =>
-    buildAllSymbolRows(
-      props.screenerSymbols(),
-      factorScoresQuery.data ?? [],
-      props.fundingRatesByBaseSymbol,
-    ),
-  )
-
-  const handleAllSymbolClick = (symbol: string) => {
-    const action = resolveAllSymbolClick(
-      allSymbolPortfolioState(
-        symbol,
-        props.targetPortfolio,
-        props.deletedArchive,
-      ),
-    )
-
-    if (action === "remove") {
-      props.onRemove(symbol)
+  const applyLeverageInput = (raw: string) => {
+    setLeverageInput(raw)
+    if (raw === "") {
       return
     }
-    if (action === "undoRemove") {
-      props.onUndoRemove(symbol)
-      return
+    const value = parseFloat(raw)
+    if (!Number.isNaN(value)) {
+      const clamped = Math.max(LEVERAGE_MIN, Math.min(LEVERAGE_MAX, value))
+      props.onCrossAccountLeverageChange(clamped)
     }
-    props.onAddSymbol(symbol)
-  }
-
-  const setMetricColumnVisible = (
-    columnId: PortfolioMetricColumnId,
-    visible: boolean,
-  ) => {
-    setMetricVisibility(previous => ({
-      ...previous,
-      [columnId]: visible,
-    }))
-  }
-
-  const togglePanelView = () => {
-    setPanelView(previous => (previous === "portfolio" ? "all" : "portfolio"))
   }
 
   const positionsTableMeta = createMemo(
@@ -250,180 +197,108 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
   )
 
   return (
-    <div class="flex flex-col rounded border border-border min-h-0 max-h-[calc(100vh-4rem)] w-full min-w-0 flex-1">
-      <div class="px-2 py-1.5 border-b border-border bg-muted/30 flex items-center justify-between gap-2 shrink-0">
-        <div class="flex items-center gap-2 min-w-0">
-          <span class="font-medium">
-            <Show when={panelView() === "portfolio"} fallback="ALL SYMBOLS">
-              PORTFOLIO ({targetPositionCount()})
-            </Show>
-          </span>
-        </div>
-        <div class="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            class="flex h-7 min-w-[8.75rem] items-center rounded border border-border bg-muted/40 p-0.5 text-[10px] font-medium hover:bg-muted/60"
-            aria-label={
-              panelView() === "portfolio"
-                ? "Show all symbols"
-                : "Show portfolio positions"
-            }
-            onClick={togglePanelView}
-          >
-            <span
-              class={cn(
-                "flex-1 rounded-sm px-2 py-0.5 text-center",
-                panelView() === "portfolio"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground",
-              )}
-            >
-              Portfolio
-            </span>
-            <span
-              class={cn(
-                "flex-1 rounded-sm px-2 py-0.5 text-center",
-                panelView() === "all"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground",
-              )}
-            >
-              All
-            </span>
-          </button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              as={Button}
-              variant="ghost"
-              size="icon"
-              class="h-7 w-7"
-              aria-label="Open positions settings"
-            >
-              <Settings class="h-3.5 w-3.5" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                class="flex items-center justify-between gap-2"
-                closeOnSelect={false}
-              >
-                <span>Precise</span>
-                <Switch
-                  checked={props.isPrecise}
-                  onChange={value => {
-                    props.onPreciseChange(value)
-                  }}
-                />
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                class="flex items-center justify-between gap-2"
-                closeOnSelect={false}
-              >
-                <span>Manual weight entry</span>
-                <Switch
-                  checked={props.isManualWeightEntry}
-                  onChange={value => {
-                    props.onManualWeightEntryChange(value)
-                  }}
-                />
-              </DropdownMenuItem>
-              <For each={PORTFOLIO_METRIC_COLUMN_ORDER}>
-                {columnId => (
-                  <DropdownMenuItem
-                    class="flex items-center justify-between gap-2"
-                    closeOnSelect={false}
-                  >
-                    <span>{PORTFOLIO_METRIC_COLUMN_LABELS[columnId]}</span>
-                    <Switch
-                      checked={metricVisibility()[columnId]}
-                      onChange={value => {
-                        setMetricColumnVisible(columnId, value)
-                      }}
-                    />
-                  </DropdownMenuItem>
-                )}
-              </For>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
-      <div class="flex-1 min-h-0 flex flex-col">
+    <div class="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
+      <div class="flex min-h-0 flex-1 flex-col">
         <Show
-          when={panelView() === "all"}
+          when={!props.isLoading}
           fallback={
-            <Show
-              when={!props.isLoading}
-              fallback={
-                <div class="flex-1 min-h-0 overflow-auto scrollbar-hide p-2 space-y-1">
-                  <For each={Array.from({ length: 8 })}>
-                    {() => <Skeleton class="h-5 w-full" />}
-                  </For>
-                </div>
-              }
-            >
-              <Show when={isConnected()} fallback={<WalletInlineConnect />}>
-                <div class="flex-1 min-h-0 overflow-auto scrollbar-hide">
-                  <Show
-                    when={hasRenderablePortfolioRows()}
-                    fallback={
-                      <div class="p-4 text-center text-muted-foreground text-[11px]">
-                        Add positions from the all view.
-                      </div>
-                    }
-                  >
-                    <PositionsDataTable
-                      columns={portfolioColumns()}
-                      data={positionRows}
-                      visibleMetricColumns={visibleMetricColumns()}
-                      factorsIsLoading={
-                        factorScoresQuery.isLoading ||
-                        factorScoresQuery.isFetching
-                      }
-                      meta={positionsTableMeta()}
-                    />
-                  </Show>
-                </div>
-                <ReadonlyBtcPanel
-                  rows={props.readonlyBtcRows}
-                  isLoading={props.isReadonlyBtcLoading}
-                  error={props.readonlyBtcError}
-                  validationError={props.readonlyBtcValidationError}
-                  onAddAddress={props.onAddReadonlyBtcAddress}
-                  onRemoveAddress={props.onRemoveReadonlyBtcAddress}
-                  onIncludeInBetaChange={props.onReadonlyBtcIncludeInBetaChange}
-                />
-              </Show>
-            </Show>
+            <div class="min-h-0 flex-1 space-y-1 overflow-auto p-2 scrollbar-hide">
+              <For each={Array.from({ length: 8 })}>
+                {() => <Skeleton class="h-5 w-full" />}
+              </For>
+            </div>
           }
         >
-          <div class="flex-1 min-h-0">
-            <AllSymbolsDataTable
-              data={allSymbolRows}
-              visibleMetricColumns={visibleMetricColumns()}
-              targetPortfolio={props.targetPortfolio}
-              deletedArchive={props.deletedArchive}
-              fundingIsLoading={props.fundingIsLoading}
-              factorsIsLoading={
-                factorScoresQuery.isLoading || factorScoresQuery.isFetching
-              }
-              onSymbolClick={handleAllSymbolClick}
+          <Show when={isConnected()} fallback={<WalletInlineConnect />}>
+            <div class="min-h-0 flex-1 overflow-auto scrollbar-hide">
+              <Show
+                when={hasRenderablePortfolioRows()}
+                fallback={
+                  <div class="p-4 text-center text-[11px] text-muted-foreground">
+                    Add positions from All Symbols.
+                  </div>
+                }
+              >
+                <PositionsDataTable
+                  columns={portfolioColumns()}
+                  data={positionRows}
+                  visibleMetricColumns={visibleMetricColumns()}
+                  factorsIsLoading={
+                    factorScoresQuery.isLoading || factorScoresQuery.isFetching
+                  }
+                  meta={positionsTableMeta()}
+                />
+              </Show>
+            </div>
+            <ReadonlyBtcPanel
+              rows={props.readonlyBtcRows}
+              isLoading={props.isReadonlyBtcLoading}
+              error={props.readonlyBtcError}
+              validationError={props.readonlyBtcValidationError}
+              onAddAddress={props.onAddReadonlyBtcAddress}
+              onRemoveAddress={props.onRemoveReadonlyBtcAddress}
+              onIncludeInBetaChange={props.onReadonlyBtcIncludeInBetaChange}
             />
-          </div>
+          </Show>
         </Show>
       </div>
-      <Show when={panelView() === "portfolio"}>
-        <PositionsPanelAlerts
-          isLoading={props.isLoading}
-          isConnected={isConnected()}
-          hasPositions={hasRenderablePortfolioRows()}
-          hasTotalWeightExceeded={props.hasTotalWeightExceeded}
-          targetAllocationPercent={props.targetAllocationPercent}
-          symbolsBelowMinimum={props.symbolsBelowMinimum}
-          symbolsDeltaBelowMinimum={props.symbolsDeltaBelowMinimum}
-          isPrecise={props.isPrecise}
-          targetPortfolio={props.targetPortfolio}
-          currentPortfolio={props.currentPortfolio}
-        />
-      </Show>
+
+      <PositionsPanelAlerts
+        isLoading={props.isLoading}
+        isConnected={isConnected()}
+        hasPositions={hasRenderablePortfolioRows()}
+        hasTotalWeightExceeded={props.hasTotalWeightExceeded}
+        targetAllocationPercent={props.targetAllocationPercent}
+        symbolsBelowMinimum={props.symbolsBelowMinimum}
+        symbolsDeltaBelowMinimum={props.symbolsDeltaBelowMinimum}
+        isPrecise={props.isPrecise}
+        targetPortfolio={props.targetPortfolio}
+        currentPortfolio={props.currentPortfolio}
+      />
+
+      <div class="shrink-0 border-t border-border bg-background/80 backdrop-blur">
+        <div class="flex items-center pt-3 text-[12px]">
+          <div class="flex flex-1 items-center gap-3">
+            <span class="whitespace-nowrap font-semibold text-muted-foreground">
+              Leverage
+            </span>
+            <Show
+              when={!props.isBalanceLoading}
+              fallback={<Skeleton class="h-4 w-full" />}
+            >
+              <Slider
+                value={[props.targetCrossAccountLeverage]}
+                onChange={([selectedLeverage]) => {
+                  props.onCrossAccountLeverageChange(selectedLeverage)
+                }}
+                minValue={LEVERAGE_MIN}
+                maxValue={LEVERAGE_MAX}
+                step={LEVERAGE_STEP}
+                class="flex-1"
+              />
+              <input
+                type="number"
+                value={leverageInput()}
+                onFocus={() => setIsLeverageInputFocused(true)}
+                onBlur={() => {
+                  setIsLeverageInputFocused(false)
+                  setLeverageInput(props.targetCrossAccountLeverage.toFixed(2))
+                }}
+                onInput={leverageInputChangeEvent => {
+                  applyLeverageInput(
+                    leverageInputChangeEvent.currentTarget.value,
+                  )
+                }}
+                min={LEVERAGE_MIN}
+                max={LEVERAGE_MAX}
+                step={LEVERAGE_STEP}
+                class="w-16 rounded-md border border-border bg-transparent px-2 py-1 text-center font-medium [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              />
+              <span class="text-sm font-medium">x</span>
+            </Show>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

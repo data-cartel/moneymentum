@@ -22,6 +22,9 @@ AI coding agents working in this repo are expected to:
 - Honor the rules in this document for code style, testing, and quality gates.
 - Edit code, tests, and configs in this repo. Humans own deploys, secrets, and
   external systems outside git.
+- Run every toolchain command (`bun`, `cargo`, `sqlx`, `but`, ...) through the
+  Nix flake -- see [Environment: Nix first](#environment-nix-first). Do not try
+  bare `bun` / `cargo` first and fall back to Nix after failure.
 - Never relax quality checks (clippy, eslint, tests) without explicit
   permission. Ask if a check seems wrong; don't suppress.
 - Don't substitute approaches, libraries, or tools without checking in. Scope is
@@ -43,27 +46,66 @@ For status -- what works today vs. what's planned -- see
 
 ## Development Commands
 
-### Frontend (SolidJS + Vite)
+### Environment: Nix first
 
-Run from `frontend/` directory:
+All toolchain binaries (`bun`, `cargo`, `clippy`, `sqlx`, `but`, etc.) come from
+the Nix flake. Agents must not assume a bare shell has them on `PATH`.
+
+**Before any tool invocation**, either:
+
+1. Confirm the current shell is already inside the flake env (e.g. `direnv` /
+   `nix develop` already active -- `which bun` / `which cargo` resolve under the
+   Nix store or devenv), or
+2. Wrap the command in `nix develop` from the **repo root**:
 
 ```bash
-cd frontend
-bun run typecheck  # Type check only
-bun run lint       # Lint
-bun run test       # Run tests (vitest)
-bun run build      # Full build
-bun run dev        # Dev server (port 5173) - only when explicitly asked
+# Preferred one-shot form for agent shells (no direnv assumed):
+nix develop --impure -c bash -lc 'cd frontend && bun run typecheck'
+nix develop --impure -c cargo check
+
+# Frontend-only shell (lighter; no Rust toolchain):
+nix develop --impure .#frontend -c bash -lc 'cd frontend && bun run lint'
 ```
+
+**Forbidden:**
+
+- Running `bun`, `cargo`, `npm`, `yarn`, `pnpm`, `rustup`, or similar from a
+  bare shell and then "discovering" Nix after it fails
+- Installing tools with `bun install -g`, `cargo install`, `curl | sh`,
+  Homebrew, etc. to work around a missing binary
+- Bypassing Nix for dependency management
+
+Humans may use `direnv allow` so bare `bun` / `cargo` work in their terminal.
+Agents should still prefer the `nix develop --impure -c ...` form so commands
+work in fresh shells without relying on direnv.
+
+### Frontend (SolidJS + Vite)
+
+From repo root, via Nix:
+
+```bash
+nix develop --impure -c bash -lc 'cd frontend && bun run typecheck'  # Type check only
+nix develop --impure -c bash -lc 'cd frontend && bun run lint'       # Lint
+nix develop --impure -c bash -lc 'cd frontend && bun run test'       # Run tests (vitest)
+nix develop --impure -c bash -lc 'cd frontend && bun run build'      # Full build
+nix develop --impure -c bash -lc 'cd frontend && bun run dev'        # Dev server (port 5173) - only when explicitly asked
+```
+
+Inside an already-active flake shell, the same scripts run from `frontend/` as
+`bun run <script>`.
 
 ### Backend (Rust)
 
+From repo root, via Nix:
+
 ```bash
-cargo check              # Fast compilation verification
-cargo test -q            # Run tests
-cargo clippy             # Linting
-cargo fmt                # Format code
+nix develop --impure -c cargo check              # Fast compilation verification
+nix develop --impure -c cargo test -q            # Run tests
+nix develop --impure -c cargo clippy             # Linting
+nix develop --impure -c cargo fmt                # Format code
 ```
+
+Inside an already-active flake shell, bare `cargo ...` is fine.
 
 **Workflow (TTDD - Type-driven TDD)**:
 
@@ -84,20 +126,16 @@ and fix all warnings. Finally, `cargo fmt` before committing.
 binary.
 
 **Dependencies**: Always use `cargo add <crate>` - never manually edit
-Cargo.toml versions.
+Cargo.toml versions. Run `cargo add` through the flake shell
+(`nix develop --impure -c cargo add <crate>`).
 
-**Migrations**: Never manually create migration files. Always use sqlx CLI:
+**Migrations**: Never manually create migration files. Always use sqlx CLI
+(through the flake shell):
 
 ```bash
-sqlx migrate add <migration_name>  # Creates timestamped migration file
-sqlx migrate run                   # Applies pending migrations
+nix develop --impure -c sqlx migrate add <migration_name>  # Creates timestamped migration file
+nix develop --impure -c sqlx migrate run                   # Applies pending migrations
 ```
-
-### Environment
-
-- **Nix + Direnv**: `direnv allow` activates the dev environment
-- All dependencies managed through Nix flake - do not use bun install, cargo
-  install, or similar
 
 ### Version control
 
@@ -222,8 +260,9 @@ the allow is necessary.
 
 ### Dependencies
 
-- Frontend: use bun commands (`bun add`, `bun remove`). Never manually write
-  version numbers - LLMs hallucinate them.
+- Frontend: use bun commands (`bun add`, `bun remove`) inside the flake shell
+  (`nix develop --impure -c bash -lc 'cd frontend && bun add <pkg>'`). Never
+  manually write version numbers - LLMs hallucinate them.
 - Never bypass nix for dependency management.
 
 ### When stuck

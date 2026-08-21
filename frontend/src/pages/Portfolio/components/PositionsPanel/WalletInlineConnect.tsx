@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onMount, Show, type JSX } from "solid-js"
+import { createSignal, onCleanup, Show, type JSX } from "solid-js"
 import * as Effect from "effect/Effect"
 import * as Data from "effect/Data"
 import { toast } from "solid-sonner"
@@ -8,7 +8,8 @@ import { getStoredWalletAddresses } from "@/contexts/wallet-context"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
 import {
-  getOrCreateEvmAppKit,
+  ensureEvmAppKit,
+  prefetchEvmAppKit,
   readEvmAddressFromAccountState,
   readEvmWalletConnectedFromAccountState,
   readReownProjectId,
@@ -21,29 +22,26 @@ class ReownModalOpenFailed extends Data.TaggedError("ReownModalOpenFailed")<{
 /**
  * Connects the user's main EVM wallet via Reown AppKit. Sets mainAddress for
  * read-only Hyperliquid balance/position loads -- no private keys involved.
+ *
+ * AppKit is prefetched on pointer enter and fully loaded on click so the
+ * initial Portfolio bundle does not include Reown.
  */
 export const WalletInlineConnect = (): JSX.Element => {
   const { setMainAddress, mainAddress } = useWallet()
-  const [modalReady, setModalReady] = createSignal(false)
   const [isOpening, setIsOpening] = createSignal(false)
+  let unsubscribeAccount: (() => void) | undefined
 
   const projectIdConfigured = () => readReownProjectId() !== null
 
-  onMount(() => {
-    const modal = getOrCreateEvmAppKit()
-    if (!modal) {
-      setModalReady(false)
-      return
-    }
+  onCleanup(() => {
+    unsubscribeAccount?.()
+  })
 
-    setModalReady(true)
-
-    const existingAddress = modal.getAddress("eip155")
-    if (existingAddress) {
-      setMainAddress(existingAddress)
-    }
-
-    const unsubscribeAccount = modal.subscribeAccount(accountState => {
+  const attachAccountListener = (
+    modal: NonNullable<Awaited<ReturnType<typeof ensureEvmAppKit>>>,
+  ) => {
+    unsubscribeAccount?.()
+    unsubscribeAccount = modal.subscribeAccount(accountState => {
       const nextAddress = readEvmAddressFromAccountState(accountState)
       const connected =
         readEvmWalletConnectedFromAccountState(accountState) ||
@@ -57,24 +55,40 @@ export const WalletInlineConnect = (): JSX.Element => {
       const stored = getStoredWalletAddresses()
       setMainAddress(stored?.accountAddress ?? null)
     }, "eip155")
-
-    onCleanup(() => {
-      unsubscribeAccount()
-    })
-  })
+  }
 
   const openConnectModal = () => {
-    const modal = getOrCreateEvmAppKit()
-    if (!modal) {
+    if (isOpening()) {
+      return
+    }
+
+    if (!projectIdConfigured()) {
       toast.error("Set VITE_REOWN_PROJECT_ID in .env to connect a wallet.")
       return
     }
 
     setIsOpening(true)
     void Effect.runPromise(
-      Effect.tryPromise({
-        try: () => modal.open({ view: "Connect", namespace: "eip155" }),
-        catch: cause => new ReownModalOpenFailed({ cause }),
+      Effect.gen(function* () {
+        const modal = yield* Effect.tryPromise({
+          try: () => ensureEvmAppKit(),
+          catch: cause => new ReownModalOpenFailed({ cause }),
+        })
+        if (!modal) {
+          return yield* Effect.fail(
+            new ReownModalOpenFailed({
+              cause: new Error(
+                "Set VITE_REOWN_PROJECT_ID in .env to connect a wallet.",
+              ),
+            }),
+          )
+        }
+
+        attachAccountListener(modal)
+        yield* Effect.tryPromise({
+          try: () => modal.open({ view: "Connect", namespace: "eip155" }),
+          catch: cause => new ReownModalOpenFailed({ cause }),
+        })
       }).pipe(
         Effect.catchAll(error =>
           Effect.sync(() => {
@@ -97,7 +111,7 @@ export const WalletInlineConnect = (): JSX.Element => {
         Connect to Hyperliquid on staged changes to authorize a trading agent.
       </p>
       <Show
-        when={projectIdConfigured() && modalReady()}
+        when={projectIdConfigured()}
         fallback={
           <p class="max-w-[45ch] text-center text-[12px] text-destructive">
             Set VITE_REOWN_PROJECT_ID in frontend/.env to enable wallet connect.
@@ -112,11 +126,15 @@ export const WalletInlineConnect = (): JSX.Element => {
         >
           <Button
             type="button"
-            class="h-8 w-full max-w-[45ch] text-[12px]"
+            class="h-8 w-full max-w-[45ch] text-[12px] transition-opacity"
+            classList={{ "opacity-50": isOpening() }}
             disabled={isOpening()}
+            onPointerEnter={() => {
+              prefetchEvmAppKit()
+            }}
             onClick={openConnectModal}
           >
-            {isOpening() ? "Opening..." : "Connect wallet"}
+            {isOpening() ? "Loading wallet..." : "Connect wallet"}
           </Button>
         </Show>
       </Show>

@@ -64,11 +64,8 @@ const getCorrelationColor = (value: number): string => {
 
 export const RiskPanel = () => {
   return (
-    <div class="flex-1 border border-border rounded flex flex-col min-w-0">
-      <div class="px-2 py-1 border-b border-border bg-muted/30 font-medium">
-        RISK
-      </div>
-      <div class="flex-1 flex flex-col p-2 gap-3 overflow-auto scrollbar-hide">
+    <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
+      <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-2 scrollbar-hide">
         {/* Top metrics */}
         <div class="grid grid-cols-2 gap-x-4 gap-y-1">
           <div class="flex justify-between">

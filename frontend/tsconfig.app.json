@@ -26,7 +26,8 @@
     "plugins": [{ "name": "@effect/language-service" }],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "ccxt/hyperliquid": ["./node_modules/ccxt/js/src/pro/hyperliquid.d.ts"]
     }
   },
   "include": ["src"]

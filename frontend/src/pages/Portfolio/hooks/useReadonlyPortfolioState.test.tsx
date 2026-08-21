@@ -88,12 +88,12 @@ describe("useReadonlyPortfolioState", () => {
     ])
   })
 
-  it("persists readonly btc entries to the active network key", () => {
+  it("persists readonly btc entries to the active network key", async () => {
     const { result } = renderHook(() => useReadonlyPortfolioState(), {
       wrapper: createWrapper(),
     })
 
-    expect(result.addAddress(testnetAddress)).toBe(true)
+    await expect(result.addAddress(testnetAddress)).resolves.toBe(true)
 
     expect(localStorage.getItem("portfolio-readonly-btc-addresses")).toBeNull()
     expect(localStorage.getItem(storageKey("mainnet"))).toBeNull()
@@ -160,13 +160,15 @@ describe("useReadonlyPortfolioState", () => {
     expect(result.rows.map(row => row.address)).toEqual([testnetBech32Address])
   })
 
-  it("deduplicates bech32 address casing variants when adding entries", () => {
+  it("deduplicates bech32 address casing variants when adding entries", async () => {
     const { result } = renderHook(() => useReadonlyPortfolioState(), {
       wrapper: createWrapper(),
     })
 
-    expect(result.addAddress(testnetBech32Address)).toBe(true)
-    expect(result.addAddress(testnetBech32Address.toUpperCase())).toBe(false)
+    await expect(result.addAddress(testnetBech32Address)).resolves.toBe(true)
+    await expect(
+      result.addAddress(testnetBech32Address.toUpperCase()),
+    ).resolves.toBe(false)
 
     expect(result.rows.map(row => row.address)).toEqual([testnetBech32Address])
   })

@@ -1,3 +1,5 @@
+import { createEffect, createSignal, type Accessor } from "solid-js"
+
 export const PORTFOLIO_METRIC_COLUMNS_STORAGE_KEY =
   "portfolio-metric-columns-visibility"
 
@@ -104,6 +106,38 @@ export const writePortfolioMetricVisibility = (
   } catch {
     return
   }
+}
+
+/**
+ * Restores the persisted metric column visibility and keeps localStorage in
+ * sync with every gear-menu toggle for the lifetime of the owning component.
+ */
+export const usePortfolioMetricVisibility = (): {
+  metricVisibility: Accessor<PortfolioMetricVisibility>
+  setMetricColumnVisible: (
+    columnId: PortfolioMetricColumnId,
+    visible: boolean,
+  ) => void
+} => {
+  const [metricVisibility, setMetricVisibility] =
+    createSignal<PortfolioMetricVisibility>(readPortfolioMetricVisibility())
+
+  // createEffect: persist metric visibility when gear toggles change
+  createEffect(() => {
+    writePortfolioMetricVisibility(metricVisibility())
+  })
+
+  const setMetricColumnVisible = (
+    columnId: PortfolioMetricColumnId,
+    visible: boolean,
+  ) => {
+    setMetricVisibility(previous => ({
+      ...previous,
+      [columnId]: visible,
+    }))
+  }
+
+  return { metricVisibility, setMetricColumnVisible }
 }
 
 export const visiblePortfolioMetricColumns = (

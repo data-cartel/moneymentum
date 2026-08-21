@@ -14,7 +14,7 @@ import {
   useWalletSettings,
   useSwitchNetwork,
 } from "./useTrading"
-import { millisecondsUntilNextUtcMidnight } from "@/services/hyperliquid-client"
+import { millisecondsUntilNextUtcMidnight } from "@/services/hyperliquid-markets"
 import { WalletProvider } from "@/contexts/WalletProvider"
 import { useWallet } from "@/hooks/useWallet"
 
@@ -32,8 +32,18 @@ const mockMethods = {
 const mockMarketsResponse = {
   tickers: ["BTC/USDC:USDC", "ETH/USDC:USDC", "SOL/USDC:USDC"],
   leverageLimits: [
-    { symbol: "BTC/USDC:USDC", maxLeverage: 50, assetIndex: 0 },
-    { symbol: "ETH/USDC:USDC", maxLeverage: 25, assetIndex: 1 },
+    {
+      symbol: "BTC/USDC:USDC",
+      maxLeverage: 50,
+      assetIndex: 0,
+      onlyIsolated: false,
+    },
+    {
+      symbol: "ETH/USDC:USDC",
+      maxLeverage: 25,
+      assetIndex: 1,
+      onlyIsolated: false,
+    },
   ],
   refreshedAt: new Date().toISOString(),
   marketsMaxAgeMs: millisecondsUntilNextUtcMidnight(),
@@ -57,8 +67,17 @@ vi.mock("@/services/hyperliquid-client", async importOriginal => {
   }
 })
 
+vi.mock("@/services/hyperliquidClientLoader", async () => {
+  const clientModule = await import("@/services/hyperliquid-client")
+  return {
+    prefetchHyperliquidClientModule: () => undefined,
+    ensureHyperliquidClientModule: async () => clientModule,
+  }
+})
+
 vi.mock("@/reown/evmAppKit", () => ({
-  getOrCreateEvmAppKit: () => null,
+  ensureEvmAppKit: async () => null,
+  prefetchEvmAppKit: () => undefined,
   readConnectedEip1193Provider: () => null,
 }))
 
@@ -335,8 +354,18 @@ describe("useTrading hooks", () => {
       })
 
       expect(result.data).toEqual([
-        { symbol: "BTC/USDC:USDC", maxLeverage: 50, assetIndex: 0 },
-        { symbol: "ETH/USDC:USDC", maxLeverage: 25, assetIndex: 1 },
+        {
+          symbol: "BTC/USDC:USDC",
+          maxLeverage: 50,
+          assetIndex: 0,
+          onlyIsolated: false,
+        },
+        {
+          symbol: "ETH/USDC:USDC",
+          maxLeverage: 25,
+          assetIndex: 1,
+          onlyIsolated: false,
+        },
       ])
     })
   })

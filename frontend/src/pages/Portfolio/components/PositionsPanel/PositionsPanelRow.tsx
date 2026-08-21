@@ -37,7 +37,10 @@ import {
   positionBodyCellClass,
   positionBodyCellInnerClass,
   positionStickyBodyClass,
+  positionStickyErrorBackground,
+  positionStickyErrorBackgroundStyle,
   positionStickyLeverageCloseClass,
+  positionStickyRowBackgroundStyle,
   positionTableColumnIds,
   SIDE_BADGE_CLASS,
 } from "./positionColumnLayout"
@@ -130,7 +133,12 @@ export const PositionsPanelRow = (props: {
   const rebalanceError = () => props.rebalanceError
 
   const stickyErrorBackgroundClass = () =>
-    rebalanceError() && !isClosing() && "bg-destructive/5"
+    rebalanceError() && !isClosing() && positionStickyErrorBackground
+
+  const stickyCellStyle = () =>
+    rebalanceError() && !isClosing()
+      ? positionStickyErrorBackgroundStyle
+      : positionStickyRowBackgroundStyle(props.status)
 
   const metricSkeleton = () => (
     <Skeleton class="ml-auto h-3 w-[3rem] inline-block align-middle" />
@@ -373,7 +381,7 @@ export const PositionsPanelRow = (props: {
         class={cn(
           "border-b border-border/30 position-row h-7 transition-[height,opacity] duration-200 ease-out",
           isLeverageEditorExpanded() && "h-14",
-          isClosing() && "opacity-50 bg-red-500/5",
+          isClosing() && "bg-red-500/5",
           isNew() && "bg-green-500/5",
           rebalanceError() && !isClosing() && "bg-destructive/5",
         )}
@@ -384,7 +392,9 @@ export const PositionsPanelRow = (props: {
             stickyErrorBackgroundClass(),
             "transition-[padding] duration-200 ease-out",
             isLeverageEditorExpanded() && "py-2",
+            isClosing() && "text-muted-foreground",
           )}
+          style={stickyCellStyle()}
         >
           <div
             class={cn(
@@ -557,6 +567,7 @@ export const PositionsPanelRow = (props: {
                   positionStickyBodyClass("actions", props.status),
                   stickyErrorBackgroundClass(),
                 )}
+                style={stickyCellStyle()}
               >
                 <div class={positionBodyCellInnerClass}>
                   <Button
@@ -616,6 +627,7 @@ export const PositionsPanelRow = (props: {
               "transition-[padding] duration-200 ease-out",
               isLeverageEditorExpanded() ? "py-2" : "py-0",
             )}
+            style={stickyCellStyle()}
           >
             <Button
               variant="ghost"

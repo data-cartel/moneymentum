@@ -1,0 +1,35 @@
+/* Opaque sticky cell fills. Stronger than row bg-*-500/5 so the tint reads on dark UI. */
+
+:root {
+  --position-sticky-bg-new: color-mix(
+    in srgb,
+    var(--background) 85%,
+    #22c55e 15%
+  );
+  --position-sticky-bg-closing: color-mix(
+    in srgb,
+    var(--background) 85%,
+    #ef4444 15%
+  );
+  --position-sticky-bg-error: color-mix(
+    in srgb,
+    var(--background) 85%,
+    var(--destructive) 15%
+  );
+}
+
+.position-sticky-bg-default {
+  background-color: var(--background);
+}
+
+.position-sticky-bg-new {
+  background-color: var(--position-sticky-bg-new);
+}
+
+.position-sticky-bg-closing {
+  background-color: var(--position-sticky-bg-closing);
+}
+
+.position-sticky-bg-error {
+  background-color: var(--position-sticky-bg-error);
+}

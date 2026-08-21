@@ -85,14 +85,8 @@ export const FactorsPanel = (props: FactorsPanelProps) => {
     !props.isBetaLoading && !betaHasError() && betaHasKnownAge()
 
   return (
-    <div class="shrink-0 border border-border rounded flex flex-col min-w-[25%] relative">
-      <div class="px-2 py-1 border-b border-border bg-muted/30 font-medium flex items-center justify-between">
-        <span>FACTORS</span>
-        <kbd class="px-1.5 py-0.5 text-[10px] font-mono bg-muted rounded">
-          f
-        </kbd>
-      </div>
-      <div class="flex-1 flex flex-col p-2 gap-3 overflow-auto scrollbar-hide">
+    <div class="relative flex h-full min-h-0 w-full min-w-0 flex-col">
+      <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-2 scrollbar-hide">
         {/* Exposures */}
         <div class="space-y-1.5">
           <div class="text-[10px] text-muted-foreground font-medium">

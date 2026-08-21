@@ -69,7 +69,7 @@ const TokenPage = (props: { timeframe: Timeframe }) => {
                   variant: "link",
                   className: "p-0 mt-4 h-auto",
                 })}
-                href="/"
+                href="/portfolio"
               >
                 ← Back to Main Page
               </A>
@@ -89,7 +89,10 @@ const TokenPage = (props: { timeframe: Timeframe }) => {
           <CardHeader>
             <div class="flex items-center justify-between">
               <div class="flex items-center space-x-4">
-                <A class={buttonVariants({ variant: "ghost" })} href="/">
+                <A
+                  class={buttonVariants({ variant: "ghost" })}
+                  href="/portfolio"
+                >
                   ←&nbsp;Back
                 </A>
                 <CardTitle class="text-2xl font-bold">

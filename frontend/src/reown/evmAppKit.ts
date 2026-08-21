@@ -1,14 +1,15 @@
 /**
- * Shared Reown AppKit instance for EVM wallets on the Portfolio tab.
- * Pattern mirrors the Solana AppKit helpers in PR #224.
+ * Lazy Reown AppKit for EVM wallet connect on the Portfolio tab.
+ *
+ * The AppKit + EthersAdapter modules are loaded only when the user intends to
+ * connect, authorize, revoke, or disconnect -- never on initial page load.
  */
 
-import { createAppKit, type AppKit } from "@reown/appkit"
-import { arbitrum, arbitrumSepolia } from "@reown/appkit/networks"
-import { EthersAdapter } from "@reown/appkit-adapter-ethers"
+import type { AppKit } from "@reown/appkit"
 import type { EIP1193Provider } from "viem"
 
 let appKitSingleton: AppKit | null = null
+let appKitLoadPromise: Promise<AppKit | null> | null = null
 
 export const readReownProjectId = (): string | null => {
   const projectId = import.meta.env.VITE_REOWN_PROJECT_ID?.trim()
@@ -16,21 +17,49 @@ export const readReownProjectId = (): string | null => {
 }
 
 /**
- * Single shared AppKit instance for Hyperliquid main-wallet connect.
+ * Starts loading AppKit in the background (e.g. on pointer enter). Safe to call
+ * repeatedly; concurrent callers share one promise. Prefetch failures are
+ * swallowed -- the click path surfaces errors via toast.
  */
-export const getOrCreateEvmAppKit = (): AppKit | null => {
+export const prefetchEvmAppKit = (): void => {
+  void ensureEvmAppKit().catch(() => undefined)
+}
+
+/**
+ * Lazily creates the shared AppKit instance. Returns null when the Reown
+ * project id is not configured.
+ */
+export const ensureEvmAppKit = (): Promise<AppKit | null> => {
   if (appKitSingleton) {
-    return appKitSingleton
+    return Promise.resolve(appKitSingleton)
   }
 
+  if (appKitLoadPromise) {
+    return appKitLoadPromise
+  }
+
+  appKitLoadPromise = loadEvmAppKit().catch((error: unknown) => {
+    appKitLoadPromise = null
+    throw error
+  })
+  return appKitLoadPromise
+}
+
+const loadEvmAppKit = async (): Promise<AppKit | null> => {
   const projectId = readReownProjectId()
   if (!projectId) {
     return null
   }
 
+  const [{ createAppKit }, { EthersAdapter }, networks] = await Promise.all([
+    import("@reown/appkit"),
+    import("@reown/appkit-adapter-ethers"),
+    import("@reown/appkit/networks"),
+  ])
+
   appKitSingleton = createAppKit({
     adapters: [new EthersAdapter()],
-    networks: [arbitrum, arbitrumSepolia],
+    networks: [networks.arbitrum, networks.arbitrumSepolia],
     projectId,
     metadata: {
       name: "Moneymentum",
@@ -41,8 +70,24 @@ export const getOrCreateEvmAppKit = (): AppKit | null => {
           ? [`${window.location.origin}/favicon.ico`]
           : [],
     },
+    // Injected browser wallets only -- no WalletConnect QR / all-wallets catalog.
+    enableWalletConnect: false,
+    enableWalletGuide: false,
+    enableReconnect: false,
+    allWallets: "HIDE",
     features: {
       analytics: false,
+      swaps: false,
+      onramp: false,
+      email: false,
+      socials: false,
+      history: false,
+      allWallets: false,
+      send: false,
+      receive: false,
+      smartSessions: false,
+      connectorTypeOrder: ["injected"],
+      connectMethodsOrder: ["wallet"],
     },
   })
 

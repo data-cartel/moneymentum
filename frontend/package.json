@@ -17,6 +17,8 @@
     "fmt": "prettier --write \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {
+    "@arminmajerie/dockview-core": "^5.0.3",
+    "@arminmajerie/dockview-solid": "^5.0.3",
     "@fontsource/manrope": "^5.2.8",
     "@fontsource/syne": "^5.2.7",
     "@kobalte/core": "^0.13.9",
