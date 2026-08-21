@@ -5,6 +5,7 @@ mod finance;
 mod funding;
 mod hyperliquid;
 mod ingestion;
+mod local_ingest;
 mod market_catalog;
 mod market_enablement;
 mod market_metadata;
@@ -13,6 +14,8 @@ mod readonly_portfolio;
 mod screener;
 mod timeframe;
 mod venue;
+
+pub use local_ingest::{LocalIngestError, run_local_ingest};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -44,8 +47,8 @@ use tracing_subscriber::EnvFilter;
 use crate::hyperliquid::{Hyperliquid, HyperliquidClients, HyperliquidNetwork};
 use finance::Symbol;
 use ingestion::{
-    IngestionJob, IngestionJobContext, IngestionRun, IngestionRunStatus, IngestionServices,
-    IngestionWork, default_ingestion_schedules, trigger_scheduled_ingestion,
+    IngestionJob, IngestionJobContext, IngestionOwnerLease, IngestionRun, IngestionRunStatus,
+    IngestionServices, IngestionWork, default_ingestion_schedules, trigger_scheduled_ingestion,
 };
 use market_catalog::MarketCatalog;
 use market_enablement::{
@@ -130,6 +133,8 @@ pub(crate) struct AppState {
     market_enablement: Arc<Store<MarketEnablement>>,
     market_enablement_projection: Arc<Projection<MarketEnablement>>,
     market_catalog_projection: Arc<Projection<MarketCatalog>>,
+    /// Held for the server lifetime so a concurrent CLI cannot steal schedule slots.
+    _ingestion_owner_lease: Option<IngestionOwnerLease>,
 }
 
 /// Renders pre-serialized JSON bytes with the `application/json` content type.
@@ -737,10 +742,13 @@ fn classify_enablement_error(error: &SendError<MarketEnablement>, operation: &st
 /// library's shared retry/backoff/circuit-breaker policy: retries are exhausted
 /// before a terminal failure trips the breaker and stops the worker for a human
 /// to inspect.
-fn spawn_ingestion_worker(
+///
+/// Returns the task handle so callers that must not hang (the local ingest CLI)
+/// can detect an unexpected worker exit.
+pub(crate) fn spawn_ingestion_worker(
     apalis_pool: apalis_sqlite::SqlitePool,
     context: Arc<IngestionJobContext>,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let failure_notify = Arc::new(tokio::sync::Notify::new());
         let monitor = EventSorceryMonitor::new().register(move |worker_index| {
@@ -776,7 +784,7 @@ fn spawn_ingestion_worker(
         if let Err(err) = monitor.run().await {
             error!(error = %err, "ingestion monitor crashed");
         }
-    });
+    })
 }
 
 /// Spawns supervised apalis-cron workers -- one per built-in schedule -- so each
@@ -858,6 +866,12 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
             .await?;
     debug!("event-sourced stores ready");
 
+    // Exclusive ownership must be proven before abandoning Running streams: a
+    // live moneymentum-ingest CLI still holds those jobs, and releasing their
+    // slots would allow duplicate writers. The lease is kept in AppState so it
+    // lasts for the server lifetime and is released on process exit/crash.
+    let ingestion_owner_lease = IngestionOwnerLease::try_acquire(&config.database_url).await?;
+
     // Abandon any run left Running by a crash before schedulers enqueue work, so
     // the one-running slot can never stay wedged across a restart (issue #339).
     ingestion::recover_abandoned_runs(&ingestion_store, &ingestion_projection).await?;
@@ -912,6 +926,7 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
         market_enablement,
         market_enablement_projection,
         market_catalog_projection,
+        _ingestion_owner_lease: Some(ingestion_owner_lease),
     });
 
     Ok(build_router(state))
@@ -956,9 +971,11 @@ fn build_router(state: Arc<AppState>) -> Router {
 #[error(
     "in-memory SQLite database_url is unsupported: the event store and the apalis worker open separate pools, and an in-memory URL gives each its own private database; use a file-backed database_url"
 )]
-struct InMemoryDatabaseUnsupported;
+pub(crate) struct InMemoryDatabaseUnsupported;
 
-fn ensure_shared_database(database_url: &str) -> Result<(), InMemoryDatabaseUnsupported> {
+pub(crate) fn ensure_shared_database(
+    database_url: &str,
+) -> Result<(), InMemoryDatabaseUnsupported> {
     let normalized = database_url.to_ascii_lowercase();
     if normalized.contains(":memory:") || normalized.contains("mode=memory") {
         return Err(InMemoryDatabaseUnsupported);
@@ -1053,11 +1070,6 @@ mod tests {
             .build()
             .await
             .unwrap();
-        let (_ingestion_store, _ingestion_projection) =
-            StoreBuilder::<IngestionRun>::new(pool.clone())
-                .build()
-                .await
-                .unwrap();
         let (market_catalog, market_catalog_projection) =
             StoreBuilder::<MarketCatalog>::new(pool.clone())
                 .build()
@@ -1078,6 +1090,9 @@ mod tests {
             market_enablement,
             market_enablement_projection,
             market_catalog_projection,
+            // Unit harnesses do not run ingestion workers or recover abandoned
+            // runs, so they do not need the exclusive owner lease.
+            _ingestion_owner_lease: None,
         }));
 
         TestHarness {
@@ -2028,6 +2043,7 @@ mod tests {
         assert_eq!(body["tickers"], serde_json::json!(["BTC/USDC:USDC"]));
         assert_eq!(body["leverageLimits"][0]["maxLeverage"], 50);
         assert_eq!(body["leverageLimits"][0]["assetIndex"], 0);
+        assert_eq!(body["leverageLimits"][0]["onlyIsolated"], false);
         assert!(
             logs_contain_at(
                 tracing::Level::DEBUG,

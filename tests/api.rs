@@ -110,14 +110,6 @@ impl TestApp {
             .unwrap()
     }
 
-    async fn post(&self, path: &str) -> reqwest::Response {
-        self.http
-            .post(format!("{}{path}", self.base_url))
-            .send()
-            .await
-            .unwrap()
-    }
-
     async fn shutdown(self) {
         self.server.abort();
         let _ = self.server.await;
@@ -205,15 +197,79 @@ async fn ingestion_status_is_idle_on_fresh_start() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn manual_ingest_endpoint_is_not_exposed() {
+async fn local_ingest_writes_candles() {
     let mock_server = MockServer::start().await;
-    mount_meta_mock(&mock_server).await;
+    mount_successful_ingestion_mocks(&mock_server).await;
 
     let data_dir = TempDir::new().unwrap();
-    let app = spawn_test_app(&mock_server, &data_dir).await;
+    let database_path = data_dir.path().join("moneymentum-test.db");
+    let toml_str = format!(
+        r#"
+        port = 0
+        data_dir = '{}'
+        database_url = 'sqlite://{}?mode=rwc'
+        hyperliquid_base_url = "{}"
+        hyperliquid_testnet_base_url = "{}"
+        log_level = "debug"
+        max_concurrent_requests = 3
+        max_retries = 2
+        "#,
+        data_dir.path().display(),
+        database_path.display(),
+        mock_server.uri(),
+        mock_server.uri()
+    );
+    let config: Config = toml::from_str(&toml_str).unwrap();
+    moneymentum::run_local_ingest(config).await.unwrap();
 
-    let response = app.post("/ingest").await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let candles_csv = std::fs::read_to_string(data_dir.path().join("ohlcv_1h.csv"))
+        .expect("local ingest should write the 1h candle csv");
+    let mut candle_lines = candles_csv.lines().filter(|line| !line.is_empty());
+    let candle_header = candle_lines
+        .next()
+        .expect("candle csv should include a header");
+    for column in [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "symbol",
+        "ticker",
+    ] {
+        assert!(
+            candle_header.split(',').any(|name| name == column),
+            "candle csv missing column {column}: {candle_header}"
+        );
+    }
+    let candle_row = candle_lines
+        .next()
+        .expect("candle csv should include at least one data row");
+    assert!(
+        candle_row.contains("BTC") && candle_row.contains("42000"),
+        "candle row should carry BTC open from the mock: {candle_row}"
+    );
+
+    let funding_csv = std::fs::read_to_string(data_dir.path().join("funding_rate1h.csv"))
+        .expect("local ingest should write the funding csv");
+    let mut funding_lines = funding_csv.lines().filter(|line| !line.is_empty());
+    let funding_header = funding_lines
+        .next()
+        .expect("funding csv should include a header");
+    for column in ["timestamp", "funding_rate", "symbol"] {
+        assert!(
+            funding_header.split(',').any(|name| name == column),
+            "funding csv missing column {column}: {funding_header}"
+        );
+    }
+    let funding_row = funding_lines
+        .next()
+        .expect("funding csv should include at least one data row");
+    assert!(
+        funding_row.contains("BTC") && funding_row.contains("0.0001"),
+        "funding row should carry BTC rate from the mock: {funding_row}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -358,7 +414,8 @@ async fn hyperliquid_markets_serves_the_universe_in_ccxt_format() {
         json!([
             {"name": "ETH", "szDecimals": 4, "maxLeverage": 25},
             {"name": "DELISTED", "szDecimals": 2, "maxLeverage": 3, "isDelisted": true},
-            {"name": "BTC", "szDecimals": 8, "maxLeverage": 50}
+            {"name": "BTC", "szDecimals": 8, "maxLeverage": 50},
+            {"name": "BANANA", "szDecimals": 0, "maxLeverage": 5, "onlyIsolated": true}
         ]),
     )
     .await;
@@ -372,16 +429,32 @@ async fn hyperliquid_markets_serves_the_universe_in_ccxt_format() {
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(
         body["tickers"],
-        json!(["BTC/USDC:USDC", "ETH/USDC:USDC"]),
+        json!(["BANANA/USDC:USDC", "BTC/USDC:USDC", "ETH/USDC:USDC"]),
         "tickers should be sorted ccxt symbols excluding delisted assets: {body}"
     );
     assert_eq!(
         body["leverageLimits"],
         json!([
-            {"symbol": "BTC/USDC:USDC", "maxLeverage": 50, "assetIndex": 2},
-            {"symbol": "ETH/USDC:USDC", "maxLeverage": 25, "assetIndex": 0}
+            {
+                "symbol": "BANANA/USDC:USDC",
+                "maxLeverage": 5,
+                "assetIndex": 3,
+                "onlyIsolated": true
+            },
+            {
+                "symbol": "BTC/USDC:USDC",
+                "maxLeverage": 50,
+                "assetIndex": 2,
+                "onlyIsolated": false
+            },
+            {
+                "symbol": "ETH/USDC:USDC",
+                "maxLeverage": 25,
+                "assetIndex": 0,
+                "onlyIsolated": false
+            }
         ]),
-        "leverage limits should keep positional asset indexes: {body}"
+        "leverage limits should keep positional asset indexes and onlyIsolated: {body}"
     );
     assert!(
         body["refreshedAt"].is_string(),

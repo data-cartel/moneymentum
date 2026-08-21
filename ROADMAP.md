@@ -170,6 +170,15 @@ the next user-facing priority; it runs in parallel to the Dev track above.
       ([#433](https://github.com/dataclique/moneymentum/pull/433))
 - [x] [systemd moneymentum-ingest timer curls the removed POST /ingest every six hours](https://github.com/dataclique/moneymentum/issues/430)
       ([#434](https://github.com/dataclique/moneymentum/pull/434))
+- [x] cannot trigger a full on-demand ingestion after POST /ingest was removed
+      -- local `moneymentum-ingest` CLI instead of restoring the HTTP endpoint
+      ([#449](https://github.com/dataclique/moneymentum/issues/449))
+- [ ] candle parquet backups stay a manual Telegram upload with no integrity
+      check against prior dumps --
+      [#450](https://github.com/dataclique/moneymentum/issues/450)
+- [ ] scheduled candle ingestion re-fetches the full Hyperliquid history window
+      on every tick --
+      [#452](https://github.com/dataclique/moneymentum/issues/452)
 - [x] [Remove the markets_refresh_token deploy bridge from service configs](https://github.com/dataclique/moneymentum/issues/425)
       ([#482](https://github.com/dataclique/moneymentum/pull/482))
 - [ ] [Deploy the service binary, unit, and config atomically](https://github.com/dataclique/moneymentum/issues/422)
@@ -313,6 +322,7 @@ to DigitalOcean via NixOS + deploy-rs.
 - [x] Rolling beta calculation (`POST /beta`)
 - [x] Candle API (`GET /candles/<timeframe>`)
 - [x] Ingestion status API (`GET /ingestion/status`)
+- [x] On-demand ingestion CLI (`moneymentum-ingest`)
 
 ---
 

@@ -16,8 +16,12 @@ Moneymentum makes those exposures legible and adjustable.
 - **Frontend prototype** at `/prototype`: design reference for the target UI.
 - **Backend** (active development): Rust + Axum API, Polars analytics,
   SQLite-backed ingestion runs and job queue. Ingests Hyperliquid
-  open-high-low-close-volume (OHLCV) and funding rates; computes rolling beta to
-  BTC and serves per-asset factor scores via `GET /factors/<timeframe>`.
+  open-high-low-close-volume (OHLCV) and funding rates on a built-in schedule
+  (and on demand via
+  `cargo run --bin moneymentum-ingest -- --config
+  config.toml`); computes
+  rolling beta to BTC and serves per-asset factor scores via
+  `GET /factors/<timeframe>`.
 - **Vault program** (planned): Anchor program on Solana for non-custodial
   managed deposits with two-phase withdrawal.
 
@@ -70,7 +74,9 @@ cargo test -q       # tests
 cargo clippy        # lints (pedantic + nursery, panic-free)
 cargo fmt           # format
 
-cargo run -- --help # see CLI options
+cargo run --bin moneymentum -- --config config.toml
+# on-demand candle + funding pull (no HTTP server):
+cargo run --bin moneymentum-ingest -- --config config.toml
 ```
 
 Configuration is loaded from a TOML file modeled on
