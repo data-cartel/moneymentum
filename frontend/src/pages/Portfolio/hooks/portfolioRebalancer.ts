@@ -14,12 +14,15 @@ import {
 } from "@/pages/Portfolio/hooks/usePortfolioState"
 import type { DeriveMappedPosition } from "@/services/deriveAccount"
 
+/** Accepted on the venue: filled, still resting (working), or watch timed out. */
+const orderAcceptedOnExchange = (order: OrderResult): boolean =>
+  order.status === "filled" ||
+  order.status === "working" ||
+  order.status === "timed_out"
+
 const rebalanceOrderUserMessage = (order: OrderResult): string => {
   if (order.message) {
     return order.message
-  }
-  if (order.status === "timed_out") {
-    return "Order did not confirm in time — portfolio was refreshed from the exchange"
   }
   return "Order was not filled"
 }
@@ -251,6 +254,21 @@ export const mergeExchangeTargetWithStagedOverlay = (
   return { map, totalNotional }
 }
 
+/**
+ * Keep intentional unused / over-allocated capacity across an exchange merge.
+ * `mergedTargetSum - beforeTargetSum` is mark / overlay drift; unused capacity
+ * (`beforeTargetTotal - beforeTargetSum`) stays put so manual under-100%
+ * allocation is not wiped on every mark refresh.
+ */
+export const targetTotalAfterExchangeMerge = (
+  beforeTargetSum: number,
+  beforeTargetTotal: number,
+  mergedTargetSum: number,
+): number => {
+  const unusedCapacity = beforeTargetTotal - beforeTargetSum
+  return mergedTargetSum + unusedCapacity
+}
+
 export const targetAndArchiveAfterRebalance = (
   target: Record<string, PortfolioInterface | undefined>,
   deletedArchive: Record<string, PortfolioInterface | undefined>,
@@ -290,7 +308,9 @@ export const targetAndArchiveAfterRebalance = (
   const symbolsToDropFromTarget = new Set<string>()
 
   for (const order of orders) {
-    if (order.status === "filled") {
+    // working / timed_out: resting on the venue (open orders). Accept exchange
+    // current and clear staged so the row is not duplicated in Staged Changes.
+    if (orderAcceptedOnExchange(order)) {
       continue
     }
 
@@ -329,7 +349,7 @@ export const targetAndArchiveAfterRebalance = (
         return !(
           order !== undefined &&
           action?.kind === "close" &&
-          order.status === "filled"
+          orderAcceptedOnExchange(order)
         )
       })
       .map(([symbol, position]) => [symbol, { ...position }]),
@@ -337,7 +357,7 @@ export const targetAndArchiveAfterRebalance = (
 
   const errorsBySymbol = Object.fromEntries(
     orders
-      .filter(order => order.status !== "filled")
+      .filter(order => !orderAcceptedOnExchange(order))
       .map(order => [order.symbol, rebalanceOrderUserMessage(order)]),
   ) as Record<string, string>
 

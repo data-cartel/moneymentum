@@ -2,7 +2,11 @@ import { Show, For, createMemo } from "solid-js"
 import type { JSX } from "solid-js"
 import { CircleAlert, TriangleAlert } from "lucide-solid"
 
-import { MIN_USD, type PortfolioInterface } from "../../hooks/usePortfolioState"
+import {
+  ALLOCATION_MIN_PERCENT,
+  MIN_USD,
+  type PortfolioInterface,
+} from "../../hooks/usePortfolioState"
 
 export interface PositionsPanelAlertsProps {
   isLoading: boolean
@@ -16,9 +20,6 @@ export interface PositionsPanelAlertsProps {
   targetPortfolio: Record<string, PortfolioInterface | undefined>
   currentPortfolio: Record<string, PortfolioInterface | undefined>
 }
-
-/** Below this (vs target notional) we warn that allocation is not full. */
-const ALLOCATION_FULL_MIN_PERCENT = 99.95
 
 export const PositionsPanelAlerts = (
   props: PositionsPanelAlertsProps,
@@ -37,7 +38,7 @@ export const PositionsPanelAlerts = (
     () =>
       !isClosingAllPositions() &&
       !props.hasTotalWeightExceeded &&
-      props.targetAllocationPercent < ALLOCATION_FULL_MIN_PERCENT,
+      props.targetAllocationPercent < ALLOCATION_MIN_PERCENT,
   )
 
   const visible = createMemo(

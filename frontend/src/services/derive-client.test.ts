@@ -267,6 +267,58 @@ describe("DeriveTradingClient.createOrdersBatch", () => {
   })
 })
 
+describe("DeriveTradingClient.placeAndMonitorOrders", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("returns open createOrder results as working without watching fills", async () => {
+    const createOrder = vi.fn().mockResolvedValue({
+      id: "order-1",
+      symbol: "ETH/USD:USDC",
+      side: "buy",
+      status: "open",
+      info: { order_status: "open" },
+    })
+
+    const client = new DeriveTradingClient(credentials())
+    const exchange = (
+      client as unknown as {
+        exchange: {
+          loadMarkets: () => Promise<Record<string, never>>
+          markets: Record<string, { symbol: string; swap: boolean }>
+          markets_by_id: Record<string, { symbol: string }>
+          createOrder: typeof createOrder
+          watchOrders?: unknown
+        }
+      }
+    ).exchange
+
+    exchange.loadMarkets = vi.fn().mockResolvedValue({})
+    exchange.markets = {
+      "ETH/USD:USDC": { symbol: "ETH/USD:USDC", swap: true },
+    }
+    exchange.markets_by_id = {}
+    exchange.createOrder = createOrder
+    exchange.watchOrders = vi.fn()
+    vi.spyOn(client, "resolveSymbol").mockResolvedValue("ETH/USD:USDC")
+
+    const results = await client.placeAndMonitorOrders([
+      { symbol: "ETH-PERP", side: "buy", amount: 0.01, price: 2000 },
+    ])
+
+    expect(results).toEqual([
+      {
+        symbol: "ETH-PERP",
+        side: "buy",
+        status: "working",
+        message: null,
+      },
+    ])
+    expect(exchange.watchOrders).not.toHaveBeenCalled()
+  })
+})
+
 describe("DeriveTradingClient.cancelOrder", () => {
   beforeEach(() => {
     vi.restoreAllMocks()

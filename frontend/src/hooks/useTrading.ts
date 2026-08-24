@@ -442,7 +442,8 @@ export const useDeriveOpenOrders = () => {
       },
       enabled: canFetch,
       staleTime: DATA_STALE_TIME_MS,
-      refetchInterval: canFetch ? 10_000 : false,
+      // Refresh cadence is owned by DeriveOpenOrdersPanel's timer ring.
+      refetchInterval: false,
     }
   })
 }

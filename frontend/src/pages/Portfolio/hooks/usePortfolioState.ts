@@ -30,6 +30,7 @@ import {
   portfolioMapFromExchangePositions,
   syncDeletedArchiveWithCurrent,
   targetAndArchiveAfterRebalance,
+  targetTotalAfterExchangeMerge,
   type RebalanceAction,
 } from "./portfolioRebalancer"
 import { getErrorMessage, getExchangeErrorDetail } from "@/lib/error-message"
@@ -43,6 +44,13 @@ import { useWallet } from "@/hooks/useWallet"
 import { createStore, produce, reconcile } from "solid-js/store"
 
 export const MIN_USD = 11
+
+/**
+ * Target allocation band for submit + the under/over-100% alerts.
+ * Story 0x006: block outside ~99%..101%; UI uses a tight band around 100%.
+ */
+export const ALLOCATION_MIN_PERCENT = 99.95
+export const ALLOCATION_MAX_PERCENT = 100.01
 
 export const PRECISE_TOGGLE_STORAGE_KEY = "portfolio-precise-toggle"
 
@@ -203,9 +211,6 @@ export const usePortfolioState = () => {
   const [positionsLoadedFromExchange, setPositionsLoadedFromExchange] =
     createSignal(false)
 
-  // Tracks which connected venues were folded into target on last seed/merge.
-  let lastExchangeVenueKey = ""
-
   // Track previous connection state for disconnect cleanup
   let wasConnected = isConnected()
 
@@ -270,7 +275,6 @@ export const usePortfolioState = () => {
   }
 
   const handleDisconnect = () => {
-    lastExchangeVenueKey = ""
     batch(() => {
       setCurrentPortfolio(reconcile({}))
       setTargetPortfolio(reconcile({}))
@@ -562,18 +566,23 @@ export const usePortfolioState = () => {
         setDeletedArchive(reconcile(nextDeletedArchive))
         setErrorsBySymbol(reconcile(nextErrors))
       })
-      lastExchangeVenueKey = [
-        hyperliquidWanted ? "hl" : "",
-        deriveWanted ? `derive:${deriveSession()?.subaccountId ?? "all"}` : "",
-      ].join("|")
 
-      if (orders.some(order => order.status === "timed_out")) {
+      if (
+        orders.some(
+          order => order.status === "timed_out" || order.status === "working",
+        )
+      ) {
         console.warn(
-          "rebalance order watch timed out; portfolio refreshed from exchange",
+          "rebalance orders accepted on exchange; open orders left resting, staged cleared",
         )
       }
 
-      const failedOrders = orders.filter(order => order.status !== "filled")
+      const failedOrders = orders.filter(
+        order =>
+          order.status !== "filled" &&
+          order.status !== "timed_out" &&
+          order.status !== "working",
+      )
       if (failedOrders.length > 0) {
         console.warn(
           "rebalance finalize: non-filled orders kept staged target",
@@ -615,7 +624,6 @@ export const usePortfolioState = () => {
       setTargetTotalNotional(exchangeSnapshot.totalNotional)
       setTargetCrossAccountLeverage(initialLeverage)
       setCurrentCrossAccountLeverage(initialLeverage)
-      lastExchangeVenueKey = exchangeSnapshot.venueKey
       setPositionsLoadedFromExchange(true)
       return
     }
@@ -623,40 +631,43 @@ export const usePortfolioState = () => {
     const beforeCurrent = untrack(() => ({ ...currentPortfolio }))
     const beforeTarget = untrack(() => ({ ...targetPortfolio }))
     const beforeArchive = untrack(() => ({ ...deletedArchive }))
+    const beforeTargetSum = Object.values(beforeTarget).reduce(
+      (sum, position) => sum + (position?.notional ?? 0),
+      0,
+    )
+    const beforeTargetTotal = untrack(targetTotalNotional)
     const stagedOverlay = captureStagedPortfolioOverlay(
       beforeCurrent,
       beforeTarget,
       beforeArchive,
     )
 
-    if (exchangeSnapshot.venueKey !== lastExchangeVenueKey) {
-      applyCurrentFromExchange(
-        exchangeSnapshot.map,
-        exchangeSnapshot.totalNotional,
-      )
-
-      const mergedTarget = mergeExchangeTargetWithStagedOverlay(
-        exchangeSnapshot.map,
-        stagedOverlay,
-      )
-      const syncedArchive = syncDeletedArchiveWithCurrent(
-        stagedOverlay.deletedArchive,
-        exchangeSnapshot.map,
-      )
-
-      lastExchangeVenueKey = exchangeSnapshot.venueKey
-      batch(() => {
-        setTargetPortfolio(reconcile(mergedTarget.map))
-        setTargetTotalNotional(mergedTarget.totalNotional)
-        setDeletedArchive(reconcile(syncedArchive))
-      })
-      return
-    }
-
+    // Always: current = exchange; target follows exchange except intentional
+    // staged overrides / closes; archive marks refresh with live current.
     applyCurrentFromExchange(
       exchangeSnapshot.map,
       exchangeSnapshot.totalNotional,
     )
+
+    const mergedTarget = mergeExchangeTargetWithStagedOverlay(
+      exchangeSnapshot.map,
+      stagedOverlay,
+    )
+    const syncedArchive = syncDeletedArchiveWithCurrent(
+      stagedOverlay.deletedArchive,
+      exchangeSnapshot.map,
+    )
+    const nextTargetTotal = targetTotalAfterExchangeMerge(
+      beforeTargetSum,
+      beforeTargetTotal,
+      mergedTarget.totalNotional,
+    )
+
+    batch(() => {
+      setTargetPortfolio(reconcile(mergedTarget.map))
+      setTargetTotalNotional(nextTargetTotal)
+      setDeletedArchive(reconcile(syncedArchive))
+    })
   })
 
   const actions = createMemo(() =>
@@ -740,8 +751,15 @@ export const usePortfolioState = () => {
     return (100 * effectiveTotalNotional()) / total
   })
 
+  const hasUnderAllocation = createMemo(() => {
+    if (isClosingAllPositions()) {
+      return false
+    }
+    return targetAllocationPercent() < ALLOCATION_MIN_PERCENT
+  })
+
   const hasTotalWeightExceeded = createMemo(() => {
-    return targetAllocationPercent() > 100.01
+    return targetAllocationPercent() > ALLOCATION_MAX_PERCENT
   })
 
   const hasSymbolsDeltaBelowMinimum = () =>
@@ -882,14 +900,23 @@ export const usePortfolioState = () => {
 
   const handleNotionalChange = (symbol: string, newNotional: number) => {
     clearRebalanceErrorForSymbol(symbol)
-    const oldNotional = targetPortfolio[symbol]?.notional ?? 0
-    const diff = newNotional - oldNotional
-
-    setTargetPortfolio(symbol, "notional", newNotional)
-
-    if (!deletedArchive[symbol]) {
-      setTargetTotalNotional(prev => prev + diff)
+    if (targetPortfolio[symbol] === undefined) {
+      return
     }
+
+    // Absolute total write (not `prev => prev + diff`) so an exchange-refresh
+    // effect cannot land between the row update and a deferred functional bump
+    // and double-count the same notional delta into targetTotalNotional.
+    batch(() => {
+      const oldNotional = targetPortfolio[symbol]?.notional ?? 0
+      const nextTotal = targetTotalNotional() - oldNotional + newNotional
+
+      setTargetPortfolio(symbol, "notional", newNotional)
+
+      if (!deletedArchive[symbol]) {
+        setTargetTotalNotional(nextTotal)
+      }
+    })
   }
 
   const handleWeightChange = (changedSymbol: string, newPercentage: number) => {
@@ -1076,12 +1103,12 @@ export const usePortfolioState = () => {
       isPortfolioValid &&
       !hasPositionsBelowMinimum() &&
       (isPrecise() || !hasSymbolsDeltaBelowMinimum()) &&
-      !hasTotalWeightExceeded()
+      !hasTotalWeightExceeded() &&
+      !hasUnderAllocation()
     )
   }
 
   const resetPortfolioStateForNetworkChange = () => {
-    lastExchangeVenueKey = ""
     batch(() => {
       setCurrentPortfolio(reconcile({}))
       setTargetPortfolio(reconcile({}))

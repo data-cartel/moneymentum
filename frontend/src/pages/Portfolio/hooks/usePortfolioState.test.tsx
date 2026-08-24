@@ -80,7 +80,7 @@ describe("usePortfolioState", () => {
   let settledOrders: Array<{
     symbol: string
     side: "buy" | "sell"
-    status: "filled" | "timed_out" | "failed"
+    status: "filled" | "working" | "timed_out" | "failed"
     message?: string
   }>
 
@@ -413,6 +413,39 @@ describe("usePortfolioState", () => {
     expect(result.stagedTrades[0]?.underlying).toBe("BTC/USDC:USDC")
   })
 
+  it("keeps allocation at 100% when raising one position notional", async () => {
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(result.targetTotalNotional).toBe(1000)
+    })
+
+    result.handleNotionalChange("BTC/USDC:USDC", 700)
+
+    expect(result.targetPortfolio["BTC/USDC:USDC"]?.notional).toBe(700)
+    expect(result.targetTotalNotional).toBe(1100)
+    expect(result.targetAllocationPercent).toBeCloseTo(100, 5)
+  })
+
+  it("does not double-count a notional bump when total is written absolutely", async () => {
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(result.targetTotalNotional).toBe(1000)
+    })
+
+    result.handleNotionalChange("BTC/USDC:USDC", 700)
+    // Second call with the same value must be a no-op on the budget.
+    result.handleNotionalChange("BTC/USDC:USDC", 700)
+
+    expect(result.targetTotalNotional).toBe(1100)
+    expect(result.targetAllocationPercent).toBeCloseTo(100, 5)
+  })
+
   it("blocks submit in non-precise mode when delta is below minimum", async () => {
     const { result } = renderHook(() => usePortfolioState(), {
       wrapper: createWrapper(),
@@ -492,6 +525,23 @@ describe("usePortfolioState", () => {
       expect(refetchPositions).toHaveBeenCalled()
       expect(result.isRebalancing).toBe(false)
     })
+  })
+
+  it("blocks submit when target allocation is under 100%", async () => {
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(result.targetTotalNotional).toBe(1000)
+    })
+
+    result.setManualWeightEntry(true)
+    result.handleWeightChange("BTC/USDC:USDC", 40)
+    // ETH stays at 400 -> 40%; unused capacity leaves allocation at 80%.
+
+    expect(result.targetAllocationPercent).toBeCloseTo(80, 5)
+    expect(result.canSubmit).toBe(false)
   })
 
   it("allows full close when every target position is dust", async () => {
@@ -594,7 +644,7 @@ describe("usePortfolioState", () => {
     })
   })
 
-  it("populates errorsBySymbol and stagedTrades.orderError on non-filled and timed_out rebalance orders", async () => {
+  it("clears working and timed_out staged trades and keeps failed order errors", async () => {
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {})
 
     const { result } = renderHook(() => usePortfolioState(), {
@@ -617,7 +667,7 @@ describe("usePortfolioState", () => {
       {
         symbol: "BTC/USDC:USDC",
         side: "buy",
-        status: "timed_out",
+        status: "working",
       },
       {
         symbol: "ETH/USDC:USDC",
@@ -634,9 +684,7 @@ describe("usePortfolioState", () => {
       expect(result.isRebalancing).toBe(false)
     })
 
-    expect(result.errorsBySymbol["BTC/USDC:USDC"]).toBe(
-      "Order did not confirm in time — portfolio was refreshed from the exchange",
-    )
+    expect(result.errorsBySymbol["BTC/USDC:USDC"]).toBeUndefined()
     expect(result.errorsBySymbol["ETH/USDC:USDC"]).toBe(
       "Order rejected: below minimum notional",
     )
@@ -648,16 +696,12 @@ describe("usePortfolioState", () => {
       trade => trade.underlying === "ETH/USDC:USDC",
     )
 
-    expect(btcTrade).toBeDefined()
+    expect(btcTrade).toBeUndefined()
     expect(ethTrade).toBeDefined()
-
-    expect(btcTrade?.orderError).toBe(
-      "Order did not confirm in time — portfolio was refreshed from the exchange",
-    )
     expect(ethTrade?.orderError).toBe("Order rejected: below minimum notional")
 
     expect(consoleWarn).toHaveBeenCalledWith(
-      "rebalance order watch timed out; portfolio refreshed from exchange",
+      "rebalance orders accepted on exchange; open orders left resting, staged cleared",
     )
   })
 

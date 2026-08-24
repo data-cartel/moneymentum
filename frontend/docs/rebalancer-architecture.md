@@ -108,13 +108,13 @@ can emit `preciseRebalance` instead of dropping sub-minimum deltas.
 `HyperliquidClient.rebalancePositions(...)` receives that resulting actions
 array. Derive actions go through `useRebalanceDerivePositions`: fetch tickers,
 map to limit orders via `deriveActionsToOrderRequests`, then
-`placeAndMonitorDeriveOrders` (createOrder + watchOrders, same as the Derive
-Test trading tab). Option `createOrder` signs `base_asset_sub_id` as BigInt --
-CCXT's `parseInt` overflows that uint256 and ethers rejects it. A timed-out
-`private/order` POST is reconciled against open orders before failing. So if
-precise planning emits `preciseRebalance`, it is present as an action in the
-submitted Hyperliquid array, not as a separate `precise` property in the
-payload.
+`placeAndMonitorDeriveOrders` (createOrder only -- open/working results clear
+staged immediately; fills show up via the next positions refresh). Option
+`createOrder` signs `base_asset_sub_id` as BigInt -- CCXT's `parseInt` overflows
+that uint256 and ethers rejects it. A timed-out `private/order` POST is
+reconciled against open orders before failing. So if precise planning emits
+`preciseRebalance`, it is present as an action in the submitted Hyperliquid
+array, not as a separate `precise` property in the payload.
 
 Trigger (all must hold):
 

@@ -22,6 +22,7 @@ import {
   releaseDockviewSolidOwner,
 } from "@/lib/dockviewSolidOwner"
 import { getErrorMessage } from "@/lib/error-message"
+import { hasLiveEip1193Provider } from "@/reown/evmAppKit"
 import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import {
@@ -44,7 +45,10 @@ import {
 import { DerivePanel } from "./components/DerivePanel"
 import { DeriveSettingsMenu } from "./components/DeriveSettingsMenu"
 import { FactorsPanel } from "./components/FactorsPanel"
-import { HyperliquidPanel } from "./components/HyperliquidPanel"
+import {
+  HyperliquidPanel,
+  openHyperliquidConnectModal,
+} from "./components/HyperliquidPanel"
 import { PerformancePanel } from "./components/PerformancePanel"
 import { PortfolioSettingsMenu } from "./components/PortfolioSettingsMenu"
 import { PositionsPanel } from "./components/PositionsPanel/PositionsPanel"
@@ -56,9 +60,13 @@ import {
 import { RiskPanel } from "./components/RiskPanel"
 import {
   StagedChangesPanel,
+  resolveStagedConnectionState,
   type StagedConnectionState,
 } from "./components/StagedChangesPanel"
-import { WalletPinDialog } from "./components/WalletPinDialog"
+import {
+  WalletPinDialog,
+  type WalletPinDialogMode,
+} from "./components/WalletPinDialog"
 import { useBeta, type BetaBenchmark } from "./hooks/useBeta"
 import {
   usePortfolioState,
@@ -393,17 +401,20 @@ const PortfolioPage = () => {
   const {
     hasStoredSession,
     isLocked,
-    canTrade,
     isHyperliquidConnected,
+    isDeriveConnected,
     isDeriveLocked,
     hasVerifiedSessionPin,
     authorizeAgent,
+    setMainAddress,
   } = useWallet()
   const shell = usePortfolioShell()
   const DockviewProviders = useDockviewPanelProviders()
   const portfolio = usePortfolioState()
 
   const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
+  const [pinDialogMode, setPinDialogMode] =
+    createSignal<WalletPinDialogMode>("authorize")
   const { metricVisibility, setMetricColumnVisible } =
     usePortfolioMetricVisibility()
   const [deriveGreeksVisible, setDeriveGreeksVisible] = createSignal(
@@ -427,21 +438,27 @@ const PortfolioPage = () => {
     factorsPanel: ReturnType<DockviewApi["addPanel"]>
   } | null>(null)
 
-  const stagedConnectionState = (): StagedConnectionState => {
-    if (!isHyperliquidConnected()) {
-      return "walletDisconnected"
-    }
-    if (!hasStoredSession()) {
-      return "agentMissing"
-    }
-    if (isLocked()) {
-      return "agentLocked"
-    }
-    return "ready"
-  }
+  const stagedConnectionState = (): StagedConnectionState =>
+    resolveStagedConnectionState({
+      hyperliquidPublicConnected: isHyperliquidConnected(),
+      hasHyperliquidAgent: hasStoredSession(),
+      hyperliquidUnlocked: hasStoredSession() && !isLocked(),
+      deriveConnected: isDeriveConnected(),
+      deriveUnlocked: isDeriveConnected() && !isDeriveLocked(),
+      hasHyperliquidStagedChanges: portfolio.stagedTrades.some(
+        trade => trade.venue === "hyperliquid",
+      ),
+      hasDeriveStagedChanges: portfolio.stagedTrades.some(
+        trade => trade.venue === "derive",
+      ),
+    })
 
   const openHyperliquidWalletConnect = () => {
     shell.focusVenue({ venue: "hyperliquid", openConnect: true })
+  }
+
+  const openDeriveWalletConnect = () => {
+    shell.focusVenue({ venue: "derive", focusWalletField: true })
   }
 
   const authorizeAgentWithSessionPin = () => {
@@ -454,6 +471,18 @@ const PortfolioPage = () => {
         ),
         Effect.catchAll(error =>
           Effect.sync(() => {
+            // Overlapping clicks / Cmd+Enter while authorize is in flight.
+            const cause =
+              typeof error.cause === "object" && error.cause !== null
+                ? error.cause
+                : null
+            if (
+              cause !== null &&
+              "_tag" in cause &&
+              cause._tag === "WalletOperationContextChanged"
+            ) {
+              return
+            }
             console.error("Failed to authorize Hyperliquid agent:", error)
             toast.error(getErrorMessage(error))
           }),
@@ -463,52 +492,74 @@ const PortfolioPage = () => {
   }
 
   /**
-   * Staged "Connect to Hyperliquid":
-   * - wallet not connected -> Reown only (never a create-PIN modal)
+   * Staged "Connect Hyperliquid agent":
+   * - Stored agent exists -> unlock with PIN (never mint a replacement agent)
+   * - Live Reown provider required before approveAgent (remembered address is
+   *   read-only; AppKit enableReconnect is false)
+   * - Open AppKit Connect in place when the provider is missing -- do not bounce
+   *   to the Hyperliquid tab (remembered public address already looks "connected")
    * - PIN already entered this browser session -> authorize agent, then wallet sign
-   * - local PIN exists but not yet entered -> enter-PIN dialog (not create)
-   * - no PIN yet -> create-PIN dialog, then authorize
+   * - otherwise -> PIN dialog, then authorize
    */
-  const beginHyperliquidTradingConnect = () => {
-    if (!isHyperliquidConnected()) {
-      openHyperliquidWalletConnect()
-      return
-    }
-
+  const continueHyperliquidAgentAuthorize = () => {
     if (hasVerifiedSessionPin()) {
       authorizeAgentWithSessionPin()
       return
     }
-
+    setPinDialogMode("authorize")
     setPinDialogOpen(true)
+  }
+
+  const beginHyperliquidTradingConnect = () => {
+    if (hasStoredSession()) {
+      setPinDialogMode("unlock")
+      setPinDialogOpen(true)
+      return
+    }
+
+    void (async () => {
+      if (await hasLiveEip1193Provider()) {
+        continueHyperliquidAgentAuthorize()
+        return
+      }
+
+      // Remembered HL address loads the portfolio, but approveAgent needs a live
+      // injected provider. Opening AppKit here avoids the Hyperliquid-tab dead
+      // end (panel treats remembered address as already connected).
+      openHyperliquidConnectModal({
+        setMainAddress,
+        onConnected: () => {
+          void (async () => {
+            // AppKit account callback can fire before getProvider is ready.
+            for (let attempt = 0; attempt < 30; attempt += 1) {
+              if (await hasLiveEip1193Provider()) {
+                continueHyperliquidAgentAuthorize()
+                return
+              }
+              await new Promise<void>(resolve => {
+                window.setTimeout(resolve, 50)
+              })
+            }
+            toast.error(
+              "Wallet connected, but the signer is not ready. Click Connect Hyperliquid agent again.",
+            )
+          })()
+        },
+      })
+    })()
   }
 
   const handlePrimaryStagedAction = () => {
     switch (stagedConnectionState()) {
-      case "walletDisconnected":
-        openHyperliquidWalletConnect()
-        return
+      case "chooseVenue":
       case "agentLocked":
         return
       case "agentMissing":
         beginHyperliquidTradingConnect()
         return
       case "ready":
-        if (!canTrade()) {
-          return
-        }
         portfolio.handleRebalancePositions()
     }
-  }
-
-  const handleAgentUnlocked = () => {
-    if (!canTrade()) {
-      return
-    }
-    if (!portfolio.canSubmit) {
-      return
-    }
-    portfolio.handleRebalancePositions()
   }
 
   // createEffect: persist precise toggle to localStorage when it changes
@@ -759,7 +810,8 @@ const PortfolioPage = () => {
             currentCrossAccountLeverage={portfolio.currentCrossAccountLeverage}
             targetCrossAccountLeverage={portfolio.targetCrossAccountLeverage}
             onPrimaryAction={handlePrimaryStagedAction}
-            onUnlocked={handleAgentUnlocked}
+            onChooseHyperliquid={openHyperliquidWalletConnect}
+            onChooseDerive={openDeriveWalletConnect}
             isRebalancing={portfolio.isRebalancing}
             canSubmit={portfolio.canSubmit}
             connectionState={stagedConnectionState()}
@@ -1179,7 +1231,7 @@ const PortfolioPage = () => {
 
         <WalletPinDialog
           open={pinDialogOpen()}
-          mode="authorize"
+          mode={pinDialogMode()}
           onOpenChange={setPinDialogOpen}
         />
       </div>

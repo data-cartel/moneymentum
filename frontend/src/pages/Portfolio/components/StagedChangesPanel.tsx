@@ -9,13 +9,10 @@ import {
   tryUsePortfolioKeyboardContext,
 } from "@/pages/Portfolio/keyboard"
 import { SessionPinUnlockField } from "./SessionPinUnlockField"
+import type { StagedConnectionState } from "./stagedConnectionState"
 
-/** Mutually exclusive wallet/agent readiness for the staged-changes primary action. */
-export type StagedConnectionState =
-  | "walletDisconnected"
-  | "agentMissing"
-  | "agentLocked"
-  | "ready"
+export type { StagedConnectionState } from "./stagedConnectionState"
+export { resolveStagedConnectionState } from "./stagedConnectionState"
 
 interface StagedChangesPanelProps {
   stagedTrades: StagedTradeItem[]
@@ -24,8 +21,8 @@ interface StagedChangesPanelProps {
   currentCrossAccountLeverage: number
   targetCrossAccountLeverage: number
   onPrimaryAction?: () => void
-  /** Called after a successful inline PIN unlock (locked agent session). */
-  onUnlocked?: () => void
+  onChooseHyperliquid?: () => void
+  onChooseDerive?: () => void
   isRebalancing?: boolean
   canSubmit: boolean
   connectionState: StagedConnectionState
@@ -45,7 +42,7 @@ const formatUsdPrecise = (value: number): string => `$${value.toFixed(2)}`
 const NOTIONAL_EPSILON_USD = 0.1
 const LEVERAGE_EPSILON = 0.001
 
-const UNLOCK_PIN_PLACEHOLDER = "Enter 6-digit PIN to rebalance"
+const UNLOCK_PIN_PLACEHOLDER = "Enter 6-digit PIN to unlock"
 
 export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
   const keyboard = tryUsePortfolioKeyboardContext()
@@ -59,6 +56,7 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
   const connectionState = () => props.connectionState
 
   const showUnlockPinField = () => connectionState() === "agentLocked"
+  const showVenueChooser = () => connectionState() === "chooseVenue"
 
   // createEffect: focus PIN when staged panel activates while agent is locked
   createEffect(() => {
@@ -71,11 +69,8 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
     if (isRebalancing()) {
       return "Sending..."
     }
-    if (
-      connectionState() === "walletDisconnected" ||
-      connectionState() === "agentMissing"
-    ) {
-      return "Connect to Hyperliquid"
+    if (connectionState() === "agentMissing") {
+      return "Connect Hyperliquid agent"
     }
     return "Rebalance"
   }
@@ -85,9 +80,10 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
       return true
     }
     switch (connectionState()) {
-      case "walletDisconnected":
-        return false
+      case "chooseVenue":
+        return true
       case "agentMissing":
+        // Connect Hyperliquid agent stays clickable; canSubmit only gates Rebalance.
         return false
       case "agentLocked":
         return true
@@ -254,39 +250,70 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
             </div>
           </div>
         </div>
-        <Show
-          when={showUnlockPinField()}
-          fallback={
+        <Show when={showVenueChooser()}>
+          <div class="grid grid-cols-2 gap-2">
             <Button
               size="sm"
-              class="w-full h-8 text-[11px] gap-1"
+              variant="outline"
+              class="h-8 text-[11px]"
               onPointerEnter={() => {
-                if (connectionState() === "agentMissing") {
-                  prefetchEvmAppKit()
-                }
+                prefetchEvmAppKit()
               }}
               onClick={() => {
-                if (isPrimaryDisabled() || !props.onPrimaryAction) {
-                  return
-                }
-                props.onPrimaryAction()
+                props.onChooseHyperliquid?.()
               }}
-              disabled={isPrimaryDisabled()}
-              aria-disabled={isPrimaryDisabled()}
             >
-              <Send class="h-3 w-3" />
-              {primaryLabel()}
+              Hyperliquid
             </Button>
-          }
-        >
+            <Button
+              size="sm"
+              variant="outline"
+              class="h-8 text-[11px]"
+              onClick={() => {
+                props.onChooseDerive?.()
+              }}
+            >
+              Derive
+            </Button>
+          </div>
+        </Show>
+        <Show when={showUnlockPinField()}>
           <SessionPinUnlockField
             inputId="stagedChangesUnlockPin"
             placeholder={UNLOCK_PIN_PLACEHOLDER}
             disabled={isRebalancing()}
             autofocus={stagedUnlockFocused()}
             registerStagedSubmit
-            onUnlocked={props.onUnlocked}
           />
+        </Show>
+        <Show
+          when={
+            !showVenueChooser() &&
+            !showUnlockPinField() &&
+            (connectionState() === "agentMissing" ||
+              connectionState() === "ready")
+          }
+        >
+          <Button
+            size="sm"
+            class="w-full h-8 text-[11px] gap-1"
+            onPointerEnter={() => {
+              if (connectionState() === "agentMissing") {
+                prefetchEvmAppKit()
+              }
+            }}
+            onClick={() => {
+              if (isPrimaryDisabled() || !props.onPrimaryAction) {
+                return
+              }
+              props.onPrimaryAction()
+            }}
+            disabled={isPrimaryDisabled()}
+            aria-disabled={isPrimaryDisabled()}
+          >
+            <Send class="h-3 w-3" />
+            {primaryLabel()}
+          </Button>
         </Show>
       </div>
     </div>

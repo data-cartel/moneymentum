@@ -5,12 +5,14 @@ import {
   deriveActionsToOrderRequests,
   deriveLimitPriceForSide,
   diffPortfolios,
+  mergeExchangeTargetWithStagedOverlay,
   mergePortfolioMaps,
   portfolioMapFromDerivePositions,
   portfolioMapFromExchangePositions,
   preciseRebalanceLegs,
   syncDeletedArchiveWithCurrent,
   targetAndArchiveAfterRebalance,
+  targetTotalAfterExchangeMerge,
 } from "./portfolioRebalancer"
 import { MIN_USD, type PortfolioInterface } from "./usePortfolioState"
 
@@ -610,6 +612,116 @@ describe("targetAndArchiveAfterRebalance", () => {
     expect(result.nextTarget[symBtc]).toEqual(current[symBtc])
     expect(result.nextTarget[instrument]).toEqual(optionTarget)
   })
+
+  it("clears staged target for timed_out orders that rest on the exchange", () => {
+    const current = {
+      [symBtc]: { ...btcTarget, notional: 500 },
+    }
+
+    const result = targetAndArchiveAfterRebalance(
+      { [symBtc]: btcTarget },
+      {},
+      current,
+      [
+        {
+          kind: "rebalance",
+          symbol: symBtc,
+          signedNotionalDelta: 300,
+          leverage: 2,
+          leverageChanged: false,
+          positionKind: "perp",
+          venue: "derive",
+        },
+      ],
+      [
+        {
+          symbol: symBtc,
+          side: "buy",
+          status: "timed_out",
+          message: "Order still open after watch timeout",
+        },
+      ],
+    )
+
+    expect(result.nextTarget[symBtc]).toEqual(current[symBtc])
+    expect(result.errorsBySymbol).toEqual({})
+  })
+
+  it("clears staged target for working orders accepted on the exchange", () => {
+    const current = {
+      [symBtc]: { ...btcTarget, notional: 500 },
+    }
+
+    const result = targetAndArchiveAfterRebalance(
+      { [symBtc]: btcTarget },
+      {},
+      current,
+      [
+        {
+          kind: "rebalance",
+          symbol: symBtc,
+          signedNotionalDelta: 300,
+          leverage: 2,
+          leverageChanged: false,
+          positionKind: "perp",
+          venue: "derive",
+        },
+      ],
+      [{ symbol: symBtc, side: "buy", status: "working" }],
+    )
+
+    expect(result.nextTarget[symBtc]).toEqual(current[symBtc])
+    expect(result.errorsBySymbol).toEqual({})
+  })
+
+  it("clears timed_out closes from the deleted archive", () => {
+    const current = {
+      [symApt]: {
+        kind: "perp" as const,
+        venue: "derive" as const,
+        symbol: symApt,
+        side: "buy" as const,
+        leverage: 2,
+        notional: 14,
+      },
+    }
+
+    const result = targetAndArchiveAfterRebalance(
+      {},
+      {
+        [symApt]: {
+          kind: "perp",
+          venue: "derive",
+          symbol: symApt,
+          side: "buy",
+          leverage: 2,
+          notional: 14,
+        },
+      },
+      current,
+      [
+        {
+          kind: "close",
+          symbol: symApt,
+          side: "buy",
+          positionKind: "perp",
+          venue: "derive",
+        },
+      ],
+      [
+        {
+          symbol: symApt,
+          side: "sell",
+          status: "timed_out",
+          message: "Order still open after watch timeout",
+        },
+      ],
+    )
+
+    expect(result.nextTarget[symApt]).toEqual(current[symApt])
+    expect(result.nextDeletedArchive[symApt]).toBeUndefined()
+    expect(result.errorsBySymbol).toEqual({})
+  })
 })
 
 describe("syncDeletedArchiveWithCurrent", () => {
@@ -647,6 +759,77 @@ describe("captureStagedPortfolioOverlay", () => {
     )
 
     expect(overlay.deletedArchive[symbol]).toEqual(live)
+  })
+
+  it("ignores dust drift so unstaged targets can follow the exchange", () => {
+    const overlay = captureStagedPortfolioOverlay(
+      { [symbol]: { ...buy(100), symbol } },
+      { [symbol]: { ...buy(100.04), symbol } },
+      {},
+    )
+
+    expect(overlay.targetOverrides[symbol]).toBeUndefined()
+  })
+
+  it("keeps intentional notional edits as absolute overrides", () => {
+    const staged = { ...buy(150), symbol }
+    const overlay = captureStagedPortfolioOverlay(
+      { [symbol]: { ...buy(100), symbol } },
+      { [symbol]: staged },
+      {},
+    )
+
+    expect(overlay.targetOverrides[symbol]).toEqual(staged)
+  })
+})
+
+describe("mergeExchangeTargetWithStagedOverlay", () => {
+  const symbol = "SOL/USDC:USDC"
+
+  it("refreshes unstaged rows to the latest exchange mark", () => {
+    const exchange = { [symbol]: { ...buy(100.05), symbol } }
+    const merged = mergeExchangeTargetWithStagedOverlay(exchange, {
+      targetOverrides: {},
+      deletedArchive: {},
+    })
+
+    expect(merged.map[symbol]).toEqual(exchange[symbol])
+  })
+
+  it("preserves staged absolute targets over exchange dust", () => {
+    const exchange = { [symbol]: { ...buy(100.05), symbol } }
+    const staged = { ...buy(150), symbol }
+    const merged = mergeExchangeTargetWithStagedOverlay(exchange, {
+      targetOverrides: { [symbol]: staged },
+      deletedArchive: {},
+    })
+
+    expect(merged.map[symbol]).toEqual(staged)
+  })
+
+  it("keeps staged closes out of the target map", () => {
+    const exchange = { [symbol]: { ...buy(100), symbol } }
+    const merged = mergeExchangeTargetWithStagedOverlay(exchange, {
+      targetOverrides: {},
+      deletedArchive: { [symbol]: { ...buy(100), symbol } },
+    })
+
+    expect(merged.map[symbol]).toBeUndefined()
+  })
+})
+
+describe("targetTotalAfterExchangeMerge", () => {
+  it("tracks mark drift when the book was fully allocated", () => {
+    expect(targetTotalAfterExchangeMerge(1000, 1000, 1005)).toBe(1005)
+  })
+
+  it("preserves unused capacity across a merge", () => {
+    // Positions sum 800 of a 1000 budget; marks drift sum to 810.
+    expect(targetTotalAfterExchangeMerge(800, 1000, 810)).toBe(1010)
+  })
+
+  it("preserves over-allocation across a merge", () => {
+    expect(targetTotalAfterExchangeMerge(1100, 1000, 1110)).toBe(1010)
   })
 })
 

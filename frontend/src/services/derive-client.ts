@@ -14,7 +14,6 @@ import {
   type DeriveSessionCredentials,
 } from "@/services/deriveAccount"
 
-const DERIVE_WATCH_ORDERS_TIMEOUT_MS = 10_000
 const DERIVE_ORDER_NONCE_GAP_MS = 2
 /** Derive always requires max_fee; ~2x notional matches the UI default for options. */
 const DEFAULT_MAX_FEE_NOTIONAL_MULTIPLIER = 2
@@ -211,9 +210,9 @@ const requireSubaccountId = (credentials: DeriveSessionCredentials): number => {
 }
 
 /**
- * Derive trading client: batch create (sequential -- CCXT has no createOrders),
- * fill monitoring via watchOrders (+ fetchOrders timeout backup), tickers and
- * funding via CCXT. Analogous to HyperliquidClient's trade path.
+ * Derive trading client: sequential createOrder (CCXT has no createOrders),
+ * tickers and funding via CCXT. Rebalance does not wait for fills -- open
+ * orders rest on the venue and appear in the open-orders panel.
  */
 export class DeriveTradingClient {
   private readonly exchange: DeriveCcxtExchange
@@ -510,84 +509,26 @@ export class DeriveTradingClient {
     return created
   }
 
-  private workingResultsFromRequests(
-    requests: DeriveBatchOrderRequest[],
-  ): OrderResult[] {
-    return requests.map(request => ({
+  private orderResultFromCreated(
+    order: DeriveCcxtOrder,
+    request: DeriveBatchOrderRequest,
+  ): OrderResult {
+    const mapped = mapDeriveOrderForWatch(order)
+    const side =
+      order.side === "buy" || order.side === "sell" ? order.side : request.side
+
+    return {
       symbol: request.symbol,
-      side: request.side,
-      status: "working" as const,
-      message: null,
-    }))
-  }
-
-  private mergeWatchUpdates(
-    results: OrderResult[],
-    orders: Array<DeriveCcxtOrder | Order>,
-  ): OrderResult[] {
-    let next = [...results]
-
-    for (const order of orders) {
-      const mapped = mapDeriveOrderForWatch(order)
-      if (mapped.status === "working") {
-        continue
-      }
-
-      const orderSymbol =
-        typeof order.symbol === "string" ? order.symbol : undefined
-      const orderSide =
-        order.side === "buy" || order.side === "sell" ? order.side : undefined
-
-      const matchIndex = next.findIndex(result => {
-        if (result.status !== "working") return false
-        if (orderSide !== undefined && result.side !== orderSide) return false
-        if (orderSymbol === undefined) return true
-        return (
-          result.symbol === orderSymbol ||
-          orderSymbol.includes(result.symbol) ||
-          result.symbol.includes(orderSymbol)
-        )
-      })
-
-      if (matchIndex < 0) {
-        continue
-      }
-
-      const matched = next[matchIndex]
-
-      next = [
-        ...next.slice(0, matchIndex),
-        {
-          ...matched,
-          status: mapped.status,
-          message: mapped.message,
-        },
-        ...next.slice(matchIndex + 1),
-      ]
+      side,
+      status: mapped.status,
+      message: mapped.message,
     }
-
-    return next
-  }
-
-  private hasWorking(results: OrderResult[]): boolean {
-    return results.some(result => result.status === "working")
-  }
-
-  private markTimedOut(results: OrderResult[]): OrderResult[] {
-    return results.map(result =>
-      result.status === "working"
-        ? {
-            ...result,
-            status: "timed_out" as const,
-            message: "Order still open after watch timeout",
-          }
-        : result,
-    )
   }
 
   /**
-   * Create a batch then monitor fills via watchOrders; on timeout reconcile
-   * with fetchOrders (same pattern as HyperliquidClient.rebalancePositions).
+   * Places the batch and returns immediately from createOrder responses.
+   * Open/working orders are left on the venue (open-orders panel); the
+   * portfolio picks up fills on the next exchange refresh.
    */
   async placeAndMonitorOrders(
     requests: DeriveBatchOrderRequest[],
@@ -601,95 +542,12 @@ export class DeriveTradingClient {
       requests,
     })
 
-    const subaccountParams = this.subaccountParams()
-    const watchSince = Date.now()
-    const watchOrdersSafe = (): Promise<DeriveCcxtOrder[] | Error> =>
-      this.exchange
-        .watchOrders(undefined, watchSince, undefined, subaccountParams)
-        .then(
-          orders => orders,
-          (cause: unknown) =>
-            cause instanceof Error ? cause : new Error(String(cause)),
-        )
+    const created = await this.createOrdersBatch(requests)
+    const results = created.map((order, index) =>
+      this.orderResultFromCreated(order, requests[index]),
+    )
 
-    let nextWatch = watchOrdersSafe()
-
-    let results: OrderResult[] = []
-    let watchTimedOut = false
-
-    try {
-      await this.createOrdersBatch(requests)
-      results = this.workingResultsFromRequests(requests)
-
-      while (this.hasWorking(results)) {
-        let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-        const timeoutPromise: Promise<Error> = new Promise(resolve => {
-          timeoutHandle = setTimeout(() => {
-            resolve(
-              new Error(
-                `Derive watchOrders timed out after ${DERIVE_WATCH_ORDERS_TIMEOUT_MS}ms`,
-              ),
-            )
-          }, DERIVE_WATCH_ORDERS_TIMEOUT_MS)
-        })
-
-        let ordersUpdate: DeriveCcxtOrder[] | Error
-        try {
-          ordersUpdate = await Promise.race([nextWatch, timeoutPromise])
-        } finally {
-          if (timeoutHandle !== undefined) {
-            clearTimeout(timeoutHandle)
-          }
-        }
-
-        if (ordersUpdate instanceof Error) {
-          results = this.markTimedOut(results)
-          watchTimedOut = true
-          break
-        }
-
-        results = this.mergeWatchUpdates(results, ordersUpdate)
-
-        if (this.hasWorking(results)) {
-          nextWatch = watchOrdersSafe()
-        }
-      }
-    } finally {
-      if (typeof this.exchange.close === "function") {
-        await this.exchange.close().catch(() => undefined)
-      }
-    }
-
-    if (watchTimedOut) {
-      const fetched = await this.exchange.fetchOrders(
-        undefined,
-        watchSince,
-        undefined,
-        subaccountParams,
-      )
-      results = this.mergeWatchUpdates(
-        results.map(result =>
-          result.status === "timed_out"
-            ? { ...result, status: "working" as const, message: null }
-            : result,
-        ),
-        fetched,
-      )
-      results = results.map(result =>
-        result.status === "working"
-          ? {
-              ...result,
-              status: "timed_out" as const,
-              message: "Order still open after watch timeout",
-            }
-          : result,
-      )
-    }
-
-    console.info("[derive] placeAndMonitorOrders done", {
-      watchTimedOut,
-      results,
-    })
+    console.info("[derive] placeAndMonitorOrders done", { results })
     return results
   }
 

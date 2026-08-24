@@ -1,4 +1,12 @@
-import { For, Show, createMemo, type JSX } from "solid-js"
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  type JSX,
+} from "solid-js"
 import { toast } from "solid-sonner"
 
 import { Button } from "@/components/ui/button"
@@ -11,7 +19,11 @@ import {
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
 
-import { mapDeriveOpenOrderRows } from "./deriveOpenOrders"
+import {
+  OPEN_DERIVE_ORDERS_REFRESH_MS,
+  mapDeriveOpenOrderRows,
+  refreshProgressAlongCycle,
+} from "./deriveOpenOrders"
 
 const formatSignedSize = (amount: number | null, side: string): string => {
   if (amount === null) {
@@ -40,6 +52,60 @@ const formatUsd = (value: number | null): string => {
   })}`
 }
 
+const TimedRefreshButton = (props: {
+  disabled: boolean
+  isLoading: boolean
+  progress: number
+  onRefresh: () => void
+}): JSX.Element => {
+  const ringProgress = () => {
+    const progress = props.progress
+    if (progress <= 0 || progress >= 1) {
+      return 0
+    }
+    return progress
+  }
+
+  return (
+    <div class="relative inline-flex rounded-md">
+      <Show when={ringProgress() > 0}>
+        <svg
+          class="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <rect
+            x="1"
+            y="1"
+            width="98"
+            height="98"
+            rx="8"
+            ry="8"
+            fill="none"
+            stroke="white"
+            stroke-width="2"
+            vector-effect="non-scaling-stroke"
+            pathLength={1}
+            stroke-dasharray={`${String(ringProgress())} ${String(1 - ringProgress())}`}
+          />
+        </svg>
+      </Show>
+      <Button
+        size="sm"
+        variant="outline"
+        class="relative z-10 h-6 px-2 text-[11px]"
+        disabled={props.disabled}
+        onClick={() => {
+          props.onRefresh()
+        }}
+      >
+        {props.isLoading ? "Loading..." : "Refresh"}
+      </Button>
+    </div>
+  )
+}
+
 /**
  * Resting Derive orders for the unlocked session subaccount.
  * Not merged into portfolio weights -- fills become positions elsewhere.
@@ -49,6 +115,11 @@ export const DeriveOpenOrdersPanel = (): JSX.Element => {
   const session = useDeriveSessionCredentials()
   const openOrdersQuery = useDeriveOpenOrders()
   const cancelOrderMutation = useCancelDeriveOrder()
+
+  const [cycleStartedAtMs, setCycleStartedAtMs] = createSignal<number | null>(
+    null,
+  )
+  const [refreshProgress, setRefreshProgress] = createSignal(0)
 
   const rows = createMemo(() =>
     mapDeriveOpenOrderRows(openOrdersQuery.data ?? []),
@@ -60,6 +131,66 @@ export const DeriveOpenOrdersPanel = (): JSX.Element => {
     return current !== null && current.subaccountId !== null
   }
   const canFetch = () => isVisible() && hasSubaccount()
+
+  const runRefresh = () => {
+    if (!canFetch() || openOrdersQuery.isFetching) {
+      return
+    }
+    setRefreshProgress(0)
+    setCycleStartedAtMs(null)
+    void openOrdersQuery.refetch()
+  }
+
+  // createEffect: drive the refresh-ring progress and fire refetch at cycle end.
+  createEffect(() => {
+    if (!canFetch()) {
+      setCycleStartedAtMs(null)
+      setRefreshProgress(0)
+      return
+    }
+
+    if (openOrdersQuery.isFetching) {
+      setRefreshProgress(0)
+      setCycleStartedAtMs(null)
+      return
+    }
+
+    let startedAtMs = cycleStartedAtMs()
+    if (startedAtMs === null) {
+      startedAtMs = Date.now()
+      setCycleStartedAtMs(startedAtMs)
+    }
+
+    let frameId = 0
+    let cancelled = false
+
+    const tick = () => {
+      if (cancelled) {
+        return
+      }
+
+      const progress = refreshProgressAlongCycle(
+        startedAtMs,
+        Date.now(),
+        OPEN_DERIVE_ORDERS_REFRESH_MS,
+      )
+      setRefreshProgress(progress)
+
+      if (progress >= 1) {
+        runRefresh()
+        return
+      }
+
+      frameId = requestAnimationFrame(tick)
+    }
+
+    frameId = requestAnimationFrame(tick)
+
+    onCleanup(() => {
+      cancelled = true
+      cancelAnimationFrame(frameId)
+    })
+  })
 
   const cancelOrder = (orderId: string, symbol: string) => {
     if (cancelOrderMutation.isPending || !canFetch()) {
@@ -84,22 +215,14 @@ export const DeriveOpenOrdersPanel = (): JSX.Element => {
       <div class="shrink-0 space-y-2 border-t border-border px-3 py-3">
         <div class="flex items-center justify-between gap-2">
           <h3 class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Open orders
+            Open Derive orders
           </h3>
-          <Button
-            size="sm"
-            variant="outline"
-            class="h-6 px-2 text-[11px]"
+          <TimedRefreshButton
             disabled={!canFetch() || openOrdersQuery.isFetching}
-            onClick={() => {
-              if (!canFetch()) {
-                return
-              }
-              void openOrdersQuery.refetch()
-            }}
-          >
-            {openOrdersQuery.isFetching ? "Loading..." : "Refresh"}
-          </Button>
+            isLoading={openOrdersQuery.isFetching}
+            progress={refreshProgress()}
+            onRefresh={runRefresh}
+          />
         </div>
 
         <Show

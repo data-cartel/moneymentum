@@ -123,6 +123,8 @@ export const WalletContext = createContext<WalletContextType | undefined>(
 export const WALLET_STORAGE_KEY = "hyperliquid-wallet"
 export const DERIVE_WALLET_STORAGE_KEY = "derive-wallet"
 export const NETWORK_STORAGE_KEY = "hyperliquid-network"
+/** Remembered Hyperliquid main wallet (public address only; no secrets). */
+export const MAIN_ADDRESS_STORAGE_KEY = "hyperliquid-main-address"
 
 export interface EncryptedWalletSession {
   accountAddress: string
@@ -265,6 +267,34 @@ export const getStoredWalletAddresses = (): Pick<
     apiWalletAddress: session.apiWalletAddress,
   }
 }
+
+/**
+ * Public Hyperliquid account last connected via Reown. Survives AppKit
+ * disconnect flickers and reloads (`enableReconnect` is false).
+ */
+export const getRememberedMainAddress = (): string | null => {
+  try {
+    const stored = localStorage.getItem(MAIN_ADDRESS_STORAGE_KEY)
+    if (stored === null || stored === "") {
+      return null
+    }
+    return stored
+  } catch {
+    return null
+  }
+}
+
+export const rememberMainAddress = (address: string): void => {
+  localStorage.setItem(MAIN_ADDRESS_STORAGE_KEY, address)
+}
+
+export const clearRememberedMainAddress = (): void => {
+  localStorage.removeItem(MAIN_ADDRESS_STORAGE_KEY)
+}
+
+/** Best-known HL main address: agent session, else remembered public key. */
+export const resolvePersistedMainAddress = (): string | null =>
+  getStoredEncryptedSession()?.accountAddress ?? getRememberedMainAddress()
 
 export const getStoredNetworkMode = (): NetworkMode => {
   const stored = localStorage.getItem(NETWORK_STORAGE_KEY)

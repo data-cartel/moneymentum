@@ -386,8 +386,8 @@ describe("portfolio keyboard workflow", () => {
     expect(onStagedSubmit).not.toHaveBeenCalled()
   })
 
-  it("opens wallet pin dialog on mod+Enter when wallet disconnected from any panel", () => {
-    setConnectionState("walletDisconnected")
+  it("does not submit or open pin dialog on mod+Enter when choosing a venue", () => {
+    setConnectionState("chooseVenue")
     render(() => <Harness />)
 
     fireEvent.keyDown(window, { key: "1" })
@@ -399,7 +399,7 @@ describe("portfolio keyboard workflow", () => {
     expect(onSideChange).toHaveBeenCalledWith("BTC", "sell")
 
     fireEvent.keyDown(window, { key: "Enter", metaKey: true })
-    expect(onOpenWalletPinDialog).toHaveBeenCalled()
+    expect(onOpenWalletPinDialog).not.toHaveBeenCalled()
     expect(onStagedSubmit).not.toHaveBeenCalled()
   })
 
@@ -469,9 +469,7 @@ describe("portfolio keyboard workflow", () => {
     ))
 
     fireEvent.keyDown(window, { key: "3" })
-    const pinInput = screen.getByPlaceholderText(
-      "Enter 6-digit PIN to rebalance",
-    )
+    const pinInput = screen.getByPlaceholderText("Enter 6-digit PIN to unlock")
     pinInput.focus()
     expect(document.activeElement).toBe(pinInput)
 

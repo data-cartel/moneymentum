@@ -4,11 +4,11 @@ import * as Data from "effect/Data"
 import { toast } from "solid-sonner"
 
 import { Button } from "@/components/ui/button"
-import { getStoredWalletAddresses } from "@/contexts/wallet-context"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
 import {
   ensureEvmAppKit,
+  hasLiveEip1193Provider,
   prefetchEvmAppKit,
   readEvmAddressFromAccountState,
   readEvmWalletConnectedFromAccountState,
@@ -26,6 +26,8 @@ class ReownModalOpenFailed extends Data.TaggedError("ReownModalOpenFailed")<{
 export const openHyperliquidConnectModal = (options: {
   setMainAddress: (address: string | null) => void
   onOpeningChange?: (opening: boolean) => void
+  /** Fired when AppKit reports a connected EVM account (may precede provider). */
+  onConnected?: (address: string) => void
 }): void => {
   const projectIdConfigured = readReownProjectId() !== null
   if (!projectIdConfigured) {
@@ -51,6 +53,7 @@ export const openHyperliquidConnectModal = (options: {
         )
       }
 
+      let notifiedConnected = false
       modal.subscribeAccount(accountState => {
         const nextAddress = readEvmAddressFromAccountState(accountState)
         const connected =
@@ -59,11 +62,13 @@ export const openHyperliquidConnectModal = (options: {
 
         if (connected && nextAddress) {
           options.setMainAddress(nextAddress)
-          return
+          if (!notifiedConnected) {
+            notifiedConnected = true
+            options.onConnected?.(nextAddress)
+          }
         }
-
-        const stored = getStoredWalletAddresses()
-        options.setMainAddress(stored?.accountAddress ?? null)
+        // Ignore AppKit disconnect flickers after Connect closes; the wallet
+        // provider keeps the remembered public address until explicit revoke.
       }, "eip155")
 
       yield* Effect.tryPromise({
@@ -164,20 +169,23 @@ export const HyperliquidPanel = (props: HyperliquidPanelProps): JSX.Element => {
   const [isOpening, setIsOpening] = createSignal(false)
 
   // createEffect: honor portfolio shell request to open Reown connect.
+  // Remembered public address counts as "connected" for portfolio loads, but
+  // openConnect still needs the AppKit modal when the injected provider is gone.
   createEffect(() => {
     const request = shell?.focusVenueRequest()
     if (request?.venue !== "hyperliquid" || !request.openConnect) {
       return
     }
-    if (isHyperliquidConnected()) {
-      shell?.clearFocusVenueRequest()
-      return
-    }
-    openHyperliquidConnectModal({
-      setMainAddress,
-      onOpeningChange: setIsOpening,
-    })
     shell?.clearFocusVenueRequest()
+    void (async () => {
+      if (await hasLiveEip1193Provider()) {
+        return
+      }
+      openHyperliquidConnectModal({
+        setMainAddress,
+        onOpeningChange: setIsOpening,
+      })
+    })()
   })
 
   return (

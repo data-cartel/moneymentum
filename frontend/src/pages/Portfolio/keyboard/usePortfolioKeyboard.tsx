@@ -450,10 +450,10 @@ export const PortfolioKeyboardProvider = (props: {
       event.preventDefault()
 
       const connection = props.actions.connectionState()
-      if (
-        connection === "walletDisconnected" ||
-        connection === "agentMissing"
-      ) {
+      if (connection === "chooseVenue") {
+        return
+      }
+      if (connection === "agentMissing") {
         props.actions.onOpenWalletPinDialog()
         return
       }

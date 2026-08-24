@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input"
 import { hasSharedWalletPin } from "@/contexts/wallet-context"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
-import { prefetchEvmAppKit } from "@/reown/evmAppKit"
+import { hasLiveEip1193Provider, prefetchEvmAppKit } from "@/reown/evmAppKit"
 import {
   normalizeWalletPinInput,
   WALLET_PIN_LENGTH,
@@ -93,6 +93,15 @@ export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
     setErrorMessage(null)
 
     if (props.mode === "authorize") {
+      const liveProvider = await hasLiveEip1193Provider()
+      if (!liveProvider) {
+        setIsSubmitting(false)
+        setErrorMessage(
+          "Connect your Hyperliquid wallet first, then approve the agent.",
+        )
+        return
+      }
+
       const authorizeResult = await Effect.runPromise(
         Effect.either(authorizeAgent(enteredPin)),
       )

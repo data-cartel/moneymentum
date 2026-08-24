@@ -78,6 +78,56 @@ export const formatDeriveInstrumentLabel = (raw: string): string => {
   return `${underlyingRaw.toUpperCase()} ${strikeLabel} ${optionLabel} ${month} ${String(day)}`
 }
 
+const readInfoNumber = (
+  info: Record<string, unknown> | undefined,
+  key: string,
+): number | null => parseFiniteNumber(info?.[key])
+
+/**
+ * Resting size in contracts: prefer CCXT remaining, else amount - filled from
+ * either CCXT or Derive `info` (CCXT often leaves amount/remaining undefined
+ * and cost at 0 for open options).
+ */
+const readRestingAmount = (order: DeriveCcxtOrder): number | null => {
+  const remaining = parseFiniteNumber(order.remaining)
+  if (remaining !== null) {
+    return remaining
+  }
+
+  const total =
+    parseFiniteNumber(order.amount) ?? readInfoNumber(order.info, "amount")
+  if (total === null) {
+    return null
+  }
+
+  const filled =
+    parseFiniteNumber(order.filled) ??
+    readInfoNumber(order.info, "filled_amount") ??
+    0
+
+  return Math.max(total - filled, 0)
+}
+
+const readLimitPrice = (order: DeriveCcxtOrder): number | null =>
+  parseFiniteNumber(order.price) ??
+  readInfoNumber(order.info, "limit_price") ??
+  readInfoNumber(order.info, "average_price")
+
+/** USD notional for a resting order: |size * limit price|. */
+const readNotional = (
+  amount: number | null,
+  price: number | null,
+  cost: number | null,
+): number | null => {
+  if (amount !== null && price !== null) {
+    return Math.abs(amount * price)
+  }
+  if (cost !== null && cost > 0) {
+    return cost
+  }
+  return null
+}
+
 export const mapDeriveOpenOrderRow = (
   order: DeriveCcxtOrder,
 ): DeriveOpenOrderRow | null => {
@@ -99,12 +149,9 @@ export const mapDeriveOpenOrderRow = (
   const side: DeriveOpenOrderRow["side"] =
     sideRaw === "buy" || sideRaw === "sell" ? sideRaw : "—"
 
-  const amount =
-    parseFiniteNumber(order.remaining) ?? parseFiniteNumber(order.amount)
-  const price = parseFiniteNumber(order.price)
-  const notional =
-    parseFiniteNumber(order.cost) ??
-    (amount !== null && price !== null ? Math.abs(amount * price) : null)
+  const amount = readRestingAmount(order)
+  const price = readLimitPrice(order)
+  const notional = readNotional(amount, price, parseFiniteNumber(order.cost))
 
   const status =
     readInfoString(order.info, "order_status") ??
@@ -137,3 +184,18 @@ export const mapDeriveOpenOrderRows = (
     const row = mapDeriveOpenOrderRow(order)
     return row === null ? [] : [row]
   })
+
+/** Auto-refresh cadence for Derive open orders (matches the timer ring). */
+export const OPEN_DERIVE_ORDERS_REFRESH_MS = 10_000
+
+/** Progress 0..1 along a refresh cycle wall-clock window. */
+export const refreshProgressAlongCycle = (
+  startedAtMs: number,
+  nowMs: number,
+  durationMs: number,
+): number => {
+  if (durationMs <= 0) {
+    return 1
+  }
+  return Math.min(1, Math.max(0, (nowMs - startedAtMs) / durationMs))
+}

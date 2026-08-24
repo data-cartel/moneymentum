@@ -14,5 +14,7 @@
 *.db
 *.db-shm
 *.db-wal
+*.ingestion-owner
+*.ingestion-owner-journal
 .worktrees/
 .tmp/

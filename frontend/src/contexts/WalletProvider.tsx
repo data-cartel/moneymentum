@@ -11,9 +11,14 @@ import {
   WALLET_STORAGE_KEY,
   DERIVE_WALLET_STORAGE_KEY,
   NETWORK_STORAGE_KEY,
+  MAIN_ADDRESS_STORAGE_KEY,
   getStoredEncryptedSession,
   getStoredEncryptedDeriveSession,
   getStoredNetworkMode,
+  getRememberedMainAddress,
+  rememberMainAddress,
+  clearRememberedMainAddress,
+  resolvePersistedMainAddress,
   type EncryptedDeriveSession,
   type EncryptedWalletSession,
   type DeriveWalletCredentials,
@@ -127,7 +132,7 @@ export const WalletProvider = (props: ParentProps) => {
   const storedSession = getStoredEncryptedSession()
   const storedDeriveSession = getStoredEncryptedDeriveSession()
   const [mainAddress, setMainAddressState] = createSignal<string | null>(
-    storedSession?.accountAddress ?? null,
+    resolvePersistedMainAddress(),
   )
   const [credentials, setCredentials] = createSignal<WalletCredentials | null>(
     null,
@@ -268,13 +273,25 @@ export const WalletProvider = (props: ParentProps) => {
       setCredentials(null)
     }
 
-    const stored = getStoredEncryptedSession()
-    if (stored !== null && !sameWalletAddress(stored.accountAddress, address)) {
-      clearEncryptedSession()
-      syncStoredSessionState()
+    // Only wipe the encrypted agent when switching to a *different* account.
+    // Transient Reown disconnect (null) must not clear a stored agent or the
+    // remembered public address -- AppKit has enableReconnect: false and often
+    // emits disconnected right after Connect closes.
+    if (address !== null) {
+      const stored = getStoredEncryptedSession()
+      if (
+        stored !== null &&
+        !sameWalletAddress(stored.accountAddress, address)
+      ) {
+        clearEncryptedSession()
+        syncStoredSessionState()
+      }
+      rememberMainAddress(address)
+      setMainAddressState(address)
+      return
     }
 
-    setMainAddressState(address)
+    setMainAddressState(null)
   }
 
   const validatePinAgainstStoredSessions = (
@@ -335,6 +352,7 @@ export const WalletProvider = (props: ParentProps) => {
           markWalletContextChanged()
           rememberSessionPin(pin)
           persistEncryptedSession(newCredentials, encrypted)
+          rememberMainAddress(newCredentials.accountAddress)
           setMainAddressState(newCredentials.accountAddress)
           setCredentials(newCredentials)
           syncStoredSessionState()
@@ -534,6 +552,8 @@ export const WalletProvider = (props: ParentProps) => {
       markWalletContextChanged()
       rememberSessionPin(resolvedPin)
       persistEncryptedSession(pendingCredentials, encrypted)
+      rememberMainAddress(pendingCredentials.accountAddress)
+      setMainAddressState(pendingCredentials.accountAddress)
       syncStoredSessionState()
       setCredentials(pendingCredentials)
     }).pipe(
@@ -665,6 +685,7 @@ export const WalletProvider = (props: ParentProps) => {
       markWalletContextChanged()
 
       if (hyperliquidSession !== null && hyperliquidPrivateKey !== null) {
+        rememberMainAddress(hyperliquidSession.accountAddress)
         setMainAddressState(hyperliquidSession.accountAddress)
         setCredentials(
           credentialsFromSession(hyperliquidSession, hyperliquidPrivateKey),
@@ -717,6 +738,7 @@ export const WalletProvider = (props: ParentProps) => {
       markWalletContextChanged()
       setCredentials(null)
       setMainAddressState(null)
+      clearRememberedMainAddress()
       clearEncryptedSession()
       syncStoredSessionState()
       if (getStoredEncryptedDeriveSession() === null) {
@@ -785,7 +807,19 @@ export const WalletProvider = (props: ParentProps) => {
       const nextSession = getStoredEncryptedSession()
       syncStoredSessionState()
       if (nextSession) {
+        rememberMainAddress(nextSession.accountAddress)
         setMainAddressState(nextSession.accountAddress)
+      }
+    }
+    if (event.key === MAIN_ADDRESS_STORAGE_KEY) {
+      const remembered = getRememberedMainAddress()
+      if (!sameWalletAddress(mainAddress(), remembered)) {
+        markWalletContextChanged()
+      }
+      if (remembered !== null) {
+        setMainAddressState(remembered)
+      } else if (getStoredEncryptedSession() === null) {
+        setMainAddressState(null)
       }
     }
     if (event.key === DERIVE_WALLET_STORAGE_KEY) {
@@ -833,7 +867,8 @@ export const WalletProvider = (props: ParentProps) => {
           return
         }
 
-        const existingAddress = modal.getAddress("eip155")
+        const existingAddress =
+          modal.getAddress("eip155") ?? resolvePersistedMainAddress()
         if (existingAddress) {
           setMainAddress(existingAddress)
         }
@@ -854,6 +889,16 @@ export const WalletProvider = (props: ParentProps) => {
             const currentProviderAddress = modal.getAddress("eip155") ?? null
             if (currentProviderAddress !== null) {
               setMainAddress(currentProviderAddress)
+              return
+            }
+
+            // Transient AppKit disconnect (enableReconnect is false): keep the
+            // remembered / in-memory public account. Explicit disconnect()
+            // clears storage itself -- do not call setMainAddress(null) here
+            // or we race the disconnect revision check and wipe the agent.
+            const persisted = resolvePersistedMainAddress()
+            const current = untrack(() => mainAddress())
+            if (persisted !== null || current !== null) {
               return
             }
 
