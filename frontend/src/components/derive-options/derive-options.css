@@ -105,8 +105,9 @@
 }
 
 .derive-options .d-chain {
-  width: 100%;
-  min-width: 980px;
+  /* Fixed cols sized in `ch` from BTC 2026-08-27 snapshot maxima. */
+  table-layout: fixed;
+  width: max-content;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 11px;
@@ -115,6 +116,94 @@
     "Courier New", monospace;
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
+  /* Horizontal cell padding (0.4rem each side) baked into col widths. */
+  --d-cell-x: 0.8rem;
+}
+
+/* Options chain: max rendered lengths -- size 4, iv 6, quote 9, mark 8, delta 6, strike 6. */
+.derive-options .d-options-chain .d-col-size {
+  width: calc(4ch + var(--d-cell-x));
+}
+
+.derive-options .d-options-chain .d-col-iv {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+.derive-options .d-options-chain .d-col-quote {
+  width: calc(9ch + var(--d-cell-x));
+}
+
+.derive-options .d-options-chain .d-col-mark {
+  width: calc(8ch + var(--d-cell-x));
+}
+
+.derive-options .d-options-chain .d-col-delta {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+.derive-options .d-options-chain .d-col-strike {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+/* Greeks: maxima from the same snapshot (instrument 20, theta 9, ...). */
+.derive-options .d-greeks-chain .d-g-col-instrument {
+  width: calc(20ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-strike {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-type {
+  width: calc(4ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-money {
+  width: calc(5ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-quote {
+  width: calc(9ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-iv {
+  width: calc(5ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-delta {
+  width: calc(7ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-gamma {
+  width: calc(8ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-vega {
+  width: calc(7ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-theta {
+  width: calc(9ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-side-iv {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-rho {
+  width: calc(5ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-forward {
+  width: calc(7ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-df {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-mdl {
+  width: calc(5ch + var(--d-cell-x));
 }
 
 .derive-options .d-chain thead th {
@@ -133,6 +222,7 @@
   padding: 0.28rem 0.4rem;
   border-bottom: 1px solid var(--d-border-soft);
   white-space: nowrap;
+  text-align: right;
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 }
@@ -171,7 +261,6 @@
   text-align: center !important;
   font-weight: 600;
   color: var(--d-text);
-  min-width: 0;
 }
 
 .derive-options thead .d-expiry-countdown {
