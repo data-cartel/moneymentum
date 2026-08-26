@@ -131,7 +131,7 @@ export default defineConfig({
     }),
   ],
   optimizeDeps: {
-    // Prebundle Effect so lazy routes (e.g. /test) do not trigger a
+    // Prebundle Effect so lazy routes do not trigger a
     // mid-navigation dep re-optimize that surfaces as
     // "Failed to fetch dynamically imported module".
     include: [

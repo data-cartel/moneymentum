@@ -609,9 +609,9 @@ const requireDeriveTicker = (
 
 /**
  * Maps Derive portfolio actions to limit order requests. Premium notionals
- * convert to contracts as `notional / mark` (same as the Test page /
- * order ticket). Limit price is aggressive book (ask/bid). Throws if a
- * required ticker or price is missing.
+ * convert to contracts as `notional / mark` (same as the order ticket).
+ * Limit price is aggressive book (ask/bid). Throws if a required ticker or
+ * price is missing.
  */
 export const deriveActionsToOrderRequests = (
   actions: RebalanceAction[],
