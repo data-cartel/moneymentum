@@ -3,13 +3,10 @@ import type { SetStoreFunction } from "solid-js/store"
 
 import {
   EMPTY_OPTION_GREEKS,
-  EMPTY_TAB_RISK,
   type ExpiryUnix,
   type OptionGreeks,
   type OptionQuote,
   type OptionsSnapshot,
-  type PortfolioRiskSummary,
-  type ScenarioPoint,
 } from "./optionsSnapshot"
 
 /** Fine-grained live book: cells read leaf store paths, not whole snapshots. */
@@ -21,8 +18,6 @@ export type QuoteBook = {
   expiry_unixes: ExpiryUnix[]
   expiry_dates: string[]
   spot_price: number
-  risk: PortfolioRiskSummary
-  scenarios: ScenarioPoint[]
   byInstrument: Record<string, OptionQuote>
   callByStrike: Record<number, string>
   putByStrike: Record<number, string>
@@ -38,8 +33,6 @@ export const emptyQuoteBook = (): QuoteBook => ({
   expiry_unixes: [],
   expiry_dates: [],
   spot_price: 0,
-  risk: EMPTY_TAB_RISK,
-  scenarios: [],
   byInstrument: {},
   callByStrike: {},
   putByStrike: {},
@@ -191,28 +184,6 @@ const firstQuoteDisplayDiff = (
   }
   return null
 }
-
-const riskDisplayEqual = (
-  left: PortfolioRiskSummary,
-  right: PortfolioRiskSummary,
-): boolean =>
-  quantize(left.aggregate_delta, 4) === quantize(right.aggregate_delta, 4) &&
-  quantize(left.aggregate_gamma, 6) === quantize(right.aggregate_gamma, 6) &&
-  quantize(left.aggregate_vega, 4) === quantize(right.aggregate_vega, 4) &&
-  quantize(left.aggregate_theta, 4) === quantize(right.aggregate_theta, 4) &&
-  quantize(left.hedge_ratio_btc, 4) === quantize(right.hedge_ratio_btc, 4)
-
-const scenariosDisplayEqual = (
-  left: ScenarioPoint[],
-  right: ScenarioPoint[],
-): boolean =>
-  left.length === right.length &&
-  left.every(
-    (point, index) =>
-      point.pct_move === right[index]?.pct_move &&
-      quantize(point.estimated_pnl, 2) ===
-        quantize(right[index]?.estimated_pnl ?? 0, 2),
-  )
 
 /** Greeks-table-only fields -- throttle to cut full-panel paint storms. */
 const COLD_GREEK_KEYS: ReadonlySet<keyof OptionGreeks> = new Set([
@@ -452,15 +423,6 @@ export const applyOptionsSnapshot = (
       setBook("spot_price", nextSpot)
     }
 
-    setBook("risk", previousRisk =>
-      riskDisplayEqual(previousRisk, next.risk) ? previousRisk : next.risk,
-    )
-    setBook("scenarios", previousScenarios =>
-      scenariosDisplayEqual(previousScenarios, next.scenarios)
-        ? previousScenarios
-        : next.scenarios,
-    )
-
     for (const quote of quantizedQuotes) {
       const patch = patchQuoteLeaves(
         setBook,
@@ -542,10 +504,6 @@ export const skeletonizeQuoteBook = (
     }
     return next
   })
-  setBook("risk", EMPTY_TAB_RISK)
-  setBook("scenarios", previous =>
-    previous.map(scenario => ({ ...scenario, estimated_pnl: 0 })),
-  )
   setBook("updated_at", new Date().toISOString())
 }
 

@@ -33,19 +33,6 @@ export type OptionQuote = {
   greeks: OptionGreeks
 }
 
-export type PortfolioRiskSummary = {
-  aggregate_delta: number
-  aggregate_gamma: number
-  aggregate_vega: number
-  aggregate_theta: number
-  hedge_ratio_btc: number
-}
-
-export type ScenarioPoint = {
-  pct_move: number
-  estimated_pnl: number
-}
-
 export type OptionsSnapshot = {
   asset: string
   updated_at: string
@@ -55,8 +42,6 @@ export type OptionsSnapshot = {
   expiry_dates: string[]
   strikes: number[]
   quotes: OptionQuote[]
-  risk: PortfolioRiskSummary
-  scenarios: ScenarioPoint[]
 }
 
 export type OptionsBootstrap = {
@@ -64,14 +49,6 @@ export type OptionsBootstrap = {
   assets: string[]
   default_expiry_unix: ExpiryUnix
   tabs: Array<{ expiry_unix: ExpiryUnix; instruments: string[] }>
-}
-
-export const EMPTY_TAB_RISK: PortfolioRiskSummary = {
-  aggregate_delta: 0,
-  aggregate_gamma: 0,
-  aggregate_vega: 0,
-  aggregate_theta: 0,
-  hedge_ratio_btc: 0,
 }
 
 export const EMPTY_OPTION_GREEKS: OptionGreeks = {

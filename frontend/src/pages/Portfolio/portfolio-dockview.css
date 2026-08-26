@@ -152,7 +152,7 @@
  * Dockview promotes every panel into a GPU layer via translate3d/will-change on
  * .dv-render-overlay. High-frequency cell updates then paint-flash the whole
  * panel. Keep contain/isolation; drop the permanent transform layer so dirty
- * regions stay cell-sized (same as /derive-options and Hyperliquid).
+ * regions stay cell-sized (same as Hyperliquid).
  */
 .portfolio-dockview-theme .dv-render-overlay {
   will-change: auto;

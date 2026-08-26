@@ -5,8 +5,6 @@ export type {
   OptionQuote,
   OptionsBootstrap,
   OptionsSnapshot,
-  PortfolioRiskSummary,
-  ScenarioPoint,
 } from "./optionsSnapshot"
 export { deriveOptionsBaseUrl } from "./deriveOptionsBaseUrl"
 export {

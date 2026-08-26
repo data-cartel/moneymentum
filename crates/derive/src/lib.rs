@@ -237,21 +237,6 @@ pub struct OptionQuote {
     pub greeks: OptionGreeks,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
-pub struct PortfolioRiskSummary {
-    pub aggregate_delta: f64,
-    pub aggregate_gamma: f64,
-    pub aggregate_vega: f64,
-    pub aggregate_theta: f64,
-    pub hedge_ratio_btc: f64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ScenarioPoint {
-    pub pct_move: f64,
-    pub estimated_pnl: f64,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct OptionsSnapshot {
     pub asset: String,
@@ -262,8 +247,6 @@ pub struct OptionsSnapshot {
     pub expiry_dates: Vec<DateTime<Utc>>,
     pub strikes: Vec<f64>,
     pub quotes: Vec<OptionQuote>,
-    pub risk: PortfolioRiskSummary,
-    pub scenarios: Vec<ScenarioPoint>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -942,15 +925,6 @@ fn build_tab_snapshot(
         .find_map(|quote| (quote.spot_price > 0.0).then_some(quote.spot_price))
         .unwrap_or(0.0);
 
-    let risk = aggregate_risk(&quotes);
-    let scenarios = [-0.10, -0.05, 0.05, 0.10]
-        .iter()
-        .map(|pct_move| ScenarioPoint {
-            pct_move: *pct_move,
-            estimated_pnl: scenario_pnl(&risk, spot_price, *pct_move),
-        })
-        .collect::<Vec<_>>();
-
     OptionsSnapshot {
         asset: asset.to_string(),
         updated_at: Utc::now(),
@@ -960,31 +934,7 @@ fn build_tab_snapshot(
         expiry_dates: expiry_datetimes_from_catalogue(catalogue),
         strikes,
         quotes,
-        risk,
-        scenarios,
     }
-}
-
-fn aggregate_risk(quotes: &[OptionQuote]) -> PortfolioRiskSummary {
-    let totals = quotes
-        .iter()
-        .fold(PortfolioRiskSummary::default(), |mut totals, quote| {
-            totals.aggregate_delta += quote.greeks.delta.unwrap_or(0.0);
-            totals.aggregate_gamma += quote.greeks.gamma.unwrap_or(0.0);
-            totals.aggregate_vega += quote.greeks.vega.unwrap_or(0.0);
-            totals.aggregate_theta += quote.greeks.theta.unwrap_or(0.0);
-            totals
-        });
-
-    PortfolioRiskSummary {
-        hedge_ratio_btc: -totals.aggregate_delta,
-        ..totals
-    }
-}
-
-fn scenario_pnl(risk: &PortfolioRiskSummary, spot: f64, pct_move: f64) -> f64 {
-    let spot_move = spot * pct_move;
-    (0.5 * risk.aggregate_gamma * spot_move).mul_add(spot_move, risk.aggregate_delta * spot_move)
 }
 
 async fn apply_tab_switch(
@@ -1670,41 +1620,6 @@ mod tests {
         assert_eq!(greeks.iv, None);
     }
 
-    fn quote_with_greeks(
-        instrument_name: &str,
-        strike: f64,
-        spot: f64,
-        delta: Option<f64>,
-        gamma: Option<f64>,
-        vega: Option<f64>,
-        theta: Option<f64>,
-    ) -> OptionQuote {
-        OptionQuote {
-            instrument_name: instrument_name.to_string(),
-            kind: OptionKind::Call,
-            strike,
-            expiry: Utc
-                .timestamp_opt(1_700_000_000, 0)
-                .single()
-                .expect("valid timestamp"),
-            expiry_unix: 1_700_000_000,
-            bid: None,
-            ask: None,
-            bid_size: None,
-            ask_size: None,
-            mark: None,
-            spot_price: spot,
-            moneyness: Moneyness::AtTheMoney,
-            greeks: OptionGreeks {
-                delta,
-                gamma,
-                vega,
-                theta,
-                ..OptionGreeks::default()
-            },
-        }
-    }
-
     #[test]
     fn compute_moneyness_classifies_calls_and_puts_outside_the_atm_band() {
         assert_eq!(
@@ -1748,68 +1663,6 @@ mod tests {
             compute_moneyness(OptionKind::Put, 70000.0, -5.0),
             Moneyness::AtTheMoney
         );
-    }
-
-    #[test]
-    fn aggregate_risk_sums_present_greeks_and_negates_delta_for_hedge() {
-        let quotes = vec![
-            quote_with_greeks(
-                "BTC-A",
-                70000.0,
-                70000.0,
-                Some(0.5),
-                Some(0.01),
-                Some(2.0),
-                Some(-1.0),
-            ),
-            quote_with_greeks(
-                "BTC-B",
-                71000.0,
-                70000.0,
-                Some(-0.25),
-                None,
-                Some(3.0),
-                Some(-0.5),
-            ),
-        ];
-
-        let risk = aggregate_risk(&quotes);
-
-        assert!((risk.aggregate_delta - 0.25).abs() < 1e-9);
-        assert!((risk.aggregate_gamma - 0.01).abs() < 1e-9);
-        assert!((risk.aggregate_vega - 5.0).abs() < 1e-9);
-        assert!((risk.aggregate_theta - (-1.5)).abs() < 1e-9);
-        assert!((risk.hedge_ratio_btc - (-0.25)).abs() < 1e-9);
-    }
-
-    #[test]
-    fn aggregate_risk_is_zero_for_empty_holdings() {
-        let risk = aggregate_risk(&[]);
-
-        assert!(risk.aggregate_delta.abs() < 1e-9);
-        assert!(risk.aggregate_gamma.abs() < 1e-9);
-        assert!(risk.aggregate_vega.abs() < 1e-9);
-        assert!(risk.aggregate_theta.abs() < 1e-9);
-        assert!(risk.hedge_ratio_btc.abs() < 1e-9);
-    }
-
-    #[test]
-    fn scenario_pnl_combines_delta_and_gamma_terms() {
-        let risk = PortfolioRiskSummary {
-            aggregate_delta: 2.0,
-            aggregate_gamma: 0.5,
-            aggregate_vega: 0.0,
-            aggregate_theta: 0.0,
-            hedge_ratio_btc: -2.0,
-        };
-
-        // spot 100, +10% move: spot_move = 10
-        // pnl = 2 * 10 + 0.5 * 0.5 * 10 * 10 = 20 + 25 = 45
-        assert!((scenario_pnl(&risk, 100.0, 0.10) - 45.0).abs() < 1e-9);
-
-        // spot 100, -10% move: spot_move = -10
-        // pnl = 2 * -10 + 0.5 * 0.5 * 100 = -20 + 25 = 5
-        assert!((scenario_pnl(&risk, 100.0, -0.10) - 5.0).abs() < 1e-9);
     }
 
     #[test]
@@ -1893,8 +1746,6 @@ mod tests {
         assert_eq!(snapshot.strikes, vec![70000.0, 71000.0]);
         assert!((snapshot.spot_price - 70500.0).abs() < 1e-9);
         assert_eq!(snapshot.quotes.len(), 3);
-        assert!((snapshot.risk.aggregate_delta - 0.4).abs() < 1e-9);
-        assert_eq!(snapshot.scenarios.len(), 4);
     }
 
     #[test]

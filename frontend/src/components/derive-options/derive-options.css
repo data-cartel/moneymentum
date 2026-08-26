@@ -280,33 +280,6 @@
   color: var(--d-text);
 }
 
-.derive-options .d-panel {
-  border: 1px solid var(--d-border);
-  background: var(--d-surface);
-  border-radius: 0.25rem;
-  padding: 0.75rem;
-}
-
-.derive-options .d-toggle {
-  display: inline-flex;
-  border: 1px solid var(--d-border);
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--d-chip);
-}
-
-.derive-options .d-toggle button {
-  padding: 0.3rem 0.7rem;
-  font-size: 11px;
-  color: var(--d-muted);
-  background: transparent;
-}
-
-.derive-options .d-toggle button.d-toggle-active {
-  background: var(--d-chip-active);
-  color: var(--d-text);
-}
-
 .derive-options button.d-price-btn {
   cursor: pointer;
   border: 1px solid var(--d-border);

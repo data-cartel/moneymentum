@@ -23,9 +23,8 @@ it today, at very different levels of maturity:
   DTOs, `DeriveConfig`, in-memory state (`OptionsCatalogue`, `DeriveState`), a
   Axum CORS middleware, the websocket hub (`run_websocket_hub`,
   subscribe/unsubscribe batching), parsing helpers, options-domain math
-  (`build_greeks`, `aggregate_risk`, `scenario_pnl`), **and** the Axum HTTP
-  routes/SSE stream. There is no client trait, no mock seam, and financial
-  values flow as raw `f64`.
+  (`build_greeks`), **and** the Axum HTTP routes/SSE stream. There is no client
+  trait, no mock seam, and financial values flow as raw `f64`.
 
 The maintainer wants: hyperliquid integration as its own crate, derive
 integration as its own crate, a trait interface for both, and Cargo feature
@@ -49,13 +48,13 @@ recorded here for review before any code moves.
 
 2. **Per-venue capability traits, NOT one unified trait.** Hyperliquid exposes
    perp **market data** (markets, candles, funding); Derive exposes an **options
-   catalogue + live quotes/greeks/risk** over a websocket. These capability sets
-   do not overlap, so a single `trait Venue { ... }` covering both would be a
-   leaky abstraction -- every consumer would get methods that are meaningless
-   for the other venue. Keep `trait Hyperliquid` and a new `trait Derive`, and
-   unify them only under a **minimal shared supertrait** for what is genuinely
-   common (e.g. `trait Venue: Send + Sync { fn name(&self) -> VenueName; }`,
-   plus a connect/health hook if a real shared lifecycle emerges). This honors
+   catalogue + live quotes/greeks** over a websocket. These capability sets do
+   not overlap, so a single `trait Venue { ... }` covering both would be a leaky
+   abstraction -- every consumer would get methods that are meaningless for the
+   other venue. Keep `trait Hyperliquid` and a new `trait Derive`, and unify
+   them only under a **minimal shared supertrait** for what is genuinely common
+   (e.g. `trait Venue: Send + Sync { fn name(&self) -> VenueName; }`, plus a
+   connect/health hook if a real shared lifecycle emerges). This honors
    "decouple what varies independently" -- the abstraction models distinct venue
    capabilities, not a forced union.
 
@@ -70,10 +69,10 @@ recorded here for review before any code moves.
 4. **Decompose `derive.rs` first; only the venue client moves into the crate.**
    Split the monolith into: (a) the **Derive venue client** (websocket hub +
    catalogue + quote state) behind `trait Derive` -> `crates/derive`; (b) the
-   **options domain** (greeks/risk/scenario, pure functions) -> a module in the
-   derive crate; (c) the **Axum routes/SSE + CORS middleware** -> stay in the
-   app crate as the web adapter. The HTTP layer is not part of the venue
-   integration and must not live in the venue crate.
+   **options domain** (greeks, pure functions) -> a module in the derive crate;
+   (c) the **Axum routes/SSE + CORS middleware** -> stay in the app crate as the
+   web adapter. The HTTP layer is not part of the venue integration and must not
+   live in the venue crate.
 
 5. **Replace `f64` money/quantity at the venue boundary with `rust_decimal` /
    domain newtypes** as part of the extraction (`rust_decimal` is already a

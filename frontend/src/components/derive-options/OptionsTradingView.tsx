@@ -22,10 +22,8 @@ import {
 
 import { Button } from "@/components/ui/button"
 import type { NetworkMode } from "@/contexts/wallet-context"
-import { fetchStreamChecked, NetworkError } from "@/lib/http"
+import { NetworkError } from "@/lib/http"
 import { cn } from "@/lib/cn"
-import { computeRollingVolatility } from "@/pages/Prototype/metrics/computations"
-import type { TimeSeriesPoint } from "@/pages/Prototype/metrics/registry"
 import { DERIVE_CHAIN_GREEKS_SPLIT_STORAGE_KEY } from "./deriveChromeStorage"
 import * as deriveService from "@/services/derive"
 
@@ -157,97 +155,6 @@ const GREEKS_CHAIN_COL_CLASSES = [
 
 const parseJsonUnknown = (text: string): unknown =>
   (JSON.parse as (input: string) => unknown)(text)
-
-const REALIZED_VOL_WINDOW_DAYS = 30
-
-const parseNdjsonRecords = (text: string): unknown[] => {
-  const trimmed = text.trim()
-  if (trimmed.length === 0) {
-    return []
-  }
-  if (trimmed.startsWith("[")) {
-    const parsed = parseJsonUnknown(trimmed)
-    return Array.isArray(parsed) ? parsed : []
-  }
-  return trimmed
-    .split("\n")
-    .filter(line => line.length > 0)
-    .map(line => parseJsonUnknown(line))
-}
-
-const recordToObject = (row: unknown): Record<string, unknown> | null =>
-  row !== null && typeof row === "object" && !Array.isArray(row)
-    ? (row as Record<string, unknown>)
-    : null
-
-const isBtcCandleRow = (row: Record<string, unknown>): boolean => {
-  const ticker = row.ticker
-  if (typeof ticker === "string" && ticker.toUpperCase() === "BTC") {
-    return true
-  }
-  const symbol = row.symbol
-  if (typeof symbol === "string") {
-    const sym = symbol.toUpperCase()
-    if (sym === "BTC" || sym.startsWith("BTC/") || sym.startsWith("BTC:")) {
-      return true
-    }
-  }
-  return false
-}
-
-const rowClosePrice = (row: Record<string, unknown>): number | null => {
-  const close = row.close
-  if (typeof close === "number" && Number.isFinite(close)) {
-    return close
-  }
-  if (typeof close === "string") {
-    const parsed = Number.parseFloat(close)
-    return Number.isFinite(parsed) ? parsed : null
-  }
-  return null
-}
-
-const rowTimeMs = (row: Record<string, unknown>): number => {
-  const ts = row.timestamp
-  if (typeof ts === "number" && Number.isFinite(ts)) {
-    return ts < 1e12 ? ts * 1000 : ts
-  }
-  if (typeof ts === "string") {
-    const parsed = Date.parse(ts)
-    return Number.isFinite(parsed) ? parsed : 0
-  }
-  return 0
-}
-
-const btcCloseSeriesFromCandlesResponse = (text: string): TimeSeriesPoint[] => {
-  const points: TimeSeriesPoint[] = []
-  for (const raw of parseNdjsonRecords(text)) {
-    const row = recordToObject(raw)
-    if (row === null || !isBtcCandleRow(row)) {
-      continue
-    }
-    const close = rowClosePrice(row)
-    if (close === null) {
-      continue
-    }
-    const time = rowTimeMs(row)
-    if (!Number.isFinite(time) || time <= 0) {
-      continue
-    }
-    points.push({ time, value: close })
-  }
-  points.sort((left, right) => left.time - right.time)
-  const deduped: TimeSeriesPoint[] = []
-  for (const point of points) {
-    const tail = deduped.length > 0 ? deduped[deduped.length - 1] : undefined
-    if (tail?.time === point.time) {
-      deduped[deduped.length - 1] = point
-      continue
-    }
-    deduped.push(point)
-  }
-  return deduped
-}
 
 type QuotePriceFlash = "up" | "down"
 
@@ -794,13 +701,8 @@ export type OptionsTradingViewProps = {
   streamEnabled: Accessor<boolean>
   /** Which Derive deployment to stream (follows the Testnet toggle). */
   networkMode: Accessor<NetworkMode>
-  /** Portfolio risk cards + IV smile chart (legacy /derive-options page). */
-  showRiskAndSmile?: boolean
-  /**
-   * Portfolio-only: toggle + SplitviewSolid resize for the greeks/order panel.
-   * Omit on /derive-options (detail stays stacked with a fixed max height).
-   */
-  greeksLayout?: {
+  /** Toggle + SplitviewSolid resize for the greeks/order panel. */
+  greeksLayout: {
     visible: Accessor<boolean>
     setVisible: (visible: boolean) => void
   }
@@ -816,10 +718,7 @@ type DetailTab = "greeks" | "order"
 export const OptionsTradingView = (
   props: OptionsTradingViewProps,
 ): JSX.Element => {
-  const showRiskAndSmile = () => props.showRiskAndSmile === true
-  const greeksResizable = () => props.greeksLayout !== undefined
-  const greeksVisible = () =>
-    props.greeksLayout === undefined ? true : props.greeksLayout.visible()
+  const greeksVisible = () => props.greeksLayout.visible()
   const minNotional = () => props.minNotional ?? 11
 
   const [book, setBook] = createStore(emptyQuoteBook())
@@ -829,7 +728,6 @@ export const OptionsTradingView = (
   const [selectedExpiryUnix, setSelectedExpiryUnix] =
     createSignal<ExpiryUnix | null>(null)
   const [selectedAsset, setSelectedAsset] = createSignal<string | null>(null)
-  const [smileKind, setSmileKind] = createSignal<"C" | "P" | "both">("both")
   const [flashByInstrument, setFlashByInstrument] = createStore<
     Record<string, QuoteFlashEntry>
   >({})
@@ -840,9 +738,6 @@ export const OptionsTradingView = (
   const clearQuoteFlash = (): void => {
     setFlashByInstrument(reconcile({}))
   }
-  const [realizedVolAnnual30d, setRealizedVolAnnual30d] = createSignal<
-    number | null
-  >(null)
 
   const quotePriceHistoryRef: {
     map: Map<string, { bid: number | null; ask: number | null }>
@@ -1068,7 +963,7 @@ export const OptionsTradingView = (
     )
     setOrderSelection(selection)
     setDetailTab("order")
-    props.greeksLayout?.setVisible(true)
+    props.greeksLayout.setVisible(true)
   }
 
   const handleTicketSideChange = (side: "buy" | "sell"): void => {
@@ -1086,41 +981,6 @@ export const OptionsTradingView = (
         : null
     setOrderSelection(selectionWithOrderSide(current, side, liveLimit))
   }
-
-  const ivSmilePoints = createMemo(() => {
-    if (!book.loaded) {
-      return [] as Array<{ strike: number; iv: number }>
-    }
-
-    const sameExpiry = book.instrumentNamesAsc.map(
-      name => book.byInstrument[name],
-    )
-
-    if (smileKind() === "both") {
-      const buckets = new Map<number, number[]>()
-      for (const quote of sameExpiry) {
-        if (quote.greeks.iv === null) {
-          continue
-        }
-        const list = buckets.get(quote.strike) ?? []
-        list.push(quote.greeks.iv)
-        buckets.set(quote.strike, list)
-      }
-      return [...buckets.entries()]
-        .map(([strike, ivs]) => ({
-          strike,
-          iv:
-            ivs.reduce((accumulator, value) => accumulator + value, 0) /
-            ivs.length,
-        }))
-        .sort((left, right) => left.strike - right.strike)
-    }
-
-    return sameExpiry
-      .filter(quote => quote.kind === smileKind() && quote.greeks.iv !== null)
-      .map(quote => ({ strike: quote.strike, iv: quote.greeks.iv as number }))
-      .sort((left, right) => left.strike - right.strike)
-  })
 
   const boardKeys = createMemo(
     (previous: BoardKey[] | undefined): BoardKey[] => {
@@ -1212,96 +1072,6 @@ export const OptionsTradingView = (
         })
         flashClearTimerRef.id = undefined
       }, 950)
-    }
-  })
-
-  const smileGeometry = createMemo(() => {
-    const points = ivSmilePoints()
-    const realizedAnnual =
-      selectedAsset() === "BTC" ? realizedVolAnnual30d() : null
-    const width = 760
-    const height = 260
-    const paddingLeft = 52
-    const paddingRight = 20
-    const paddingTop = 20
-    const paddingBottom = 34
-    const plotHeight = height - paddingTop - paddingBottom
-    const empty = () => ({
-      width,
-      height,
-      circles: [] as Array<{
-        x: number
-        y: number
-        strike: number
-        iv: number
-      }>,
-      path: "",
-      realizedY: null as number | null,
-      realizedAnnual: null as number | null,
-    })
-    if (points.length < 2) {
-      return empty()
-    }
-
-    const strikes = points.map(point => point.strike)
-    const ivs = points.map(point => point.iv)
-    let minIv = Math.min(...ivs)
-    let maxIv = Math.max(...ivs)
-    if (
-      realizedAnnual !== null &&
-      Number.isFinite(realizedAnnual) &&
-      realizedAnnual > 0
-    ) {
-      minIv = Math.min(minIv, realizedAnnual)
-      maxIv = Math.max(maxIv, realizedAnnual)
-    }
-    const ivSpan = maxIv - minIv || 0.0001
-    const pad = Math.max(ivSpan * 0.05, 0.0005)
-    minIv -= pad
-    maxIv += pad
-    const ivRange = maxIv - minIv || 0.0001
-
-    const minStrike = Math.min(...strikes)
-    const maxStrike = Math.max(...strikes)
-    const strikeRange = maxStrike - minStrike || 1
-
-    const circles = points.map(point => {
-      const x =
-        paddingLeft +
-        ((point.strike - minStrike) / strikeRange) *
-          (width - paddingLeft - paddingRight)
-      const y =
-        height - paddingBottom - ((point.iv - minIv) / ivRange) * plotHeight
-      return { x, y, strike: point.strike, iv: point.iv }
-    })
-
-    const path = circles
-      .map(
-        (circle, index) => `${index === 0 ? "M" : "L"} ${circle.x} ${circle.y}`,
-      )
-      .join(" ")
-
-    const realizedY =
-      realizedAnnual !== null &&
-      Number.isFinite(realizedAnnual) &&
-      realizedAnnual > 0
-        ? height -
-          paddingBottom -
-          ((realizedAnnual - minIv) / ivRange) * plotHeight
-        : null
-
-    return {
-      width,
-      height,
-      circles,
-      path,
-      realizedY,
-      realizedAnnual:
-        realizedAnnual !== null &&
-        Number.isFinite(realizedAnnual) &&
-        realizedAnnual > 0
-          ? realizedAnnual
-          : null,
     }
   })
 
@@ -1413,44 +1183,6 @@ export const OptionsTradingView = (
     quotePriceHistoryRef.activeExpiryUnix = null
     setFlashByInstrument(reconcile({}))
 
-    const loadBtcRealizedVol = async (): Promise<void> => {
-      try {
-        const viteCandles: unknown = import.meta.env.VITE_CANDLES_BASE_URL
-        const prefix =
-          typeof viteCandles === "string" && viteCandles.length > 0
-            ? viteCandles.replace(/\/$/, "")
-            : ""
-        const response = await Effect.runPromise(
-          fetchStreamChecked(`${prefix}/candles/1d`, {
-            signal: controller.signal,
-          }),
-        )
-        const text = await response.text()
-        if (mountGeneration.value !== claim) {
-          return
-        }
-        const series = btcCloseSeriesFromCandlesResponse(text)
-        const volSeries = computeRollingVolatility(
-          series,
-          REALIZED_VOL_WINDOW_DAYS,
-        )
-        if (mountGeneration.value !== claim) {
-          return
-        }
-        if (volSeries.length === 0) {
-          setRealizedVolAnnual30d(null)
-          return
-        }
-        const last = volSeries[volSeries.length - 1]
-        setRealizedVolAnnual30d(last.value)
-      } catch (error) {
-        const aborted = isAbortError(error)
-        if (!aborted && mountGeneration.value === claim) {
-          setRealizedVolAnnual30d(null)
-        }
-      }
-    }
-
     const initialize = async () => {
       try {
         const boot = await Effect.runPromise(
@@ -1499,9 +1231,6 @@ export const OptionsTradingView = (
     }
 
     void initialize()
-    if (showRiskAndSmile()) {
-      void loadBtcRealizedVol()
-    }
 
     onCleanup(() => {
       mountGeneration.value += 1
@@ -1618,16 +1347,8 @@ export const OptionsTradingView = (
     </table>
   )
 
-  const detailPanel = (options: {
-    showClose: boolean
-    constrainHeight: boolean
-  }): JSX.Element => (
-    <div
-      class={cn(
-        "flex min-h-0 flex-col",
-        options.constrainHeight ? "max-h-[min(40vh,420px)] shrink-0" : "h-full",
-      )}
-    >
+  const detailPanel = (): JSX.Element => (
+    <div class="flex h-full min-h-0 flex-col">
       <div class="flex shrink-0 items-center justify-between border-t border-[var(--d-border)] px-2 py-1">
         <div class="flex items-center gap-1">
           <button
@@ -1655,20 +1376,18 @@ export const OptionsTradingView = (
             Order
           </button>
         </div>
-        <Show when={options.showClose}>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            class="h-6 w-6 text-[var(--d-muted)]"
-            aria-label="Hide detail panel"
-            onClick={() => {
-              props.greeksLayout?.setVisible(false)
-            }}
-          >
-            <X class="h-3.5 w-3.5" />
-          </Button>
-        </Show>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          class="h-6 w-6 text-[var(--d-muted)]"
+          aria-label="Hide detail panel"
+          onClick={() => {
+            props.greeksLayout.setVisible(false)
+          }}
+        >
+          <X class="h-3.5 w-3.5" />
+        </Button>
       </div>
       <Show
         when={detailTab() === "greeks"}
@@ -1699,7 +1418,7 @@ export const OptionsTradingView = (
         {chainTable()}
       </div>
     ),
-    greeks: () => detailPanel({ showClose: true, constrainHeight: false }),
+    greeks: () => detailPanel(),
   }
 
   return (
@@ -1763,26 +1482,11 @@ export const OptionsTradingView = (
           </div>
 
           <Show
-            when={greeksResizable() && greeksVisible()}
+            when={greeksVisible()}
             fallback={
-              <Show
-                when={greeksVisible()}
-                fallback={
-                  <div class="d-chain-scroll min-h-0 flex-1 overflow-auto">
-                    {chainTable()}
-                  </div>
-                }
-              >
-                <>
-                  <div class="d-chain-scroll min-h-0 flex-1 overflow-auto">
-                    {chainTable()}
-                  </div>
-                  {detailPanel({
-                    showClose: greeksResizable(),
-                    constrainHeight: !greeksResizable(),
-                  })}
-                </>
-              </Show>
+              <div class="d-chain-scroll min-h-0 flex-1 overflow-auto">
+                {chainTable()}
+              </div>
             }
           >
             <div class="d-options-split min-h-0 flex-1">
@@ -1817,186 +1521,6 @@ export const OptionsTradingView = (
             </div>
           </Show>
         </div>
-
-        <Show when={showRiskAndSmile() && book.loaded}>
-          <>
-            <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              <div class="d-panel">
-                <div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--d-muted)]">
-                  Portfolio Risk
-                </div>
-                <div class="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
-                  <div>Delta: {formatNumber(book.risk.aggregate_delta, 4)}</div>
-                  <div>Gamma: {formatNumber(book.risk.aggregate_gamma, 4)}</div>
-                  <div>Vega: {formatNumber(book.risk.aggregate_vega, 4)}</div>
-                  <div>Theta: {formatNumber(book.risk.aggregate_theta, 4)}</div>
-                  <div>Hedge: {formatNumber(book.risk.hedge_ratio_btc, 4)}</div>
-                </div>
-              </div>
-
-              <div class="d-panel">
-                <div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--d-muted)]">
-                  Scenario PnL
-                </div>
-                <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
-                  <For each={book.scenarios}>
-                    {scenario => (
-                      <div class="rounded border border-[var(--d-border)] px-2 py-1.5">
-                        <div class="text-[var(--d-muted)]">
-                          Move: {formatNumber(scenario.pct_move * 100, 1)}%
-                        </div>
-                        <div class="mt-0.5 font-medium">
-                          {formatNumber(scenario.estimated_pnl, 2)}
-                        </div>
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </div>
-            </div>
-
-            <div class="d-panel">
-              <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <div class="text-[10px] font-semibold uppercase tracking-wide text-[var(--d-muted)]">
-                  IV Smile
-                </div>
-                <div class="flex items-center gap-2">
-                  <select
-                    class="rounded border border-[var(--d-border)] bg-[var(--d-chip)] px-2 py-1 text-xs text-[var(--d-text)]"
-                    value={
-                      selectedExpiryUnix() !== null
-                        ? String(selectedExpiryUnix())
-                        : ""
-                    }
-                    onChange={event => {
-                      const value = Number.parseInt(
-                        event.currentTarget.value,
-                        10,
-                      )
-                      if (Number.isFinite(value)) {
-                        switchExpiryTab(value as ExpiryUnix)
-                      }
-                    }}
-                  >
-                    <For each={expiryTabList()}>
-                      {tab => (
-                        <option value={String(tab.unix)}>
-                          {formatExpiryTabLabel(tab.iso)}
-                        </option>
-                      )}
-                    </For>
-                  </select>
-                  <select
-                    class="rounded border border-[var(--d-border)] bg-[var(--d-chip)] px-2 py-1 text-xs text-[var(--d-text)]"
-                    value={smileKind()}
-                    onChange={event => {
-                      const next = event.currentTarget.value
-                      if (next === "C" || next === "P" || next === "both") {
-                        setSmileKind(next)
-                      }
-                    }}
-                  >
-                    <option value="both">Calls + Puts</option>
-                    <option value="C">Calls</option>
-                    <option value="P">Puts</option>
-                  </select>
-                </div>
-              </div>
-              <Show when={ivSmilePoints().length > 0}>
-                <div class="overflow-auto rounded border border-[var(--d-border)] p-2">
-                  <svg
-                    width={smileGeometry().width}
-                    height={smileGeometry().height}
-                  >
-                    <line
-                      x1="52"
-                      y1="20"
-                      x2="52"
-                      y2="226"
-                      stroke="currentColor"
-                      opacity="0.25"
-                    />
-                    <line
-                      x1="52"
-                      y1="226"
-                      x2="740"
-                      y2="226"
-                      stroke="currentColor"
-                      opacity="0.25"
-                    />
-                    <Show when={smileGeometry().realizedY !== null}>
-                      {() => {
-                        const realizedY = smileGeometry().realizedY ?? 0
-                        return (
-                          <g>
-                            <title>{`Realized ${REALIZED_VOL_WINDOW_DAYS}d annualized (daily closes, sqrt(252)): ${formatNumber(realizedVolAnnual30d(), 4)}`}</title>
-                            <line
-                              x1="52"
-                              y1={realizedY}
-                              x2="740"
-                              y2={realizedY}
-                              stroke="#fb923c"
-                              stroke-dasharray="7 5"
-                              stroke-width="1.75"
-                              opacity="0.92"
-                            />
-                          </g>
-                        )
-                      }}
-                    </Show>
-                    <Show when={smileGeometry().path.length > 0}>
-                      <path
-                        d={smileGeometry().path}
-                        fill="none"
-                        stroke="#38bdf8"
-                        stroke-width="1.75"
-                      />
-                    </Show>
-                    <For each={smileGeometry().circles}>
-                      {circle => (
-                        <circle
-                          cx={circle.x}
-                          cy={circle.y}
-                          r="3"
-                          fill="#38bdf8"
-                        />
-                      )}
-                    </For>
-                  </svg>
-                </div>
-                <div class="mt-2 flex flex-wrap items-center gap-4 text-[10px] text-[var(--d-muted)]">
-                  <div class="flex items-center gap-2">
-                    <span class="inline-block h-0.5 w-7 bg-sky-400" />
-                    <span>Implied vol</span>
-                  </div>
-                  <Show when={selectedAsset() === "BTC"}>
-                    <div class="flex items-center gap-2">
-                      <span class="inline-block w-7 border-t-2 border-dashed border-orange-400" />
-                      <span>
-                        Realized {REALIZED_VOL_WINDOW_DAYS}d (ann.):{" "}
-                        <span class="font-medium text-[var(--d-text)]">
-                          {realizedVolAnnual30d() !== null
-                            ? formatNumber(realizedVolAnnual30d(), 4)
-                            : "—"}
-                        </span>
-                      </span>
-                    </div>
-                  </Show>
-                </div>
-                <div class="mt-2 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-                  <For each={ivSmilePoints().slice(0, 12)}>
-                    {point => (
-                      <div class="rounded border border-[var(--d-border)] px-2 py-1">
-                        K {formatNumber(point.strike, 0)} | IV{" "}
-                        {formatIvPercent(point.iv)}
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </Show>
-            </div>
-          </>
-        </Show>
       </div>
     </div>
   )
