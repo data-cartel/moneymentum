@@ -6,7 +6,7 @@ import type { NetworkMode } from "@/contexts/wallet-context"
 import type {
   OptionsBootstrap,
   OptionsSnapshot,
-} from "@/components/derive-options"
+} from "@/components/derive-options/optionsSnapshot"
 
 type DeriveFetchError = NetworkError | HttpStatusError | JsonParseError
 

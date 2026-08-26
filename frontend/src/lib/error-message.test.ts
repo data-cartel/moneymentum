@@ -22,7 +22,7 @@ import {
   DeriveRpcError,
   DeriveSessionKeyInvalid,
   DeriveSessionMissing,
-} from "@/services/deriveAccount"
+} from "@/services/derive/index"
 import {
   ApproveAgentFailed,
   ReownWalletRejected,

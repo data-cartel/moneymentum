@@ -4,15 +4,20 @@ import * as Effect from "effect/Effect"
 import { getErrorMessage } from "@/lib/error-message"
 import { ExchangeRequestError } from "@/services/hyperliquid"
 import type { OrderResult, OrderSide } from "@/services/hyperliquid-client"
+
 import {
   createDeriveExchange,
-  DeriveSessionMissing,
   type DeriveCcxtExchange,
   type DeriveCcxtMarket,
   type DeriveCcxtOrder,
   type DeriveCcxtTicker,
+} from "./exchange"
+import {
+  parseDeriveNumeric,
+  requireDeriveSession,
   type DeriveSessionCredentials,
-} from "@/services/deriveAccount"
+  DeriveSessionMissing,
+} from "./session"
 
 const DERIVE_ORDER_NONCE_GAP_MS = 2
 /** Derive always requires max_fee; ~2x notional matches the UI default for options. */
@@ -98,15 +103,6 @@ const orderMatchesRequest = (
   return true
 }
 
-const parseNumeric = (value: unknown, fallback: number): number => {
-  if (typeof value === "number" && Number.isFinite(value)) return value
-  if (typeof value === "string") {
-    const parsed = Number.parseFloat(value)
-    return Number.isFinite(parsed) ? parsed : fallback
-  }
-  return fallback
-}
-
 const positivePriceOrNull = (
   value: number | null | undefined,
 ): number | null =>
@@ -139,7 +135,7 @@ const readMarketAmountStep = (market: DeriveCcxtMarket | undefined): number => {
   if (typeof fromPrecision === "number" && fromPrecision > 0) {
     return fromPrecision
   }
-  const fromInfo = parseNumeric(market?.info?.amount_step, Number.NaN)
+  const fromInfo = parseDeriveNumeric(market?.info?.amount_step, Number.NaN)
   return fromInfo > 0 ? fromInfo : DEFAULT_DERIVE_AMOUNT_STEP
 }
 
@@ -150,7 +146,7 @@ const readMarketPriceStep = (
   if (typeof fromPrecision === "number" && fromPrecision > 0) {
     return fromPrecision
   }
-  const fromInfo = parseNumeric(market?.info?.tick_size, Number.NaN)
+  const fromInfo = parseDeriveNumeric(market?.info?.tick_size, Number.NaN)
   return fromInfo > 0 ? fromInfo : null
 }
 
@@ -289,8 +285,8 @@ export class DeriveTradingClient {
               option_pricing?: { m?: unknown; mark_price?: unknown }
             }
           | undefined
-        const markFromInfo = parseNumeric(info?.mark_price, Number.NaN)
-        const modelMark = parseNumeric(
+        const markFromInfo = parseDeriveNumeric(info?.mark_price, Number.NaN)
+        const modelMark = parseDeriveNumeric(
           info?.option_pricing?.m ?? info?.option_pricing?.mark_price,
           Number.NaN,
         )
@@ -571,13 +567,6 @@ export class DeriveTradingClient {
   }
 }
 
-const requireCredentials = (
-  credentials: DeriveSessionCredentials | null,
-): Effect.Effect<DeriveSessionCredentials, DeriveSessionMissing> =>
-  credentials === null
-    ? Effect.fail(new DeriveSessionMissing())
-    : Effect.succeed(credentials)
-
 const wrapExchange = <Value>(
   run: () => Promise<Value>,
 ): Effect.Effect<Value, ExchangeRequestError> =>
@@ -593,7 +582,7 @@ export const fetchDeriveTickers = (
   Record<string, DeriveTickerQuote>,
   DeriveSessionMissing | ExchangeRequestError
 > =>
-  requireCredentials(credentials).pipe(
+  requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() =>
         new DeriveTradingClient(session).fetchTickers(instrumentsOrSymbols),
@@ -608,7 +597,7 @@ export const fetchDeriveFundingRates = (
   Record<string, DeriveFundingRateQuote>,
   DeriveSessionMissing | ExchangeRequestError
 > =>
-  requireCredentials(credentials).pipe(
+  requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() =>
         new DeriveTradingClient(session).fetchFundingRates(
@@ -622,7 +611,7 @@ export const placeAndMonitorDeriveOrders = (
   credentials: DeriveSessionCredentials | null,
   requests: DeriveBatchOrderRequest[],
 ): Effect.Effect<OrderResult[], DeriveSessionMissing | ExchangeRequestError> =>
-  requireCredentials(credentials).pipe(
+  requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() =>
         new DeriveTradingClient(session).placeAndMonitorOrders(requests),
@@ -636,7 +625,7 @@ export const fetchDeriveOpenOrders = (
   DeriveCcxtOrder[],
   DeriveSessionMissing | ExchangeRequestError
 > =>
-  requireCredentials(credentials).pipe(
+  requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() => new DeriveTradingClient(session).fetchOpenOrders()),
     ),
@@ -649,7 +638,7 @@ export const cancelDeriveOrder = (
   DeriveCcxtOrder,
   DeriveSessionMissing | ExchangeRequestError
 > =>
-  requireCredentials(credentials).pipe(
+  requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() =>
         new DeriveTradingClient(session).cancelOrder(

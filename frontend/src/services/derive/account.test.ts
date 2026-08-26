@@ -25,17 +25,16 @@ import derive from "ccxt/derive"
 import {
   DERIVE_REQUEST_TIMEOUT_MS,
   deriveRestBaseUrl,
+  fetchDeriveBalance,
   integerForAbiEncode,
   mapDerivePosition,
   parseOptionalSubaccountId,
   parseSessionPrivateKey,
   parseStoredDeriveSession,
-  saveDeriveCredentials,
   summarizeDeriveBalance,
-  fetchDeriveBalance,
   type DeriveApiPosition,
   type DeriveSessionCredentials,
-} from "./deriveAccount"
+} from "@/services/derive/index"
 
 const sampleOptionLong = (): DeriveApiPosition => ({
   instrument_name: "ETH-20260327-2000-C",
@@ -388,20 +387,6 @@ describe("parseOptionalSubaccountId", () => {
 
   it("rejects non-integers", async () => {
     const result = await Effect.runPromiseExit(parseOptionalSubaccountId("1.5"))
-    expect(result._tag).toBe("Failure")
-  })
-})
-
-describe("saveDeriveCredentials", () => {
-  it("fails on invalid wallet before touching storage", async () => {
-    const result = await Effect.runPromiseExit(
-      saveDeriveCredentials(
-        "not-an-address",
-        "0x3333333333333333333333333333333333333333333333333333333333333333",
-        "testnet",
-        "",
-      ),
-    )
     expect(result._tag).toBe("Failure")
   })
 })

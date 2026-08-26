@@ -55,7 +55,7 @@ import {
 import {
   normalizeDeriveWallet,
   parseSessionPrivateKey,
-} from "@/services/deriveAccount"
+} from "@/services/derive/index"
 import {
   ensureEvmAppKit,
   readConnectedEip1193Provider,

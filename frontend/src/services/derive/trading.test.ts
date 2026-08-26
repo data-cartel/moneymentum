@@ -20,8 +20,8 @@ import {
   snapToDeriveStep,
   DEFAULT_DERIVE_AMOUNT_STEP,
   type DeriveBatchOrderRequest,
-} from "./derive-client"
-import type { DeriveSessionCredentials } from "./deriveAccount"
+  type DeriveSessionCredentials,
+} from "@/services/derive/index"
 
 const credentials = (): DeriveSessionCredentials => ({
   deriveWallet: "0x2625A865DeD8FA2C36183E299A1a358B64EE7238",

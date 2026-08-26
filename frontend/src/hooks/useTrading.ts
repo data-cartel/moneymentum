@@ -16,17 +16,15 @@ import {
 } from "@/services/hyperliquid-markets"
 import * as Hyperliquid from "@/services/hyperliquid"
 import {
+  cancelDeriveOrder,
+  DeriveSessionMissing,
   fetchDeriveAccountSnapshot,
   fetchDeriveBalance,
-  type DeriveSessionCredentials,
-} from "@/services/deriveAccount"
-import {
-  cancelDeriveOrder,
   fetchDeriveOpenOrders,
   placeAndMonitorDeriveOrders,
   type DeriveBatchOrderRequest,
-} from "@/services/derive-client"
-import { DeriveSessionMissing } from "@/services/deriveAccount"
+  type DeriveSessionCredentials,
+} from "@/services/derive/index"
 import type { RebalanceAction } from "@/pages/Portfolio/hooks/portfolioRebalancer"
 
 export type {

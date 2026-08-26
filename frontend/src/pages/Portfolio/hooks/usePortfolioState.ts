@@ -19,7 +19,7 @@ import {
   type OrderSide,
   type OrderResult,
 } from "@/hooks/useTrading"
-import { fetchDeriveTickers } from "@/services/derive-client"
+import { fetchDeriveTickers } from "@/services/derive/index"
 import {
   captureStagedPortfolioOverlay,
   deriveActionsToOrderRequests,

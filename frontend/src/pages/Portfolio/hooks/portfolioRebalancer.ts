@@ -2,8 +2,9 @@ import { type OrderSide, type RebalanceParams } from "@/hooks/useTrading"
 import type { OrderResult } from "@/services/hyperliquid-client"
 import type {
   DeriveBatchOrderRequest,
+  DeriveMappedPosition,
   DeriveTickerQuote,
-} from "@/services/derive-client"
+} from "@/services/derive/index"
 
 import {
   isPerpPosition,
@@ -12,7 +13,6 @@ import {
   type PortfolioPositionKind,
   type PortfolioVenue,
 } from "@/pages/Portfolio/hooks/usePortfolioState"
-import type { DeriveMappedPosition } from "@/services/deriveAccount"
 
 /** Accepted on the venue: filled, still resting (working), or watch timed out. */
 const orderAcceptedOnExchange = (order: OrderResult): boolean =>

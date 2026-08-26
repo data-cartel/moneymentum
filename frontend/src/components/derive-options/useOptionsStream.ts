@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect"
 
 import type { NetworkMode } from "@/contexts/wallet-context"
 import { NetworkError } from "@/lib/http"
-import * as deriveService from "@/services/derive"
+import * as deriveService from "@/services/derive/options"
 
 import { deriveOptionsBaseUrl } from "./deriveOptionsBaseUrl"
 import { stabilizeExpiryTabs, type ExpiryTab } from "./expiryTabs"

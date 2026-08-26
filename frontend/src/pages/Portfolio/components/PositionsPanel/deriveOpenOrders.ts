@@ -1,4 +1,4 @@
-import type { DeriveCcxtOrder } from "@/services/deriveAccount"
+import type { DeriveCcxtOrder } from "@/services/derive/index"
 
 const MONTH_ABBREVIATIONS = [
   "Jan",
