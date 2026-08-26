@@ -55,6 +55,7 @@ import {
   type BoardKey,
   type QuoteBook,
 } from "./quoteBook"
+import { flashQuoteChange } from "./highlightChange"
 import "./derive-options.css"
 
 /**
@@ -156,81 +157,34 @@ const GREEKS_CHAIN_COL_CLASSES = [
 const parseJsonUnknown = (text: string): unknown =>
   (JSON.parse as (input: string) => unknown)(text)
 
-type QuotePriceFlash = "up" | "down"
-
-type QuoteFlashEntry = {
-  bid?: QuotePriceFlash
-  ask?: QuotePriceFlash
-}
-
-const priceTickDirection = (
-  before: number | null,
-  after: number | null,
-): QuotePriceFlash | undefined => {
-  if (before === null || after === null) {
-    return undefined
-  }
-  if (after > before) {
-    return "up"
-  }
-  if (after < before) {
-    return "down"
-  }
-  return undefined
-}
-
-const bidAskFlashClass = (
-  side: "bid" | "ask",
-  direction: QuotePriceFlash | undefined,
-  empty: boolean,
-): string => {
-  const tone = side === "bid" ? "d-bid" : "d-ask"
-  const align = empty ? "text-center" : "text-right"
-  const base = `block w-full rounded-sm px-0.5 tabular-nums ${align} ${tone}`
-  if (direction === "up") {
-    return `${base} quote-flash-up`
-  }
-  if (direction === "down") {
-    return `${base} quote-flash-down`
-  }
-  return base
-}
-
-const FlashingPrice = (props: {
+const QuotePrice = (props: {
   side: "bid" | "ask"
   value: Accessor<number | null>
-  instrumentName: Accessor<string | undefined>
-  flashStore: Partial<Record<string, QuoteFlashEntry>>
   isSelected: Accessor<boolean>
   onSelect?: () => void
 }) => {
-  const flashClass = (): string => {
+  let host: HTMLElement | undefined
+
+  createEffect((previous: number | null | undefined) => {
+    const current = props.value()
+    const element = host
+
+    if (element && previous !== undefined && previous !== current) {
+      flashQuoteChange(element)
+    }
+
+    return current
+  })
+
+  const className = (): string => {
     const selected = props.isSelected()
     const empty = props.value() === null
-    const selectedClass =
-      selected && props.side === "ask"
-        ? "d-price-selected-ask"
-        : selected && props.side === "bid"
-          ? "d-price-selected-bid"
-          : ""
     return cn(
-      bidAskFlashClass(
-        props.side,
-        (() => {
-          if (selected || empty) {
-            return undefined
-          }
-          const instrumentName = props.instrumentName()
-          if (instrumentName === undefined) {
-            return undefined
-          }
-          // Leaf path only -- never scan the whole flash store (`in` would notify broadly).
-          return props.flashStore[instrumentName]?.[props.side]
-        })(),
-        empty,
-      ),
-      "d-price-btn",
-      selectedClass,
+      "d-price-btn block w-full rounded-sm px-0.5 tabular-nums",
+      empty ? "text-center" : "text-right",
+      props.side === "bid" ? "d-bid" : "d-ask",
+      selected && props.side === "ask" && "d-price-selected-ask",
+      selected && props.side === "bid" && "d-price-selected-bid",
     )
   }
 
@@ -238,12 +192,22 @@ const FlashingPrice = (props: {
     <Show
       when={props.onSelect !== undefined}
       fallback={
-        <span class={flashClass()}>{formatUsdPrice(props.value())}</span>
+        <span
+          ref={element => {
+            host = element
+          }}
+          class={className()}
+        >
+          {formatUsdPrice(props.value())}
+        </span>
       }
     >
       <button
         type="button"
-        class={flashClass()}
+        ref={element => {
+          host = element
+        }}
+        class={className()}
         onClick={() => {
           props.onSelect?.()
         }}
@@ -370,7 +334,6 @@ const ExpiryCountdownHeader = (props: {
 const ChainStrikeRow = (props: {
   strike: number
   book: QuoteBook
-  flashStore: Partial<Record<string, QuoteFlashEntry>>
   selection: Accessor<DeriveOrderTicketSelection | null>
   onQuoteSelect: (instrumentName: string, quoteSide: QuoteBookSide) => void
 }) => {
@@ -435,11 +398,9 @@ const ChainStrikeRow = (props: {
         {formatIvPercent(callField(quote => quote.greeks.bid_iv, null))}
       </td>
       <td class={legCellClass(callField(quote => quote.moneyness, undefined))}>
-        <FlashingPrice
+        <QuotePrice
           side="bid"
           value={() => callField(quote => quote.bid, null)}
-          instrumentName={callName}
-          flashStore={props.flashStore}
           isSelected={() => isSelected(callName(), "bid")}
           onSelect={() => {
             const name = callName()
@@ -458,11 +419,9 @@ const ChainStrikeRow = (props: {
         {formatNumber(callField(quote => quote.mark, null))}
       </td>
       <td class={legCellClass(callField(quote => quote.moneyness, undefined))}>
-        <FlashingPrice
+        <QuotePrice
           side="ask"
           value={() => callField(quote => quote.ask, null)}
-          instrumentName={callName}
-          flashStore={props.flashStore}
           isSelected={() => isSelected(callName(), "ask")}
           onSelect={() => {
             const name = callName()
@@ -536,11 +495,9 @@ const ChainStrikeRow = (props: {
         {formatIvPercent(putField(quote => quote.greeks.ask_iv, null))}
       </td>
       <td class={legCellClass(putField(quote => quote.moneyness, undefined))}>
-        <FlashingPrice
+        <QuotePrice
           side="ask"
           value={() => putField(quote => quote.ask, null)}
-          instrumentName={putName}
-          flashStore={props.flashStore}
           isSelected={() => isSelected(putName(), "ask")}
           onSelect={() => {
             const name = putName()
@@ -559,11 +516,9 @@ const ChainStrikeRow = (props: {
         {formatNumber(putField(quote => quote.mark, null))}
       </td>
       <td class={legCellClass(putField(quote => quote.moneyness, undefined))}>
-        <FlashingPrice
+        <QuotePrice
           side="bid"
           value={() => putField(quote => quote.bid, null)}
-          instrumentName={putName}
-          flashStore={props.flashStore}
           isSelected={() => isSelected(putName(), "bid")}
           onSelect={() => {
             const name = putName()
@@ -599,7 +554,6 @@ const ChainStrikeRow = (props: {
 const GreeksQuoteRow = (props: {
   instrumentName: string
   book: QuoteBook
-  flashStore: Partial<Record<string, QuoteFlashEntry>>
   selection: Accessor<DeriveOrderTicketSelection | null>
   onQuoteSelect: (instrumentName: string, quoteSide: QuoteBookSide) => void
 }) => {
@@ -636,11 +590,9 @@ const GreeksQuoteRow = (props: {
         })()}
       </td>
       <td class={`text-right ${itmClass()}`}>
-        <FlashingPrice
+        <QuotePrice
           side="bid"
           value={() => quote()?.bid ?? null}
-          instrumentName={() => props.instrumentName}
-          flashStore={props.flashStore}
           isSelected={() => isSelected("bid")}
           onSelect={() => {
             props.onQuoteSelect(props.instrumentName, "bid")
@@ -648,11 +600,9 @@ const GreeksQuoteRow = (props: {
         />
       </td>
       <td class={`text-right ${itmClass()}`}>
-        <FlashingPrice
+        <QuotePrice
           side="ask"
           value={() => quote()?.ask ?? null}
-          instrumentName={() => props.instrumentName}
-          flashStore={props.flashStore}
           isSelected={() => isSelected("ask")}
           onSelect={() => {
             props.onQuoteSelect(props.instrumentName, "ask")
@@ -728,23 +678,10 @@ export const OptionsTradingView = (
   const [selectedExpiryUnix, setSelectedExpiryUnix] =
     createSignal<ExpiryUnix | null>(null)
   const [selectedAsset, setSelectedAsset] = createSignal<string | null>(null)
-  const [flashByInstrument, setFlashByInstrument] = createStore<
-    Record<string, QuoteFlashEntry>
-  >({})
   const [detailTab, setDetailTab] = createSignal<DetailTab>("greeks")
   const [orderSelection, setOrderSelection] =
     createSignal<DeriveOrderTicketSelection | null>(null)
 
-  const clearQuoteFlash = (): void => {
-    setFlashByInstrument(reconcile({}))
-  }
-
-  const quotePriceHistoryRef: {
-    map: Map<string, { bid: number | null; ask: number | null }>
-    activeExpiryUnix: ExpiryUnix | null
-  } = { map: new Map(), activeExpiryUnix: null }
-
-  const flashClearTimerRef: { id: number | undefined } = { id: undefined }
   const coldGreeksFlushAtRef: { ms: number } = { ms: 0 }
   const COLD_GREEKS_MIN_INTERVAL_MS = 250
 
@@ -857,7 +794,6 @@ export const OptionsTradingView = (
       }
       skeletonizeQuoteBook(setBook)
     })
-    clearQuoteFlash()
   }
 
   const switchExpiryTab = (expiryUnix: ExpiryUnix): void => {
@@ -924,8 +860,6 @@ export const OptionsTradingView = (
     setSelectedAsset(asset)
     setSelectedExpiryUnix(null)
     setOrderSelection(null)
-    quotePriceHistoryRef.map.clear()
-    quotePriceHistoryRef.activeExpiryUnix = null
     clearQuotesForPendingSwitch(null, asset)
     setIsLoading(true)
 
@@ -997,84 +931,6 @@ export const OptionsTradingView = (
   )
   const spotPrice = createMemo(() => (book.loaded ? book.spot_price : 0))
 
-  createEffect(() => {
-    // Imperative previous-quote map + timeout; memo alone cannot express "flash then clear".
-    if (!book.loaded) {
-      return
-    }
-
-    onCleanup(() => {
-      if (flashClearTimerRef.id !== undefined) {
-        window.clearTimeout(flashClearTimerRef.id)
-        flashClearTimerRef.id = undefined
-      }
-    })
-
-    const activeExpiry = book.active_expiry_unix
-    if (quotePriceHistoryRef.activeExpiryUnix !== activeExpiry) {
-      quotePriceHistoryRef.map.clear()
-      quotePriceHistoryRef.activeExpiryUnix = activeExpiry
-      for (const name of book.instrumentNamesAsc) {
-        const quote = book.byInstrument[name]
-        quotePriceHistoryRef.map.set(name, {
-          bid: quote.bid,
-          ask: quote.ask,
-        })
-      }
-      setFlashByInstrument(reconcile({}))
-      return
-    }
-
-    const nextFlash: Partial<Record<string, QuoteFlashEntry>> = {}
-
-    for (const name of book.instrumentNamesAsc) {
-      const quote = book.byInstrument[name]
-      const prev = quotePriceHistoryRef.map.get(name)
-      if (prev !== undefined) {
-        const bidTick = priceTickDirection(prev.bid, quote.bid)
-        const askTick = priceTickDirection(prev.ask, quote.ask)
-        if (bidTick !== undefined) {
-          nextFlash[name] = {
-            ...nextFlash[name],
-            bid: bidTick,
-          }
-        }
-        if (askTick !== undefined) {
-          nextFlash[name] = {
-            ...nextFlash[name],
-            ask: askTick,
-          }
-        }
-      }
-      quotePriceHistoryRef.map.set(name, {
-        bid: quote.bid,
-        ask: quote.ask,
-      })
-    }
-
-    if (Object.keys(nextFlash).length > 0) {
-      if (flashClearTimerRef.id !== undefined) {
-        window.clearTimeout(flashClearTimerRef.id)
-      }
-      for (const [instrumentName, tick] of Object.entries(nextFlash)) {
-        setFlashByInstrument(instrumentName, previous => ({
-          ...previous,
-          ...tick,
-        }))
-      }
-      const flashedNames = Object.keys(nextFlash)
-      flashClearTimerRef.id = window.setTimeout(() => {
-        // Clear only flashed instruments (empty entry) -- avoid rewriting the whole store.
-        batch(() => {
-          for (const instrumentName of flashedNames) {
-            setFlashByInstrument(instrumentName, {})
-          }
-        })
-        flashClearTimerRef.id = undefined
-      }, 950)
-    }
-  })
-
   const loadSnapshot = (signal?: AbortSignal): Promise<OptionsSnapshot> =>
     Effect.runPromise(
       deriveService.fetchSnapshot(deriveBaseUrl, props.networkMode(), signal),
@@ -1100,9 +956,6 @@ export const OptionsTradingView = (
           assetSwitchInFlightRef.blockStreamUntilAsset = null
           setSelectedAsset(next.asset)
           setSelectedExpiryUnix(next.active_expiry_unix)
-          quotePriceHistoryRef.map.clear()
-          quotePriceHistoryRef.activeExpiryUnix = next.active_expiry_unix
-          setFlashByInstrument(reconcile({}))
           setBootstrap(previous =>
             previous === null
               ? previous
@@ -1179,9 +1032,6 @@ export const OptionsTradingView = (
     setBootstrap(null)
     setOrderSelection(null)
     setBook(reconcile(emptyQuoteBook()))
-    quotePriceHistoryRef.map.clear()
-    quotePriceHistoryRef.activeExpiryUnix = null
-    setFlashByInstrument(reconcile({}))
 
     const initialize = async () => {
       try {
@@ -1292,7 +1142,6 @@ export const OptionsTradingView = (
               <ChainStrikeRow
                 strike={key}
                 book={book}
-                flashStore={flashByInstrument}
                 selection={orderSelection}
                 onQuoteSelect={handleQuoteSelect}
               />
@@ -1337,7 +1186,6 @@ export const OptionsTradingView = (
             <GreeksQuoteRow
               instrumentName={name}
               book={book}
-              flashStore={flashByInstrument}
               selection={orderSelection}
               onQuoteSelect={handleQuoteSelect}
             />

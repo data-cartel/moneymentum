@@ -296,19 +296,21 @@ export type ApplyOptionsSnapshotOptions = {
   applyColdGreeks?: boolean
 }
 
-export const applyOptionsSnapshot = (
-  setBook: SetStoreFunction<QuoteBook>,
-  next: OptionsSnapshot,
-  previousByInstrument?: Record<string, OptionQuote>,
-  options: ApplyOptionsSnapshotOptions = {},
-): {
+export type ApplyOptionsSnapshotResult = {
   totalQuotes: number
   bidChanged: number
   askChanged: number
   markChanged: number
   skipped: boolean
   coldGreeksApplied: boolean
-} => {
+}
+
+export const applyOptionsSnapshot = (
+  setBook: SetStoreFunction<QuoteBook>,
+  next: OptionsSnapshot,
+  previousByInstrument?: Record<string, OptionQuote>,
+  options: ApplyOptionsSnapshotOptions = {},
+): ApplyOptionsSnapshotResult => {
   const applyColdGreeks = options.applyColdGreeks !== false
 
   const quantizedQuotes = next.quotes.map(quantizeQuote)
@@ -424,15 +426,16 @@ export const applyOptionsSnapshot = (
     }
 
     for (const quote of quantizedQuotes) {
+      const before = previous[quote.instrument_name]
       const patch = patchQuoteLeaves(
         setBook,
         quote.instrument_name,
-        previous[quote.instrument_name],
+        before,
         quote,
         applyColdGreeks,
       )
+
       if (applyColdGreeks && patch.anyChanged) {
-        const before = previous[quote.instrument_name]
         if (before !== undefined) {
           for (const coldKey of COLD_GREEK_KEYS) {
             if (before.greeks[coldKey] !== quote.greeks[coldKey]) {

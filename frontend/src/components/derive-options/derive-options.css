@@ -8,11 +8,11 @@
   --d-border-soft: var(--border);
   --d-muted: var(--muted-foreground);
   --d-text: var(--foreground);
-  --d-buy: var(--positive);
-  --d-sell: var(--negative);
-  --d-call: var(--positive);
-  --d-put: var(--negative);
-  --d-itm: color-mix(in oklch, var(--positive) 6%, transparent);
+  --d-buy: var(--green);
+  --d-sell: var(--red);
+  --d-call: var(--green);
+  --d-put: var(--red);
+  --d-itm: color-mix(in srgb, var(--green) 6%, transparent);
   --d-chip: color-mix(in oklch, var(--muted) 40%, var(--background));
   --d-chip-active: color-mix(in oklch, var(--muted) 70%, var(--background));
   --d-accent: var(--primary);
@@ -252,15 +252,29 @@
   box-shadow: 0 0 0 1px var(--border);
 }
 
-/* Ask -> buy (green); bid -> sell (red) -- matches Portfolio BUY/SELL badges. */
+/* Ask -> buy (green); bid -> sell (red). Flash = 30% tint via default transition. */
+.derive-options .d-ask,
+.derive-options .d-bid {
+  font-weight: 500;
+  background-color: transparent;
+  transition: background-color var(--default-transition-duration)
+    var(--default-transition-timing-function);
+}
+
 .derive-options .d-ask {
   color: var(--d-buy);
-  font-weight: 500;
 }
 
 .derive-options .d-bid {
   color: var(--d-sell);
-  font-weight: 500;
+}
+
+.derive-options .d-bid.quote-flash {
+  background-color: color-mix(in srgb, var(--red) 30%, transparent);
+}
+
+.derive-options .d-ask.quote-flash {
+  background-color: color-mix(in srgb, var(--green) 30%, transparent);
 }
 
 .derive-options .d-size,
