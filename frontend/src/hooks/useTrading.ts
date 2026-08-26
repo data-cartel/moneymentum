@@ -17,11 +17,11 @@ import {
 import * as Hyperliquid from "@/services/hyperliquid"
 import {
   cancelDeriveOrder,
-  DeriveSessionMissing,
   fetchDeriveAccountSnapshot,
   fetchDeriveBalance,
   fetchDeriveOpenOrders,
   placeAndMonitorDeriveOrders,
+  requireDeriveSessionWithSubaccount,
   type DeriveBatchOrderRequest,
   type DeriveSessionCredentials,
 } from "@/services/derive/index"
@@ -248,25 +248,16 @@ export const useRebalanceDerivePositions = () => {
 
   return useMutation(() => ({
     mutationFn: (params: DeriveRebalanceParams) => {
-      const credentials = session()
-      if (credentials === null) {
-        return Effect.runPromise(Effect.fail(new DeriveSessionMissing()))
-      }
-      if (credentials.subaccountId === null) {
-        return Effect.runPromise(
-          Effect.fail(
-            new Error(
-              "Select a Derive subaccount before rebalancing Derive positions",
-            ),
-          ),
-        )
-      }
       if (params.requests.length === 0) {
         return Promise.resolve([] as OrderResult[])
       }
 
       return Effect.runPromise(
-        placeAndMonitorDeriveOrders(credentials, params.requests),
+        requireDeriveSessionWithSubaccount(session()).pipe(
+          Effect.flatMap(credentials =>
+            placeAndMonitorDeriveOrders(credentials, params.requests),
+          ),
+        ),
       )
     },
     onSuccess: async () => {
@@ -429,15 +420,13 @@ export const useDeriveOpenOrders = () => {
         credentials?.subaccountId ?? null,
         credentials?.networkMode ?? null,
       ],
-      queryFn: () => {
+      queryFn: () =>
         // Re-read session at fetch time -- refetch() ignores `enabled`.
-        const current = session()
-        const subaccountId = current?.subaccountId
-        if (subaccountId === undefined || subaccountId === null) {
-          return Effect.runPromise(Effect.fail(new DeriveSessionMissing()))
-        }
-        return Effect.runPromise(fetchDeriveOpenOrders(current))
-      },
+        Effect.runPromise(
+          requireDeriveSessionWithSubaccount(session()).pipe(
+            Effect.flatMap(credentials => fetchDeriveOpenOrders(credentials)),
+          ),
+        ),
       enabled: canFetch,
       staleTime: DATA_STALE_TIME_MS,
       // Refresh cadence is owned by DeriveOpenOrdersPanel's timer ring.
@@ -451,14 +440,12 @@ export const useCancelDeriveOrder = () => {
   const queryClient = useQueryClient()
 
   return useMutation(() => ({
-    mutationFn: (params: { id: string; symbol: string }) => {
-      const credentials = session()
-      const subaccountId = credentials?.subaccountId
-      if (subaccountId === undefined || subaccountId === null) {
-        return Effect.runPromise(Effect.fail(new DeriveSessionMissing()))
-      }
-      return Effect.runPromise(cancelDeriveOrder(credentials, params))
-    },
+    mutationFn: (params: { id: string; symbol: string }) =>
+      Effect.runPromise(
+        requireDeriveSessionWithSubaccount(session()).pipe(
+          Effect.flatMap(credentials => cancelDeriveOrder(credentials, params)),
+        ),
+      ),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
         queryKey: QUERY_KEYS.deriveOpenOrders,

@@ -3,17 +3,15 @@ import * as Effect from "effect/Effect"
 import * as Either from "effect/Either"
 import { toast } from "solid-sonner"
 
-import { Input } from "@/components/ui/input"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
-import {
-  normalizeWalletPinInput,
-  WALLET_PIN_LENGTH,
-} from "@/services/walletCredentialCrypto"
+import { WALLET_PIN_LENGTH } from "@/services/walletCredentialCrypto"
 import {
   STAGED_PIN_ATTR,
   tryUsePortfolioKeyboardContext,
 } from "@/pages/Portfolio/keyboard"
+
+import { WalletPinInput } from "./WalletPinField"
 
 const PIN_SHAKE_CLASS = "animate-pin-shake"
 
@@ -119,46 +117,44 @@ export const SessionPinUnlockField = (props: {
     })
   })
 
+  const extraAttributes = (): Record<string, string> => {
+    const attributes: Record<string, string> = {}
+    if (props.registerStagedSubmit === true) {
+      attributes[STAGED_PIN_ATTR] = ""
+    }
+    if (props.focusDataAttr !== undefined) {
+      attributes[props.focusDataAttr] = ""
+    }
+    return attributes
+  }
+
   return (
     <div class={props.class ?? "space-y-1"}>
-      <Input
+      <WalletPinInput
         id={props.inputId}
         ref={element => {
           pinInput = element
         }}
-        type="password"
-        inputmode="numeric"
-        autocomplete="one-time-code"
         placeholder={props.placeholder}
-        maxlength={WALLET_PIN_LENGTH}
         value={pin()}
         disabled={props.disabled === true || isUnlocking()}
         aria-label={props.placeholder}
         aria-invalid={errorMessage() !== null}
         aria-describedby={errorMessage() !== null ? errorId() : undefined}
         class="h-8 font-mono text-[11px] tracking-[0.25em] placeholder:tracking-normal placeholder:font-sans"
-        {...(props.registerStagedSubmit === true
-          ? { [STAGED_PIN_ATTR]: "" }
-          : {})}
-        {...(props.focusDataAttr !== undefined
-          ? { [props.focusDataAttr]: "" }
-          : {})}
+        extraAttributes={extraAttributes()}
         onAnimationEnd={event => {
           event.currentTarget.classList.remove(PIN_SHAKE_CLASS)
         }}
-        onInput={event => {
-          const nextPin = normalizeWalletPinInput(event.currentTarget.value)
+        onChange={nextPin => {
           setPin(nextPin)
           setErrorMessage(null)
           if (nextPin.length === WALLET_PIN_LENGTH) {
             void submitUnlock(nextPin)
           }
         }}
-        onKeyDown={event => {
-          if (event.key === "Enter") {
-            event.preventDefault()
-            void submitUnlock()
-          }
+        onSubmit={() => {
+          void submitUnlock()
         }}
       />
       <Show when={errorMessage()}>

@@ -22,6 +22,7 @@ import {
   DeriveRpcError,
   DeriveSessionKeyInvalid,
   DeriveSessionMissing,
+  DeriveSubaccountMissing,
 } from "@/services/derive/index"
 import {
   ApproveAgentFailed,
@@ -273,5 +274,10 @@ describe("getErrorMessage", () => {
   it("maps DeriveSessionMissing to a setup message", async () => {
     const failure = await asFiberFailure(new DeriveSessionMissing())
     expect(getErrorMessage(failure)).toContain("No Derive credentials")
+  })
+
+  it("maps DeriveSubaccountMissing to a subaccount selection message", async () => {
+    const failure = await asFiberFailure(new DeriveSubaccountMissing())
+    expect(getErrorMessage(failure)).toContain("Select a Derive subaccount")
   })
 })

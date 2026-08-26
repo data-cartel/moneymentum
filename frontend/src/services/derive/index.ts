@@ -33,6 +33,7 @@ export {
   DeriveSessionMissing,
   DeriveSessionSignFailed,
   DeriveSubaccountIdInvalid,
+  DeriveSubaccountMissing,
   DeriveWalletInvalid,
   deriveRestBaseUrl,
   normalizeDeriveWallet,
@@ -41,8 +42,10 @@ export {
   parseSessionPrivateKey,
   parseStoredDeriveSession,
   requireDeriveSession,
+  requireDeriveSessionWithSubaccount,
   type DeriveBaseUrl,
   type DeriveSessionCredentials,
+  type DeriveSessionWithSubaccount,
 } from "./session"
 export {
   cancelDeriveOrder,

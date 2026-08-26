@@ -1,4 +1,7 @@
-import type { DeriveCcxtOrder } from "@/services/derive/index"
+import {
+  parseDeriveNumeric,
+  type DeriveCcxtOrder,
+} from "@/services/derive/index"
 
 const MONTH_ABBREVIATIONS = [
   "Jan",
@@ -39,14 +42,8 @@ const readInfoString = (
 }
 
 const parseFiniteNumber = (value: unknown): number | null => {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value
-  }
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number.parseFloat(value)
-    return Number.isFinite(parsed) ? parsed : null
-  }
-  return null
+  const parsed = parseDeriveNumeric(value, Number.NaN)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 export const formatDeriveInstrumentLabel = (raw: string): string => {

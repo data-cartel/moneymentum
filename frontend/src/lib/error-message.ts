@@ -217,6 +217,8 @@ const messageForTag = (error: TaggedError): string | null => {
       return "Invalid Derive wallet address."
     case "DeriveSessionMissing":
       return "No Derive credentials. Paste Derive Wallet and Session Key from Developers."
+    case "DeriveSubaccountMissing":
+      return "Select a Derive subaccount before trading or loading open orders."
     case "DeriveSessionSignFailed":
       return "Failed to sign with the Derive session key."
     case "DeriveSessionKeyInvalid":

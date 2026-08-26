@@ -1,11 +1,8 @@
 import { For, type JSX } from "solid-js"
-import { Settings } from "lucide-solid"
-import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
   PORTFOLIO_METRIC_COLUMN_LABELS,
@@ -13,6 +10,7 @@ import {
   type PortfolioMetricColumnId,
   type PortfolioMetricVisibility,
 } from "./PositionsPanel/portfolioMetricVisibility"
+import { SettingsMenuGearTrigger } from "./SettingsMenuGearTrigger"
 
 export interface PortfolioSettingsMenuProps {
   isPrecise: boolean
@@ -30,23 +28,7 @@ export const PortfolioSettingsMenu = (
   props: PortfolioSettingsMenuProps,
 ): JSX.Element => (
   <DropdownMenu>
-    <DropdownMenuTrigger
-      as={Button}
-      variant="ghost"
-      size="icon"
-      class="h-6 w-6"
-      aria-label="Open positions settings"
-      onPointerDown={(event: PointerEvent) => {
-        event.preventDefault()
-        event.stopPropagation()
-      }}
-      onClick={(event: MouseEvent) => {
-        event.preventDefault()
-        event.stopPropagation()
-      }}
-    >
-      <Settings class="h-3.5 w-3.5" />
-    </DropdownMenuTrigger>
+    <SettingsMenuGearTrigger aria-label="Open positions settings" />
     <DropdownMenuContent align="end">
       <DropdownMenuCheckboxItem
         checked={props.isPrecise}

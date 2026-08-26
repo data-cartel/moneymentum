@@ -39,6 +39,10 @@ export class DeriveSessionMissing extends Data.TaggedError(
   "DeriveSessionMissing",
 )<Record<string, never>> {}
 
+export class DeriveSubaccountMissing extends Data.TaggedError(
+  "DeriveSubaccountMissing",
+)<Record<string, never>> {}
+
 export class DeriveSessionSignFailed extends Data.TaggedError(
   "DeriveSessionSignFailed",
 )<{
@@ -79,6 +83,28 @@ export const requireDeriveSession = (
   credentials === null
     ? Effect.fail(new DeriveSessionMissing())
     : Effect.succeed(credentials)
+
+/** Session present and a concrete subaccount id selected (trading / open orders). */
+export type DeriveSessionWithSubaccount = DeriveSessionCredentials & {
+  subaccountId: number
+}
+
+export const requireDeriveSessionWithSubaccount = (
+  credentials: DeriveSessionCredentials | null,
+): Effect.Effect<
+  DeriveSessionWithSubaccount,
+  DeriveSessionMissing | DeriveSubaccountMissing
+> =>
+  requireDeriveSession(credentials).pipe(
+    Effect.flatMap(session =>
+      session.subaccountId === null
+        ? Effect.fail(new DeriveSubaccountMissing())
+        : Effect.succeed({
+            ...session,
+            subaccountId: session.subaccountId,
+          }),
+    ),
+  )
 
 export const normalizeDeriveWallet = (
   value: string,
