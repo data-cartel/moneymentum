@@ -213,6 +213,9 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
+    watch: {
+      ignored: ["**/.devenv/**", "**/.direnv/**"],
+    },
     proxy: {
       "/api/hyperliquid": {
         target: "http://127.0.0.1:8000",
