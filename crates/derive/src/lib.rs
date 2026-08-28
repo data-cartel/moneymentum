@@ -13,7 +13,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response, sse::Event, sse::Sse};
 use axum::routing::{get, post};
 use chrono::{DateTime, TimeZone, Utc};
-use futures::{SinkExt, Stream, StreamExt};
+use futures::{SinkExt, Stream, StreamExt, stream};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -26,6 +26,7 @@ use url::Url;
 
 const ATM_TOLERANCE: f64 = 0.005;
 const DEFAULT_ASSET: &str = "BTC";
+const OPTION_ASSET_PROBE_CONCURRENCY: usize = 8;
 const TICKER_SLIM_INTERVAL_MS: &str = "100";
 const SUBSCRIBE_CHANNELS_PER_MESSAGE: usize = 25;
 const CATALOGUE_REFRESH_INTERVAL: Duration = Duration::from_mins(1);
@@ -510,47 +511,23 @@ fn catalogue_from_instruments(
     })
 }
 
-async fn currency_has_active_options(
-    http: &Client,
-    rest_base_url: &Url,
-    asset: &str,
-) -> Result<bool, DeriveError> {
-    let rest_url = format!(
-        "{}/public/get_instruments",
-        rest_base_url.as_str().trim_end_matches('/')
-    );
-    let payload = json!({
-        "currency": asset,
-        "instrument_type": "option",
-        "expired": false
-    });
+fn catalogue_has_active_options(catalogue: &OptionsCatalogue) -> bool {
+    !catalogue.expiry_unix_sorted_asc.is_empty()
+}
 
-    let response: RpcResponse<Vec<InstrumentDto>> = http
-        .post(&rest_url)
-        .json(&payload)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-
-    let now_unix = Utc::now().timestamp();
-    Ok(response.result.iter().any(|row| {
-        row.is_active
-            && row.option_details.as_ref().is_some_and(|details| {
-                i64::try_from(details.expiry)
-                    .ok()
-                    .is_some_and(|expiry_unix| is_open_expiry(expiry_unix, now_unix))
-            })
-    }))
+struct DiscoveredOptionAssets {
+    assets: Vec<String>,
+    default_catalogue: OptionsCatalogue,
 }
 
 /// Currencies Derive lists as option underlyings that currently have at least
 /// one active expiry. Prefer [`DEFAULT_ASSET`] as the first entry when present.
+/// The default asset's catalogue is returned so [`spawn_options_hub`] does not
+/// fetch it again.
 async fn fetch_option_assets(
     http: &Client,
     rest_base_url: &Url,
-) -> Result<Vec<String>, DeriveError> {
+) -> Result<DiscoveredOptionAssets, DeriveError> {
     let rest_url = format!(
         "{}/public/get_all_currencies",
         rest_base_url.as_str().trim_end_matches('/')
@@ -577,11 +554,28 @@ async fn fetch_option_assets(
     candidates.sort();
     candidates.dedup();
 
-    let mut assets = Vec::new();
-    for currency in candidates {
-        match currency_has_active_options(http, rest_base_url, &currency).await {
-            Ok(true) => assets.push(currency),
-            Ok(false) => {
+    let probe_client = http.clone();
+    let probe_base_url = rest_base_url.clone();
+    let probed: Vec<(String, Result<OptionsCatalogue, DeriveError>)> = stream::iter(candidates)
+        .map(|currency| {
+            let http = probe_client.clone();
+            let rest_base_url = probe_base_url.clone();
+            async move {
+                let catalogue = fetch_options_catalogue(&http, &rest_base_url, &currency).await;
+                (currency, catalogue)
+            }
+        })
+        .buffer_unordered(OPTION_ASSET_PROBE_CONCURRENCY)
+        .collect()
+        .await;
+
+    let mut active = Vec::new();
+    for (currency, catalogue_result) in probed {
+        match catalogue_result {
+            Ok(catalogue) if catalogue_has_active_options(&catalogue) => {
+                active.push((currency, catalogue));
+            }
+            Ok(_) => {
                 debug!(currency = %currency, "skipping option currency with no active expiries");
             }
             Err(error) => {
@@ -594,22 +588,41 @@ async fn fetch_option_assets(
         }
     }
 
-    if assets.is_empty() {
+    if active.is_empty() {
         return Err(DeriveError::Api {
             message: "derive returned no option currencies with active instruments".to_string(),
         });
     }
 
-    if let Some(default_index) = assets.iter().position(|asset| asset == DEFAULT_ASSET) {
-        assets.swap(0, default_index);
+    active.sort_by(|left, right| left.0.cmp(&right.0));
+    if let Some(default_index) = active
+        .iter()
+        .position(|(asset, _catalogue)| asset == DEFAULT_ASSET)
+    {
+        active.swap(0, default_index);
     }
+
+    let assets = active
+        .iter()
+        .map(|(asset, _catalogue)| asset.clone())
+        .collect::<Vec<_>>();
+    let default_catalogue = active
+        .into_iter()
+        .next()
+        .map(|(_asset, catalogue)| catalogue)
+        .ok_or_else(|| DeriveError::Api {
+            message: "derive returned no option currencies with active instruments".to_string(),
+        })?;
 
     debug!(
         count = assets.len(),
         ?assets,
         "discovered derive option assets"
     );
-    Ok(assets)
+    Ok(DiscoveredOptionAssets {
+        assets,
+        default_catalogue,
+    })
 }
 
 fn channel_name_for_instrument(instrument_name: &str) -> String {
@@ -1447,12 +1460,16 @@ async fn spawn_options_hub(
     network: DeriveNetwork,
 ) -> Result<Arc<DeriveState>, DeriveError> {
     let http = build_http_client()?;
-    let assets = fetch_option_assets(&http, &rest_base_url).await?;
-    let default_asset = assets.first().cloned().ok_or_else(|| DeriveError::Api {
-        message: format!("derive {network:?} option asset list was empty after discovery"),
-    })?;
-
-    let catalogue = fetch_options_catalogue(&http, &rest_base_url, default_asset.as_str()).await?;
+    let discovered = fetch_option_assets(&http, &rest_base_url).await?;
+    let default_asset = discovered
+        .assets
+        .first()
+        .cloned()
+        .ok_or_else(|| DeriveError::Api {
+            message: format!("derive {network:?} option asset list was empty after discovery"),
+        })?;
+    let assets = discovered.assets;
+    let catalogue = discovered.default_catalogue;
     let Some(default_expiry_unix) = catalogue.expiry_unix_sorted_asc.first().copied() else {
         error!(
             asset = %default_asset,
@@ -1811,6 +1828,7 @@ mod tests {
         .expect("catalogue");
 
         assert_eq!(catalogue.expiry_unix_sorted_asc, vec![1_786_867_200]);
+        assert!(catalogue_has_active_options(&catalogue));
         assert!(
             catalogue
                 .instrument_by_name
@@ -1826,6 +1844,24 @@ mod tests {
                 .instrument_by_name
                 .contains_key("BTC-20260816-65000-C")
         );
+    }
+
+    #[test]
+    fn catalogue_from_instruments_with_only_closed_expiries_has_no_active_options() {
+        let catalogue = catalogue_from_instruments(
+            vec![instrument_row(
+                "BTC-20260814-64000-C",
+                1_786_694_400,
+                "64000",
+                true,
+            )],
+            1_786_780_800,
+        )
+        .expect("catalogue");
+
+        assert!(catalogue.expiry_unix_sorted_asc.is_empty());
+        assert!(!catalogue_has_active_options(&catalogue));
+        assert!(catalogue.instrument_by_name.is_empty());
     }
 
     #[test]
