@@ -47,7 +47,9 @@ export const WalletPinInput = (props: WalletPinInputProps): JSX.Element => (
     {...(props.extraAttributes ?? {})}
     onAnimationEnd={props.onAnimationEnd}
     onInput={event => {
-      props.onChange(normalizeWalletPinInput(event.currentTarget.value))
+      const nextPin = normalizeWalletPinInput(event.currentTarget.value)
+      event.currentTarget.value = nextPin
+      props.onChange(nextPin)
     }}
     onKeyDown={event => {
       if (event.key === "Enter") {
