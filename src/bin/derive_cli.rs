@@ -16,8 +16,12 @@ struct Env {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let env = Env::parse();
     let config = Config::load(&env.config_path)?;
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("derive=info,moneymentum=info,tower_http=info"));
+    let log_level = config.log_level().as_str();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(format!(
+            "derive={log_level},moneymentum={log_level},tower_http={log_level}"
+        ))
+    });
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 
     let derive_config = config

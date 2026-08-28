@@ -75,7 +75,7 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Trace => "trace",
             Self::Debug => "debug",
@@ -114,6 +114,11 @@ impl Config {
     /// The TCP port the HTTP server should bind to.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Tracing verbosity from the loaded configuration file.
+    pub fn log_level(&self) -> LogLevel {
+        self.log_level
     }
 }
 
