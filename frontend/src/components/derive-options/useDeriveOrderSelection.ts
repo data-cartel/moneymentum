@@ -28,8 +28,11 @@ export const useDeriveOrderSelection = (props: {
       return
     }
     const quote = props.book.byInstrument[instrumentName]
-    setSelection(selectionFromQuoteClick(quote, quoteSide, selection()))
-    props.onOpenOrderPanel()
+    const nextSelection = selectionFromQuoteClick(quote, quoteSide, selection())
+    setSelection(nextSelection)
+    if (nextSelection !== null) {
+      props.onOpenOrderPanel()
+    }
   }
 
   const handleTicketSideChange = (side: "buy" | "sell"): void => {
