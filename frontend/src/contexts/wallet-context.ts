@@ -285,11 +285,19 @@ export const getRememberedMainAddress = (): string | null => {
 }
 
 export const rememberMainAddress = (address: string): void => {
-  localStorage.setItem(MAIN_ADDRESS_STORAGE_KEY, address)
+  try {
+    localStorage.setItem(MAIN_ADDRESS_STORAGE_KEY, address)
+  } catch {
+    // Storage may be unavailable (private mode, quota); address sync must not throw.
+  }
 }
 
 export const clearRememberedMainAddress = (): void => {
-  localStorage.removeItem(MAIN_ADDRESS_STORAGE_KEY)
+  try {
+    localStorage.removeItem(MAIN_ADDRESS_STORAGE_KEY)
+  } catch {
+    // Storage may be unavailable; disconnect/cleanup must not throw.
+  }
 }
 
 /** Best-known HL main address: agent session, else remembered public key. */
