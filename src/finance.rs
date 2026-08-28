@@ -7,6 +7,8 @@
 //! [`Symbol`] normalizes these representations for consistent storage and lookup.
 //! [`Market`] preserves the exchange's native identifier for API calls.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Normalized trading symbol (e.g., "BTC", "ETH").
@@ -16,7 +18,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// Serialization is transparent (the inner ticker string). Deserialization
 /// normalizes through [`Symbol::from_raw`], so a `Symbol` decoded at any boundary
 /// -- a wire request or a persisted event -- is canonical.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub(crate) struct Symbol(String);
 
 impl Symbol {
@@ -38,6 +40,48 @@ impl<'de> Deserialize<'de> for Symbol {
         let raw = String::deserialize(deserializer)?;
         Ok(Self::from_raw(&raw))
     }
+}
+
+/// Deserializes a symbol-keyed weight map, rejecting raw keys that normalize
+/// to the same canonical [`Symbol`].
+///
+/// Serde's default map handling keeps the last value for a repeated key, so
+/// without this guard `{"btc": 0.6, "BTC/USDC:USDC": 0.4}` would silently
+/// drop a weight before validation could reject the duplicate.
+pub(crate) fn deserialize_unique_symbol_weights<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<Symbol, f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct UniqueSymbolWeights;
+
+    impl<'de> serde::de::Visitor<'de> for UniqueSymbolWeights {
+        type Value = HashMap<Symbol, f64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a map of unique canonical symbols to weights")
+        }
+
+        fn visit_map<Entries>(self, mut entries: Entries) -> Result<Self::Value, Entries::Error>
+        where
+            Entries: serde::de::MapAccess<'de>,
+        {
+            let mut weights = HashMap::with_capacity(entries.size_hint().unwrap_or(0));
+            while let Some((symbol, weight)) = entries.next_entry::<Symbol, f64>()? {
+                if weights.contains_key(&symbol) {
+                    return Err(serde::de::Error::custom(format!(
+                        "duplicate symbol after normalization: {}",
+                        symbol.as_str()
+                    )));
+                }
+                weights.insert(symbol, weight);
+            }
+            Ok(weights)
+        }
+    }
+
+    deserializer.deserialize_map(UniqueSymbolWeights)
 }
 
 /// A tradeable market identifier from an exchange.
@@ -152,6 +196,31 @@ mod tests {
     fn deserialize_normalizes_wire_symbol() {
         let symbol: Symbol = serde_json::from_str("\"btc/usdc:usdc\"").unwrap();
         assert_eq!(symbol.as_str(), "BTC");
+    }
+
+    #[test]
+    fn deserialize_unique_weights_normalizes_symbol_map_keys() {
+        let weights = deserialize_unique_symbol_weights(&mut serde_json::Deserializer::from_str(
+            r#"{"btc/usdc:usdc": 1.0}"#,
+        ))
+        .unwrap();
+
+        assert_eq!(weights.get(&Symbol::from_raw("BTC")), Some(&1.0));
+    }
+
+    #[test]
+    fn deserialize_unique_weights_rejects_duplicate_canonical_symbols() {
+        let error = deserialize_unique_symbol_weights(&mut serde_json::Deserializer::from_str(
+            r#"{"btc": 0.6, "BTC/USDC:USDC": 0.4}"#,
+        ))
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate symbol after normalization: BTC"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
