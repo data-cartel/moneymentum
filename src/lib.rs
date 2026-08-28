@@ -2129,12 +2129,12 @@ mod tests {
     fn stub_derive_instrument(name: &str) -> derive_markets::DeriveInstrument {
         derive_markets::DeriveInstrument {
             instrument_name: name.to_string(),
-            instrument_type: "option".to_string(),
+            instrument_type: derive_markets::DeriveInstrumentType::Option,
             base_currency: "ETH".to_string(),
             quote_currency: "USDC".to_string(),
             is_active: true,
-            option_type: Some("C".to_string()),
-            strike: Some("2000".to_string()),
+            option_type: Some(derive::OptionKind::Call),
+            strike: Some(derive_markets::Strike::parse("2000").unwrap()),
             expiry_unix: Some(1_788_000_000),
         }
     }
@@ -2282,7 +2282,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
         assert_eq!(body["tickers"], serde_json::json!(["ETH-20260926-2000-C"]));
         assert_eq!(body["instruments"][0]["instrumentType"], "option");
-        assert_eq!(body["instruments"][0]["strike"], "2000");
+        assert_eq!(body["instruments"][0]["strike"], 2000.0);
         assert!(body["instruments"][0].get("maxLeverage").is_none());
         assert!(
             data_dir.path().join("market_derive_testnet.csv").exists(),

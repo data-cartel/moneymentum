@@ -8,11 +8,12 @@
 
 use std::path::{Path, PathBuf};
 
+use derive::OptionKind;
 use polars::prelude::{DataFrame, NamedFrom, Series};
 use tracing::{debug, warn};
 
 use crate::dataframe::{self, DataFrameError};
-use crate::derive_markets::{DeriveInstrument, DeriveNetwork};
+use crate::derive_markets::{DeriveInstrument, DeriveInstrumentType, DeriveNetwork, Strike};
 use crate::hyperliquid::HyperliquidNetwork;
 use crate::market_metadata::MarketMetadata;
 
@@ -73,7 +74,7 @@ pub(crate) async fn write_derive_markets(
         .collect();
     let types: Vec<String> = instruments
         .iter()
-        .map(|instrument| instrument.instrument_type.clone())
+        .map(|instrument| instrument.instrument_type.as_str().to_string())
         .collect();
     let bases: Vec<String> = instruments
         .iter()
@@ -89,11 +90,16 @@ pub(crate) async fn write_derive_markets(
         .collect();
     let option_types: Vec<Option<String>> = instruments
         .iter()
-        .map(|instrument| instrument.option_type.clone())
+        .map(|instrument| {
+            instrument.option_type.map(|kind| match kind {
+                OptionKind::Call => "C".to_string(),
+                OptionKind::Put => "P".to_string(),
+            })
+        })
         .collect();
-    let strikes: Vec<Option<String>> = instruments
+    let strikes: Vec<Option<f64>> = instruments
         .iter()
-        .map(|instrument| instrument.strike.clone())
+        .map(|instrument| instrument.strike.map(Strike::get))
         .collect();
     let expiries: Vec<Option<i64>> = instruments
         .iter()
@@ -202,12 +208,12 @@ mod tests {
             path.clone(),
             &[DeriveInstrument {
                 instrument_name: "ETH-20260829-2000-C".to_string(),
-                instrument_type: "option".to_string(),
+                instrument_type: DeriveInstrumentType::Option,
                 base_currency: "ETH".to_string(),
                 quote_currency: "USDC".to_string(),
                 is_active: true,
-                option_type: Some("C".to_string()),
-                strike: Some("2000".to_string()),
+                option_type: Some(derive::OptionKind::Call),
+                strike: Some(Strike::parse("2000").unwrap()),
                 expiry_unix: Some(1_788_000_000),
             }],
         )

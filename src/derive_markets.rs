@@ -9,6 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 use chrono::{DateTime, Utc};
+use derive::OptionKind;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 use url::Url;
@@ -38,19 +39,62 @@ pub(crate) enum DeriveMarketsError {
     DataFrame(#[from] DataFrameError),
     #[error("derive pagination page overflow")]
     PageOverflow,
+    #[error("unsupported derive instrument_type: {instrument_type}")]
+    InvalidInstrumentType { instrument_type: String },
+    #[error("unsupported derive option_type: {option_type}")]
+    InvalidOptionType { option_type: String },
+    #[error("failed to parse derive strike: {strike}")]
+    InvalidStrike { strike: String },
+}
+
+/// Option vs perpetual, matching Derive's `instrument_type` wire values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DeriveInstrumentType {
+    Option,
+    Perp,
+}
+
+impl DeriveInstrumentType {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Option => "option",
+            Self::Perp => "perp",
+        }
+    }
+}
+
+/// Strike parsed from Derive's decimal string at the HTTP boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(transparent)]
+pub(crate) struct Strike(f64);
+
+impl Strike {
+    pub(crate) fn parse(raw: &str) -> Result<Self, DeriveMarketsError> {
+        let value = raw
+            .parse::<f64>()
+            .map_err(|_| DeriveMarketsError::InvalidStrike {
+                strike: raw.to_string(),
+            })?;
+        Ok(Self(value))
+    }
+
+    pub(crate) const fn get(self) -> f64 {
+        self.0
+    }
 }
 
 /// One active Derive instrument (option or perp).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeriveInstrument {
     pub(crate) instrument_name: String,
-    pub(crate) instrument_type: String,
+    pub(crate) instrument_type: DeriveInstrumentType,
     pub(crate) base_currency: String,
     pub(crate) quote_currency: String,
     pub(crate) is_active: bool,
-    pub(crate) option_type: Option<String>,
-    pub(crate) strike: Option<String>,
+    pub(crate) option_type: Option<derive::OptionKind>,
+    pub(crate) strike: Option<Strike>,
     pub(crate) expiry_unix: Option<i64>,
 }
 
@@ -157,7 +201,8 @@ impl DeriveMarketsClient {
                 page_snapshot
                     .instruments
                     .into_iter()
-                    .map(DeriveInstrument::from),
+                    .map(DeriveInstrument::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
             );
 
             if page >= num_pages {
@@ -278,27 +323,50 @@ struct RawOptionDetails {
     expiry: u64,
 }
 
-impl From<RawInstrument> for DeriveInstrument {
-    fn from(raw: RawInstrument) -> Self {
+impl TryFrom<RawInstrument> for DeriveInstrument {
+    type Error = DeriveMarketsError;
+
+    fn try_from(raw: RawInstrument) -> Result<Self, Self::Error> {
+        let instrument_type = match raw.instrument_type.as_str() {
+            "option" => DeriveInstrumentType::Option,
+            "perp" => DeriveInstrumentType::Perp,
+            other => {
+                return Err(DeriveMarketsError::InvalidInstrumentType {
+                    instrument_type: other.to_string(),
+                });
+            }
+        };
+
         let (option_type, strike, expiry_unix) = match raw.option_details {
-            Some(details) => (
-                Some(details.option_type),
-                Some(details.strike),
-                i64::try_from(details.expiry).ok(),
-            ),
+            Some(details) => {
+                let option_type = match details.option_type.as_str() {
+                    "C" => OptionKind::Call,
+                    "P" => OptionKind::Put,
+                    other => {
+                        return Err(DeriveMarketsError::InvalidOptionType {
+                            option_type: other.to_string(),
+                        });
+                    }
+                };
+                (
+                    Some(option_type),
+                    Some(Strike::parse(&details.strike)?),
+                    i64::try_from(details.expiry).ok(),
+                )
+            }
             None => (None, None, None),
         };
 
-        Self {
+        Ok(Self {
             instrument_name: raw.instrument_name,
-            instrument_type: raw.instrument_type,
+            instrument_type,
             base_currency: raw.base_currency,
             quote_currency: raw.quote_currency,
             is_active: raw.is_active,
             option_type,
             strike,
             expiry_unix,
-        }
+        })
     }
 }
 
@@ -312,7 +380,7 @@ mod tests {
             vec![
                 DeriveInstrument {
                     instrument_name: "ETH-PERP".to_string(),
-                    instrument_type: "perp".to_string(),
+                    instrument_type: DeriveInstrumentType::Perp,
                     base_currency: "ETH".to_string(),
                     quote_currency: "USD".to_string(),
                     is_active: true,
@@ -322,12 +390,12 @@ mod tests {
                 },
                 DeriveInstrument {
                     instrument_name: "ETH-20260829-2000-C".to_string(),
-                    instrument_type: "option".to_string(),
+                    instrument_type: DeriveInstrumentType::Option,
                     base_currency: "ETH".to_string(),
                     quote_currency: "USDC".to_string(),
                     is_active: true,
-                    option_type: Some("C".to_string()),
-                    strike: Some("2000".to_string()),
+                    option_type: Some(OptionKind::Call),
+                    strike: Some(Strike::parse("2000").unwrap()),
                     expiry_unix: Some(1_788_000_000),
                 },
             ],
@@ -337,5 +405,59 @@ mod tests {
         assert_eq!(response.tickers, vec!["ETH-20260829-2000-C", "ETH-PERP"]);
         assert!(response.instruments[0].option_type.is_some());
         assert!(response.instruments.iter().all(|row| row.is_active));
+    }
+
+    fn sample_raw_option() -> RawInstrument {
+        RawInstrument {
+            instrument_name: "ETH-20260829-2000-C".to_string(),
+            instrument_type: "option".to_string(),
+            base_currency: "ETH".to_string(),
+            quote_currency: "USDC".to_string(),
+            is_active: true,
+            option_details: Some(RawOptionDetails {
+                option_type: "C".to_string(),
+                strike: "2000".to_string(),
+                expiry: 1_788_000_000,
+            }),
+        }
+    }
+
+    #[test]
+    fn try_from_parses_option_kind_and_numeric_strike() {
+        let instrument = DeriveInstrument::try_from(sample_raw_option()).unwrap();
+
+        assert_eq!(instrument.instrument_type, DeriveInstrumentType::Option);
+        assert_eq!(instrument.option_type, Some(OptionKind::Call));
+        assert_eq!(instrument.strike, Some(Strike::parse("2000").unwrap()));
+        assert_eq!(instrument.expiry_unix, Some(1_788_000_000));
+    }
+
+    #[test]
+    fn try_from_rejects_unknown_instrument_type() {
+        let error = DeriveInstrument::try_from(RawInstrument {
+            instrument_name: "USDC".to_string(),
+            instrument_type: "erc20".to_string(),
+            base_currency: "USDC".to_string(),
+            quote_currency: "USDC".to_string(),
+            is_active: true,
+            option_details: None,
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            DeriveMarketsError::InvalidInstrumentType { .. }
+        ));
+    }
+
+    #[test]
+    fn try_from_rejects_non_numeric_strike() {
+        let mut raw = sample_raw_option();
+        if let Some(details) = raw.option_details.as_mut() {
+            details.strike = "not-a-number".to_string();
+        }
+
+        let error = DeriveInstrument::try_from(raw).unwrap_err();
+        assert!(matches!(error, DeriveMarketsError::InvalidStrike { .. }));
     }
 }
