@@ -17,6 +17,7 @@
   --d-chip-active: color-mix(in oklch, var(--muted) 70%, var(--background));
   --d-accent: var(--primary);
   --d-selected-fg: oklch(0.145 0 0);
+
   background: var(--d-bg);
   color: var(--d-text);
   font-variant-numeric: tabular-nums;
