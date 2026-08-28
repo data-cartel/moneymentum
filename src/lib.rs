@@ -32,6 +32,7 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use derive::DeriveNetwork;
 use event_sorcery::{
     AggregateError, CircuitBreakerConfig, FAIL_STOP_RECOVERY_TIMEOUT, JobBackend, LifecycleError,
     Monitor as EventSorceryMonitor, Projection, SendError, Store, StoreBuilder,
@@ -46,7 +47,7 @@ use thiserror::Error;
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
-use crate::derive_markets::{DeriveMarketsClients, DeriveNetwork};
+use crate::derive_markets::DeriveMarketsClients;
 use crate::hyperliquid::{Hyperliquid, HyperliquidClients, HyperliquidNetwork};
 use finance::Symbol;
 use ingestion::{

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 use chrono::{DateTime, Utc};
-use derive::OptionKind;
+use derive::{DeriveNetwork, OptionKind};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 use url::Url;
@@ -20,14 +20,6 @@ pub(crate) const DERIVE_MAINNET_BASE_URL: &str = "https://api.lyra.finance";
 pub(crate) const DERIVE_TESTNET_BASE_URL: &str = "https://api-demo.lyra.finance";
 
 const INSTRUMENT_PAGE_SIZE: u32 = 1000;
-
-/// Derive deployment a markets request targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum DeriveNetwork {
-    Mainnet,
-    Testnet,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum DeriveMarketsError {

@@ -8,12 +8,12 @@
 
 use std::path::{Path, PathBuf};
 
-use derive::OptionKind;
+use derive::{DeriveNetwork, OptionKind};
 use polars::prelude::{DataFrame, NamedFrom, Series};
 use tracing::{debug, warn};
 
 use crate::dataframe::{self, DataFrameError};
-use crate::derive_markets::{DeriveInstrument, DeriveInstrumentType, DeriveNetwork, Strike};
+use crate::derive_markets::{DeriveInstrument, DeriveInstrumentType, Strike};
 use crate::hyperliquid::HyperliquidNetwork;
 use crate::market_metadata::MarketMetadata;
 
