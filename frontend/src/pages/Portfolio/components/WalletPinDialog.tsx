@@ -31,15 +31,21 @@ interface WalletPinConfirmConfig {
   onConfirm: (pin: string) => Effect.Effect<void, unknown>
 }
 
-interface WalletPinDialogProps {
+interface WalletPinDialogBaseProps {
   open: boolean
-  mode: WalletPinDialogMode
   onOpenChange: (open: boolean) => void
   /** Called after a successful authorize, unlock, or confirm. */
   onSuccess?: () => void
-  /** Required when mode is "confirm". */
-  confirm?: WalletPinConfirmConfig
 }
+
+type WalletPinDialogProps =
+  | (WalletPinDialogBaseProps & {
+      mode: "authorize" | "unlock"
+    })
+  | (WalletPinDialogBaseProps & {
+      mode: "confirm"
+      confirm: WalletPinConfirmConfig
+    })
 
 interface WalletPinModeConfig {
   title: string
@@ -73,15 +79,13 @@ export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
       case "confirm": {
         const confirmConfig = props.confirm
         return {
-          title: confirmConfig?.title ?? "Enter local PIN",
-          description: confirmConfig?.description ?? "",
+          title: confirmConfig.title,
+          description: confirmConfig.description,
           pinLabel: defaultPinLabel,
-          submitLabel: confirmConfig?.submitLabel ?? "Continue",
-          submittingLabel: confirmConfig?.submittingLabel ?? "Working...",
-          successMessage: confirmConfig?.successToast,
-          action: enteredPin =>
-            confirmConfig?.onConfirm(enteredPin) ??
-            Effect.fail(new Error("PIN confirm handler is missing.")),
+          submitLabel: confirmConfig.submitLabel ?? "Continue",
+          submittingLabel: confirmConfig.submittingLabel ?? "Working...",
+          successMessage: confirmConfig.successToast,
+          action: enteredPin => confirmConfig.onConfirm(enteredPin),
         }
       }
       case "unlock":

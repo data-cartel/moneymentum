@@ -63,10 +63,7 @@ import {
   resolveStagedConnectionState,
   type StagedConnectionState,
 } from "./components/StagedChangesPanel"
-import {
-  WalletPinDialog,
-  type WalletPinDialogMode,
-} from "./components/WalletPinDialog"
+import { WalletPinDialog } from "./components/WalletPinDialog"
 import { useBeta, type BetaBenchmark } from "./hooks/useBeta"
 import {
   usePortfolioState,
@@ -413,8 +410,9 @@ const PortfolioPage = () => {
   const portfolio = usePortfolioState()
 
   const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
-  const [pinDialogMode, setPinDialogMode] =
-    createSignal<WalletPinDialogMode>("authorize")
+  const [pinDialogMode, setPinDialogMode] = createSignal<
+    "authorize" | "unlock"
+  >("authorize")
   const { metricVisibility, setMetricColumnVisible } =
     usePortfolioMetricVisibility()
   const [deriveGreeksVisible, setDeriveGreeksVisible] = createSignal(
