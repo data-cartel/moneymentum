@@ -1169,6 +1169,7 @@ const PortfolioPage = () => {
             <div class="h-4 border-l border-border" />
             <WalletHeader
               handleDisconnect={portfolio.handleDisconnect}
+              handleDisconnectDerive={portfolio.handleDisconnectDerive}
               handleNetworkSwitch={
                 portfolio.resetPortfolioStateForNetworkChange
               }

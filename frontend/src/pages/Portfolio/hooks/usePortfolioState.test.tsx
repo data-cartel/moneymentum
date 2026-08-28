@@ -299,6 +299,91 @@ describe("usePortfolioState", () => {
     expect(result.targetPortfolio["ETH-20260327-2000-C"]?.venue).toBe("derive")
   })
 
+  it("clears derive positions on venue disconnect without resetting hyperliquid", async () => {
+    vi.mocked(useWallet).mockReturnValue({
+      networkMode: () => "testnet",
+      isConnected: () => true,
+      isHyperliquidConnected: () => true,
+      isDeriveConnected: () => true,
+      isDeriveLocked: () => false,
+    } as ReturnType<typeof useWallet>)
+
+    vi.mocked(useDeriveSessionCredentials).mockReturnValue((() => ({
+      deriveWallet: "0xabc",
+      sessionAddress: "0xdef",
+      sessionPrivateKey:
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      networkMode: "testnet" as const,
+      subaccountId: 7,
+    })) as ReturnType<typeof useDeriveSessionCredentials>)
+
+    vi.mocked(useDeriveBalance).mockReturnValue({
+      data: {
+        accountValue: 500,
+        positionsValue: 620,
+        collateralsValue: 0,
+        totals: {},
+      },
+      isLoading: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDeriveBalance>)
+
+    vi.mocked(useDeriveAccountSnapshot).mockReturnValue({
+      data: {
+        deriveWallet: "0xabc",
+        subaccountIds: [7],
+        subaccounts: [
+          {
+            subaccountId: 7,
+            subaccountValue: "500",
+            collateralsValue: "0",
+            initialMargin: "0",
+            maintenanceMargin: "0",
+            positionsValue: "620",
+            positions: [
+              {
+                symbol: "ETH-20260327-2000-C",
+                side: "buy" as const,
+                notional: 120,
+                entryPrice: 100,
+                unrealizedPnl: 20,
+                leverage: 1,
+                positionKind: "option" as const,
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDeriveAccountSnapshot>)
+
+    const { result } = renderHook(() => usePortfolioState(), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(result.currentPortfolio["ETH-20260327-2000-C"]).toBeDefined()
+      expect(result.currentPortfolio["BTC/USDC:USDC"]).toBeDefined()
+    })
+
+    result.handleNotionalChange("ETH-20260327-2000-C", 200)
+    expect(result.stagedTrades.some(trade => trade.venue === "derive")).toBe(
+      true,
+    )
+
+    result.handleDisconnectDerive()
+
+    expect(result.currentPortfolio["ETH-20260327-2000-C"]).toBeUndefined()
+    expect(result.targetPortfolio["ETH-20260327-2000-C"]).toBeUndefined()
+    expect(result.currentPortfolio["BTC/USDC:USDC"]?.venue).toBe("hyperliquid")
+    expect(result.targetPortfolio["BTC/USDC:USDC"]?.venue).toBe("hyperliquid")
+    expect(result.stagedTrades.every(trade => trade.venue !== "derive")).toBe(
+      true,
+    )
+    expect(readonlyPortfolioActions.clearAddresses).not.toHaveBeenCalled()
+  })
+
   it("adds and removes token in target portfolio", async () => {
     const { result } = renderHook(() => usePortfolioState(), {
       wrapper: createWrapper(),

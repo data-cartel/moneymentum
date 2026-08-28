@@ -156,6 +156,27 @@ const calcLeverage = (totalNotional: number, accountValue: number): number => {
   return Math.min(MAX_CROSS_ACCOUNT_LEVERAGE, leverage)
 }
 
+const omitVenueFromPortfolio = (
+  portfolio: Record<string, PortfolioInterface | undefined>,
+  venue: PortfolioVenue,
+): Record<string, PortfolioInterface | undefined> =>
+  Object.fromEntries(
+    Object.entries(portfolio).filter(([, position]) => {
+      if (position === undefined) {
+        return false
+      }
+      return position.venue !== venue
+    }),
+  )
+
+const portfolioNotionalSum = (
+  portfolio: Record<string, PortfolioInterface | undefined>,
+): number =>
+  Object.values(portfolio).reduce(
+    (sum, position) => sum + (position?.notional ?? 0),
+    0,
+  )
+
 export const usePortfolioState = () => {
   const {
     isConnected,
@@ -286,6 +307,40 @@ export const usePortfolioState = () => {
       setCurrentTotalNotional(0)
       setTargetTotalNotional(0)
       setPositionsLoadedFromExchange(false)
+    })
+  }
+
+  const handleDisconnectDerive = () => {
+    const nextCurrent = omitVenueFromPortfolio(
+      untrack(() => ({ ...currentPortfolio })),
+      "derive",
+    )
+    const nextTarget = omitVenueFromPortfolio(
+      untrack(() => ({ ...targetPortfolio })),
+      "derive",
+    )
+    const nextArchive = omitVenueFromPortfolio(
+      untrack(() => ({ ...deletedArchive })),
+      "derive",
+    )
+    const remainingSymbols = new Set([
+      ...Object.keys(nextCurrent),
+      ...Object.keys(nextTarget),
+      ...Object.keys(nextArchive),
+    ])
+    const nextErrors = Object.fromEntries(
+      Object.entries(untrack(() => ({ ...errorsBySymbol }))).filter(
+        ([symbol]) => remainingSymbols.has(symbol),
+      ),
+    )
+
+    batch(() => {
+      setCurrentPortfolio(reconcile(nextCurrent))
+      setTargetPortfolio(reconcile(nextTarget))
+      setDeletedArchive(reconcile(nextArchive))
+      setErrorsBySymbol(reconcile(nextErrors))
+      setCurrentTotalNotional(portfolioNotionalSum(nextCurrent))
+      setTargetTotalNotional(portfolioNotionalSum(nextTarget))
     })
   }
 
@@ -1257,6 +1312,7 @@ export const usePortfolioState = () => {
     removeReadonlyBtcAddress: readonlyPortfolio.removeAddress,
     setReadonlyBtcIncludeInBeta: readonlyPortfolio.setIncludeInBeta,
     handleDisconnect,
+    handleDisconnectDerive,
     resetPortfolioStateForNetworkChange,
   }
 }

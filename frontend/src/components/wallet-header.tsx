@@ -69,6 +69,7 @@ const formatUsd = (value: number): string =>
 
 interface WalletHeaderProps {
   handleDisconnect?: () => void
+  handleDisconnectDerive?: () => void
   handleNetworkSwitch?: () => void
 }
 
@@ -260,7 +261,10 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     void Effect.runPromise(
       disconnectDerive().pipe(
         Effect.tap(() =>
+          // This post-disconnect callback runs from the click handler's Effect.
+          // eslint-disable-next-line solid/reactivity
           Effect.sync(() => {
+            props.handleDisconnectDerive?.()
             setMenuOpen(false)
             toast.success("Derive disconnected")
           }),

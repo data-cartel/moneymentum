@@ -787,6 +787,57 @@ describe("WalletHeader", () => {
       expect(localStorage.getItem("hyperliquid-wallet")).not.toBeNull()
     })
 
+    it("resets derive portfolio without resetting hyperliquid on derive disconnect", async () => {
+      const user = userEvent.setup()
+      const handleDisconnect = vi.fn()
+      const handleDisconnectDerive = vi.fn()
+      const { toast } = await import("solid-sonner")
+
+      mockUseWalletSettings.mockReturnValue({
+        data: () => ({
+          isTestnet: true,
+          venues: [
+            {
+              id: "hyperliquid" as const,
+              connected: false,
+              address: null,
+              balanceUsd: null,
+              canRevoke: false,
+            },
+            {
+              id: "derive" as const,
+              connected: true,
+              address: "0xDeriveAccountAddress",
+              balanceUsd: 50,
+              canRevoke: false,
+            },
+          ],
+        }),
+        isConnected: () => true,
+      })
+
+      render(
+        () => (
+          <WalletHeader
+            handleDisconnect={handleDisconnect}
+            handleDisconnectDerive={handleDisconnectDerive}
+          />
+        ),
+        {
+          wrapper: createWrapper(),
+        },
+      )
+
+      await user.click(screen.getByText("0xDeri...ress"))
+      await user.click(screen.getByRole("button", { name: "Disconnect" }))
+
+      await waitFor(() => {
+        expect(toast.success).toHaveBeenCalledWith("Derive disconnected")
+      })
+      expect(handleDisconnectDerive).toHaveBeenCalledOnce()
+      expect(handleDisconnect).not.toHaveBeenCalled()
+    })
+
     it("closes dialog after disconnect", async () => {
       const user = userEvent.setup()
       const { toast } = await import("solid-sonner")
