@@ -8,10 +8,7 @@ export const DERIVE_CHAIN_GREEKS_SPLIT_STORAGE_KEY =
 export const readDeriveGreeksVisible = (): boolean => {
   try {
     const raw = localStorage.getItem(DERIVE_GREEKS_VISIBLE_STORAGE_KEY)
-    if (raw === null) {
-      return true
-    }
-    return raw === "true"
+    return raw !== "false"
   } catch {
     return true
   }
