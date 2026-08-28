@@ -32,8 +32,8 @@ export const focusPanelContainer = (panelId: string): void => {
   }
 }
 
-export const focusAllSymbolsSearch = (): boolean => {
-  const input = document.querySelector(`[${ALL_SYMBOLS_SEARCH_ATTR}]`)
+const focusInputByAttribute = (attributeName: string): boolean => {
+  const input = document.querySelector(`[${attributeName}]`)
   if (!(input instanceof HTMLInputElement)) {
     return false
   }
@@ -43,27 +43,14 @@ export const focusAllSymbolsSearch = (): boolean => {
   return true
 }
 
-export const focusStagedPin = (): boolean => {
-  const input = document.querySelector(`[${STAGED_PIN_ATTR}]`)
-  if (!(input instanceof HTMLInputElement)) {
-    return false
-  }
+export const focusAllSymbolsSearch = (): boolean =>
+  focusInputByAttribute(ALL_SYMBOLS_SEARCH_ATTR)
 
-  input.focus()
-  input.select()
-  return true
-}
+export const focusStagedPin = (): boolean =>
+  focusInputByAttribute(STAGED_PIN_ATTR)
 
-export const focusDerivePin = (): boolean => {
-  const input = document.querySelector(`[${DERIVE_PIN_ATTR}]`)
-  if (!(input instanceof HTMLInputElement)) {
-    return false
-  }
-
-  input.focus()
-  input.select()
-  return true
-}
+export const focusDerivePin = (): boolean =>
+  focusInputByAttribute(DERIVE_PIN_ATTR)
 
 /** Defer PIN focus until after the staged panel mounts the unlock field. */
 export const scheduleFocusStagedPin = (): void => {
