@@ -38,7 +38,6 @@ const targetPortfolio = (): Record<string, PortfolioInterface | undefined> => ({
     notional: 40,
   },
 })
-const targetTotalNotional = () => 100
 
 const bitcoinBetaBenchmark: BetaBenchmark = {
   symbol: "BTC",
@@ -80,12 +79,7 @@ describe("useBeta", () => {
 
     const { result } = renderHook(
       () =>
-        useBeta(
-          targetPortfolio,
-          targetTotalNotional,
-          readonlyPositions,
-          () => bitcoinBetaBenchmark,
-        ),
+        useBeta(targetPortfolio, readonlyPositions, () => bitcoinBetaBenchmark),
       { wrapper: createWrapper() },
     )
 
@@ -112,12 +106,7 @@ describe("useBeta", () => {
 
     const { result } = renderHook(
       () =>
-        useBeta(
-          targetPortfolio,
-          targetTotalNotional,
-          readonlyPositions,
-          () => bitcoinBetaBenchmark,
-        ),
+        useBeta(targetPortfolio, readonlyPositions, () => bitcoinBetaBenchmark),
       { wrapper: createWrapper() },
     )
 
@@ -147,7 +136,6 @@ describe("useBeta", () => {
       () =>
         useBeta(
           targetPortfolio,
-          targetTotalNotional,
           () => [],
           () => bitcoinBetaBenchmark,
         ),
@@ -176,7 +164,6 @@ describe("useBeta", () => {
       () =>
         useBeta(
           targetPortfolio,
-          targetTotalNotional,
           () => [],
           () => selectedBenchmark,
         ),
@@ -215,7 +202,6 @@ describe("useBeta", () => {
       () =>
         useBeta(
           targetPortfolio,
-          targetTotalNotional,
           () => [],
           () => bitcoinBetaBenchmark,
         ),
@@ -242,7 +228,6 @@ describe("useBeta", () => {
       () =>
         useBeta(
           targetPortfolio,
-          targetTotalNotional,
           () => [],
           () => selectedBenchmark,
         ),

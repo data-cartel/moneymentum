@@ -18,7 +18,6 @@ const symbolToTicker = (symbol: string): string =>
 
 const weightsFromPortfolio = (
   portfolio: Record<string, PortfolioInterface | undefined>,
-  _portfolioTotalNotional: number,
   readonlyPositions: ReadonlyBetaPosition[],
 ): Record<string, number> => {
   // Options and Derive perps are excluded from beta until we map underlyings.
@@ -99,16 +98,11 @@ const fetchBeta = (
 
 export const useBeta = (
   portfolio: () => Record<string, PortfolioInterface | undefined>,
-  portfolioTotalNotional: () => number,
   readonlyPositions: () => ReadonlyBetaPosition[],
   selectedBenchmark: () => BetaBenchmark,
 ) => {
   const weights = createMemo(() =>
-    weightsFromPortfolio(
-      portfolio(),
-      portfolioTotalNotional(),
-      readonlyPositions(),
-    ),
+    weightsFromPortfolio(portfolio(), readonlyPositions()),
   )
   const weightsKey = createMemo(() => queryKeyFromWeights(weights()))
   const methodology = createMemo(() => {
