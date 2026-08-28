@@ -721,6 +721,7 @@ const PortfolioPage = () => {
             symbolsBelowMinimum={portfolio.symbolsBelowMinimum}
             symbolsDeltaBelowMinimum={portfolio.symbolsDeltaBelowMinimum}
             hasTotalWeightExceeded={portfolio.hasTotalWeightExceeded}
+            hasUnderAllocation={portfolio.hasUnderAllocation}
             targetAllocationPercent={portfolio.targetAllocationPercent}
             readonlyBtcRows={portfolio.readonlyBtcRows}
             isReadonlyBtcLoading={portfolio.isReadonlyBtcLoading}

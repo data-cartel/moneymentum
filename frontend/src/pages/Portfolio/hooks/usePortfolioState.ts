@@ -1233,6 +1233,12 @@ export const usePortfolioState = () => {
     get hasTotalWeightExceeded() {
       return hasTotalWeightExceeded()
     },
+    get hasUnderAllocation() {
+      return hasUnderAllocation()
+    },
+    get isClosingAllPositions() {
+      return isClosingAllPositions()
+    },
     get targetAllocationPercent() {
       return targetAllocationPercent()
     },

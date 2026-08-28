@@ -40,6 +40,7 @@ import { ReadonlyBtcPanel } from "./ReadonlyBtcPanel"
 
 interface PositionsPanelProps {
   hasTotalWeightExceeded: boolean
+  hasUnderAllocation: boolean
   currentPortfolio: Record<string, PortfolioInterface | undefined>
   targetPortfolio: Record<string, PortfolioInterface | undefined>
   deletedArchive: Record<string, PortfolioInterface | undefined>
@@ -297,6 +298,7 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
         isConnected={isConnected()}
         hasPositions={hasRenderablePortfolioRows()}
         hasTotalWeightExceeded={props.hasTotalWeightExceeded}
+        hasUnderAllocation={props.hasUnderAllocation}
         targetAllocationPercent={props.targetAllocationPercent}
         symbolsBelowMinimum={props.symbolsBelowMinimum}
         symbolsDeltaBelowMinimum={props.symbolsDeltaBelowMinimum}

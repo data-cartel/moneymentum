@@ -145,6 +145,7 @@ const positionsPanelProps = (
   overrides: Partial<PositionsPanelProps> = {},
 ): PositionsPanelProps => ({
   hasTotalWeightExceeded: false,
+  hasUnderAllocation: false,
   currentPortfolio: { "BTC/USDC:USDC": bitcoinPosition },
   targetPortfolio: {
     "BTC/USDC:USDC": bitcoinPosition,
