@@ -18,3 +18,4 @@
 *.ingestion-owner-journal
 .worktrees/
 .tmp/
+.vscode/settings.json
