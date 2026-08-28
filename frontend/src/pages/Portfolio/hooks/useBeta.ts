@@ -2,7 +2,11 @@ import * as Effect from "effect/Effect"
 import { useQuery } from "@tanstack/solid-query"
 import { createMemo } from "solid-js"
 import { postJson } from "@/lib/http"
-import { isPerpPosition, type PortfolioInterface } from "./usePortfolioState"
+import {
+  isPerpPosition,
+  type PerpPortfolioPosition,
+  type PortfolioInterface,
+} from "./usePortfolioState"
 import type { ReadonlyBetaPosition } from "./useReadonlyPortfolioState"
 
 export interface BetaBenchmark {
@@ -22,7 +26,7 @@ const weightsFromPortfolio = (
 ): Record<string, number> => {
   // Options and Derive perps are excluded from beta until we map underlyings.
   const exchangePositions = Object.values(portfolio).filter(
-    (position): position is PortfolioInterface =>
+    (position): position is PerpPortfolioPosition =>
       position !== undefined &&
       isPerpPosition(position) &&
       position.venue === "hyperliquid",
