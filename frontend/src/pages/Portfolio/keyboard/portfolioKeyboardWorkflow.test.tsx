@@ -18,6 +18,7 @@ import {
   PORTFOLIO_SYMBOL_ATTR,
   ALL_SYMBOLS_SEARCH_ATTR,
   STAGED_PIN_ATTR,
+  DERIVE_PIN_ATTR,
   usePortfolioKeyboardContext,
   type PortfolioKeyboardActions,
   type KeyboardPanelId,
@@ -50,12 +51,13 @@ const onOpenWalletPinDialog = vi.fn()
 const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
 const [connectionState, setConnectionState] =
   createSignal<StagedConnectionState>("ready")
+const [deriveSessionLocked, setDeriveSessionLocked] = createSignal(false)
 const [portfolioSymbols, setPortfolioSymbols] = createSignal([
   "BTC",
   "ETH",
   "SOL",
 ])
-const [allSymbols, setAllSymbols] = createSignal(["BTC", "ETH", "SOL", "DOGE"])
+const [hyperliquid, setAllSymbols] = createSignal(["BTC", "ETH", "SOL", "DOGE"])
 const [sides, setSides] = createSignal<Record<string, OrderSide>>({
   BTC: "buy",
   ETH: "buy",
@@ -74,9 +76,10 @@ const buildActions = (): PortfolioKeyboardActions => ({
     activatePanel(panelId)
   },
   getPortfolioSymbols: () => portfolioSymbols(),
-  getAllSymbolSymbols: () => allSymbols(),
+  getAllSymbolSymbols: () => hyperliquid(),
   isPinDialogOpen: () => pinDialogOpen(),
   connectionState: () => connectionState(),
+  isDeriveSessionLocked: () => deriveSessionLocked(),
   onRemove,
   onUndoRemove,
   onSideChange,
@@ -147,7 +150,7 @@ const Harness = (props: { children?: JSX.Element }) => (
     </div>
     <div
       tabIndex={0}
-      {...{ [PORTFOLIO_PANEL_ATTR]: "allSymbols" }}
+      {...{ [PORTFOLIO_PANEL_ATTR]: "hyperliquid" }}
       data-testid="all-symbols-panel"
     >
       <input
@@ -158,9 +161,16 @@ const Harness = (props: { children?: JSX.Element }) => (
     </div>
     <div
       tabIndex={0}
-      {...{ [PORTFOLIO_PANEL_ATTR]: "staged" }}
-      data-testid="staged-panel"
+      {...{ [PORTFOLIO_PANEL_ATTR]: "derive" }}
+      data-testid="derive-panel"
     >
+      <input
+        {...{ [DERIVE_PIN_ATTR]: "" }}
+        aria-label="Enter 6-digit PIN to load data"
+        defaultValue=""
+      />
+    </div>
+    <div {...{ [PORTFOLIO_PANEL_ATTR]: "staged" }} data-testid="staged-panel">
       <input
         {...{ [STAGED_PIN_ATTR]: "" }}
         aria-label="Enter PIN"
@@ -177,6 +187,7 @@ describe("portfolio keyboard workflow", () => {
     vi.clearAllMocks()
     setPinDialogOpen(false)
     setConnectionState("ready")
+    setDeriveSessionLocked(false)
     setPortfolioSymbols(["BTC", "ETH", "SOL"])
     setAllSymbols(["BTC", "ETH", "SOL", "DOGE"])
     setSides({ BTC: "buy", ETH: "buy", SOL: "sell" })
@@ -193,19 +204,37 @@ describe("portfolio keyboard workflow", () => {
     render(() => <Harness />)
 
     fireEvent.keyDown(window, { key: "2" })
-    expect(activatePanel).toHaveBeenCalledWith("allSymbols")
-    expect(screen.getByTestId("focused-panel").textContent).toBe("allSymbols")
+    expect(activatePanel).toHaveBeenCalledWith("hyperliquid")
+    expect(screen.getByTestId("focused-panel").textContent).toBe("hyperliquid")
 
     activatePanel.mockClear()
     fireEvent.keyDown(window, { key: "2" })
     expect(activatePanel).not.toHaveBeenCalled()
 
     fireEvent.keyDown(window, { key: "3" })
+    expect(activatePanel).toHaveBeenCalledWith("derive")
+    expect(screen.getByTestId("focused-panel").textContent).toBe("derive")
+
+    fireEvent.keyDown(window, { key: "4" })
     expect(activatePanel).toHaveBeenCalledWith("staged")
     expect(screen.getByTestId("focused-panel").textContent).toBe("staged")
 
     fireEvent.keyDown(window, { key: "1" })
     expect(activatePanel).toHaveBeenCalledWith("portfolio")
+  })
+
+  it("focuses Derive PIN when opening panel 3 with a locked session", async () => {
+    setDeriveSessionLocked(true)
+    render(() => <Harness />)
+
+    fireEvent.keyDown(window, { key: "3" })
+    expect(activatePanel).toHaveBeenCalledWith("derive")
+
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Enter 6-digit PIN to load data"),
+      )
+    })
   })
 
   it("navigates portfolio rows with j/k and restores selection", () => {
@@ -333,8 +362,9 @@ describe("portfolio keyboard workflow", () => {
   })
 
   it("submits staged with mod+Enter and clears with mod+shift+backspace", () => {
+    // key 4 focuses staged
     render(() => <Harness />)
-    fireEvent.keyDown(window, { key: "3" })
+    fireEvent.keyDown(window, { key: "4" })
 
     fireEvent.keyDown(window, { key: "Enter", metaKey: true })
     expect(onStagedSubmit).toHaveBeenCalled()
@@ -350,14 +380,14 @@ describe("portfolio keyboard workflow", () => {
   it("opens wallet pin dialog on mod+Enter when agent missing", () => {
     setConnectionState("agentMissing")
     render(() => <Harness />)
-    fireEvent.keyDown(window, { key: "3" })
+    fireEvent.keyDown(window, { key: "4" })
     fireEvent.keyDown(window, { key: "Enter", ctrlKey: true })
     expect(onOpenWalletPinDialog).toHaveBeenCalled()
     expect(onStagedSubmit).not.toHaveBeenCalled()
   })
 
-  it("opens wallet pin dialog on mod+Enter when wallet disconnected from any panel", () => {
-    setConnectionState("walletDisconnected")
+  it("does not submit or open pin dialog on mod+Enter when choosing a venue", () => {
+    setConnectionState("chooseVenue")
     render(() => <Harness />)
 
     fireEvent.keyDown(window, { key: "1" })
@@ -369,7 +399,7 @@ describe("portfolio keyboard workflow", () => {
     expect(onSideChange).toHaveBeenCalledWith("BTC", "sell")
 
     fireEvent.keyDown(window, { key: "Enter", metaKey: true })
-    expect(onOpenWalletPinDialog).toHaveBeenCalled()
+    expect(onOpenWalletPinDialog).not.toHaveBeenCalled()
     expect(onStagedSubmit).not.toHaveBeenCalled()
   })
 
@@ -378,7 +408,7 @@ describe("portfolio keyboard workflow", () => {
     render(() => <Harness />)
 
     fireEvent.keyDown(window, { key: "2" })
-    expect(activatePanel).toHaveBeenCalledWith("allSymbols")
+    expect(activatePanel).toHaveBeenCalledWith("hyperliquid")
 
     fireEvent.keyDown(window, { key: "1" })
     expect(screen.getByTestId("selected-symbol").textContent).toBe("BTC")
@@ -418,7 +448,7 @@ describe("portfolio keyboard workflow", () => {
     expect(bar.textContent).toContain("search")
     expect(bar.textContent).not.toContain("weight")
 
-    fireEvent.keyDown(window, { key: "3" })
+    fireEvent.keyDown(window, { key: "4" })
     expect(bar.textContent).toContain("rebalance")
   })
 
@@ -439,9 +469,7 @@ describe("portfolio keyboard workflow", () => {
     ))
 
     fireEvent.keyDown(window, { key: "3" })
-    const pinInput = screen.getByPlaceholderText(
-      "Enter 6-digit PIN to rebalance",
-    )
+    const pinInput = screen.getByPlaceholderText("Enter 6-digit PIN to unlock")
     pinInput.focus()
     expect(document.activeElement).toBe(pinInput)
 

@@ -77,6 +77,7 @@ vi.mock("ccxt/hyperliquid", () => ({
 
 import {
   HyperliquidClient,
+  hyperliquidInfoUrl,
   millisecondsUntilNextUtcMidnight,
 } from "./hyperliquid-client"
 
@@ -244,6 +245,19 @@ describe("HyperliquidClient", () => {
   it("enables sandbox mode on testnet", () => {
     new HyperliquidClient(credentials, "testnet")
     expect(mockExchange.setSandboxMode).toHaveBeenCalledWith(true)
+  })
+
+  it("routes info and CCXT through the same-origin Hyperliquid proxy", () => {
+    expect(hyperliquidInfoUrl("testnet")).toBe("/hl-testnet/info")
+    expect(hyperliquidInfoUrl("mainnet")).toBe("/hl/info")
+
+    new HyperliquidClient(credentials, "testnet")
+    expect(mockExchange.urls["api"]).toEqual(
+      expect.objectContaining({
+        public: "/hl-testnet",
+        private: "/hl-testnet",
+      }),
+    )
   })
 
   it("parses account summary values from balance info", async () => {
