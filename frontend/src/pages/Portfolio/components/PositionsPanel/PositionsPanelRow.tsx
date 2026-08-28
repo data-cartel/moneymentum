@@ -507,7 +507,7 @@ export const PositionsPanelRow = (props: {
             <div class="flex min-w-0 flex-row items-center gap-[4px]">
               <img
                 src={venueIconUrl(positionVenue())}
-                alt=""
+                alt={venueLabel(positionVenue())}
                 title={venueLabel(positionVenue())}
                 class="h-3.5 w-3.5 shrink-0 rounded-sm"
               />
