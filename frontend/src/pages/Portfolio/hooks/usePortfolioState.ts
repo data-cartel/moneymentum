@@ -482,7 +482,10 @@ export const usePortfolioState = () => {
     const hyperliquidValue = isHyperliquidConnected()
       ? (accountSummaryQuery.data?.accountValue ?? 0)
       : 0
-    const deriveValue = deriveBalanceQuery.data?.accountValue ?? 0
+    const deriveValue =
+      isDeriveConnected() && !isDeriveLocked()
+        ? (deriveBalanceQuery.data?.accountValue ?? 0)
+        : 0
     return hyperliquidValue + deriveValue
   })
 
