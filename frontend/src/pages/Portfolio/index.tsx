@@ -26,6 +26,7 @@ import { hasLiveEip1193Provider } from "@/reown/evmAppKit"
 import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import {
+  formatUsdBalance,
   useHyperliquidFundingRates,
   useHyperliquidTickers,
   useWalletSettings,
@@ -193,12 +194,6 @@ const bitcoinBetaBenchmark: BetaBenchmark = {
   interval: "daily log returns",
   lookback: "365 calendar days",
 }
-
-const formatUsdBalance = (value: number): string =>
-  value.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
 
 const VenueBalancesHeader = () => {
   const { data: walletSettings } = useWalletSettings()

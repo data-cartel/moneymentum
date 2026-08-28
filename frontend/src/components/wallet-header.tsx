@@ -27,6 +27,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
+  formatUsdBalance,
   useWalletSettings,
   useSwitchNetwork,
   useDeriveAccountSnapshot,
@@ -60,12 +61,6 @@ interface SubaccountOption {
   id: number
   label: string
 }
-
-const formatUsd = (value: number): string =>
-  value.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
 
 interface WalletHeaderProps {
   handleDisconnect?: () => void
@@ -121,7 +116,7 @@ export const WalletHeader = (props: WalletHeaderProps) => {
     return snapshot.subaccounts.map(subaccount => {
       const balance = Number.parseFloat(subaccount.subaccountValue)
       const balanceLabel = Number.isFinite(balance)
-        ? formatUsd(balance)
+        ? formatUsdBalance(balance)
         : subaccount.subaccountValue
       return {
         id: subaccount.subaccountId,

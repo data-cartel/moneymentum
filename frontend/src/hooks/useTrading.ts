@@ -267,6 +267,12 @@ export const useRebalanceDerivePositions = () => {
   }))
 }
 
+export const formatUsdBalance = (value: number): string =>
+  value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+
 export const useWalletSettings = () => {
   const {
     credentials,
