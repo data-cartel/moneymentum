@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Option from "effect/Option"
 import type { NetworkMode, WalletCredentials } from "@/contexts/wallet-context"
+import { getErrorMessage } from "@/lib/error-message"
 import type { RebalanceAction } from "@/pages/Portfolio/hooks/portfolioRebalancer"
 import {
   fetchHyperliquidMarkets,
@@ -1327,23 +1328,14 @@ export class HyperliquidClient {
 
     const failure = Cause.failureOption(exit.cause)
     if (Option.isSome(failure)) {
-      const tagged = failure.value as {
-        _tag?: string
-        detail?: string
-        status?: number
-      }
-      const detail =
-        typeof tagged.detail === "string"
-          ? tagged.detail
-          : typeof tagged.status === "number"
-            ? `status ${tagged.status}`
-            : typeof tagged._tag === "string"
-              ? tagged._tag
-              : "unknown error"
-      throw new Error(`Failed to fetch Hyperliquid markets: ${detail}`)
+      throw new Error(
+        `Failed to fetch Hyperliquid markets: ${getErrorMessage(failure.value)}`,
+      )
     }
 
-    throw new Error("Failed to fetch Hyperliquid markets")
+    throw new Error("Failed to fetch Hyperliquid markets", {
+      cause: Cause.pretty(exit.cause),
+    })
   }
 
   getNetworkMode(): NetworkMode {
