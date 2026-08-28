@@ -358,8 +358,8 @@ export const useOptionsStream = (
 
     const network = networkMode()
     const controller = new AbortController()
-    const mountGeneration = { value: 0 }
-    const claim = ++mountGeneration.value
+    const load: { cancelled: boolean } = { cancelled: false }
+    const loadWasCancelled = (): boolean => load.cancelled
     setIsLoading(true)
     setBootstrap(null)
     selectionBridge.clear()
@@ -374,39 +374,83 @@ export const useOptionsStream = (
             controller.signal,
           ),
         )
-        if (mountGeneration.value !== claim) {
+        if (loadWasCancelled()) {
           return
         }
         setBootstrap(boot)
-        setSelectedAsset(boot.asset)
-        const defaultUnix = boot.default_expiry_unix
-        setSelectedExpiryUnix(defaultUnix)
-        const postedExpiry = await Effect.runPromise(
-          Effect.either(postActiveExpiry(defaultUnix, controller.signal)),
-        )
-        if (Either.isLeft(postedExpiry)) {
-          if (mountGeneration.value !== claim) {
+
+        const userChoseAsset =
+          assetSwitchInFlightRef.blockStreamUntilAsset !== null
+        const userChoseExpiry =
+          expirySwitchInFlightRef.blockStreamUntilExpiryUnix !== null
+
+        if (!userChoseAsset) {
+          setSelectedAsset(boot.asset)
+        }
+        if (!userChoseAsset && !userChoseExpiry) {
+          const defaultUnix = boot.default_expiry_unix
+          setSelectedExpiryUnix(defaultUnix)
+          expirySwitchInFlightRef.postAbort?.abort()
+          const expiryController = new AbortController()
+          expirySwitchInFlightRef.postAbort = expiryController
+          const postedExpiry = await Effect.runPromise(
+            Effect.either(
+              postActiveExpiry(defaultUnix, expiryController.signal),
+            ),
+          )
+          if (loadWasCancelled()) {
             return
           }
-          setErrorMessage(postedExpiry.left)
-          return
+          const userSwitchedDuringDefaultPost =
+            expirySwitchInFlightRef.blockStreamUntilExpiryUnix !== null ||
+            assetSwitchInFlightRef.blockStreamUntilAsset !== null
+          if (Either.isLeft(postedExpiry) && !userSwitchedDuringDefaultPost) {
+            setErrorMessage(postedExpiry.left)
+            return
+          }
         }
-        if (mountGeneration.value !== claim) {
+
+        if (loadWasCancelled()) {
           return
         }
         const data = await loadSnapshot(controller.signal)
-        if (mountGeneration.value !== claim) {
+        if (loadWasCancelled()) {
           return
         }
-        batch(() => {
-          pushOptionsSnapshot(data)
-        })
-        setSelectedAsset(data.asset)
-        setSelectedExpiryUnix(data.active_expiry_unix)
+
+        const pendingAsset = assetSwitchInFlightRef.blockStreamUntilAsset
+        const pendingExpiry = expirySwitchInFlightRef.blockStreamUntilExpiryUnix
+        const snapshotMatchesPendingAsset =
+          pendingAsset !== null && data.asset === pendingAsset
+        const snapshotMatchesPendingExpiry =
+          pendingExpiry !== null && data.active_expiry_unix === pendingExpiry
+        const applySnapshot =
+          (pendingAsset === null && pendingExpiry === null) ||
+          snapshotMatchesPendingAsset ||
+          snapshotMatchesPendingExpiry
+
+        if (applySnapshot) {
+          if (snapshotMatchesPendingAsset) {
+            assetSwitchInFlightRef.blockStreamUntilAsset = null
+          }
+          if (snapshotMatchesPendingExpiry) {
+            expirySwitchInFlightRef.blockStreamUntilExpiryUnix = null
+          }
+          batch(() => {
+            pushOptionsSnapshot(data)
+          })
+          if (pendingAsset === null) {
+            setSelectedAsset(data.asset)
+          }
+          if (pendingExpiry === null) {
+            setSelectedExpiryUnix(data.active_expiry_unix)
+          }
+        }
+
         setErrorMessage(null)
         startStream()
       } catch (error) {
-        if (mountGeneration.value !== claim) {
+        if (loadWasCancelled() || isAbortError(error)) {
           return
         }
         setErrorMessage(
@@ -415,7 +459,7 @@ export const useOptionsStream = (
             : "Unknown derive options error",
         )
       } finally {
-        if (mountGeneration.value === claim) {
+        if (!loadWasCancelled()) {
           setIsLoading(false)
         }
       }
@@ -424,7 +468,7 @@ export const useOptionsStream = (
     void initialize()
 
     onCleanup(() => {
-      mountGeneration.value += 1
+      load.cancelled = true
       controller.abort()
       expirySwitchInFlightRef.postAbort?.abort()
       expirySwitchInFlightRef.postAbort = undefined
