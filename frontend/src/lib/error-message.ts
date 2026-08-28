@@ -121,6 +121,7 @@ interface TaggedError {
   readonly status?: number
   readonly detail?: string
   readonly message?: string
+  readonly reason?: string
 }
 
 const hasTag = (value: unknown): value is TaggedError =>
@@ -225,6 +226,10 @@ const messageForTag = (error: TaggedError): string | null => {
       return "No Derive credentials. Paste Derive Wallet and Session Key from Developers."
     case "DeriveSubaccountMissing":
       return "Select a Derive subaccount before trading or loading open orders."
+    case "DeriveOrderMappingFailed":
+      return (
+        error.reason ?? "Could not map Derive orders from the staged trades."
+      )
     case "DeriveSessionSignFailed":
       return "Failed to sign with the Derive session key."
     case "DeriveSessionKeyInvalid":

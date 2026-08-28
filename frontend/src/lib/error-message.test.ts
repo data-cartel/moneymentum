@@ -18,6 +18,7 @@ import {
   WalletOperationContextChanged,
   WalletUnlockContextChanged,
 } from "@/services/wallet"
+import { DeriveOrderMappingFailed } from "@/pages/Portfolio/hooks/portfolioRebalancer"
 import {
   DeriveRpcError,
   DeriveSessionKeyInvalid,
@@ -275,6 +276,17 @@ describe("getErrorMessage", () => {
 
   it("stringifies unknown non-error values", () => {
     expect(getErrorMessage("weird")).toBe("weird")
+  })
+
+  it("maps DeriveOrderMappingFailed to its reason", async () => {
+    const failure = await asFiberFailure(
+      new DeriveOrderMappingFailed({
+        reason: "Missing Derive ticker for close of ETH-20260925-2000-C",
+      }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Missing Derive ticker for close of ETH-20260925-2000-C",
+    )
   })
 
   it("maps DeriveRpcError to a provider message", async () => {

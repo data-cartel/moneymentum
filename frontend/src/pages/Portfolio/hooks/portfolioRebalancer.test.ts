@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest"
+import * as Effect from "effect/Effect"
+import * as Either from "effect/Either"
 
 import {
   captureStagedPortfolioOverlay,
@@ -840,26 +842,28 @@ describe("deriveActionsToOrderRequests", () => {
     const current = {
       [instrument]: option(instrument, 100),
     }
-    const requests = deriveActionsToOrderRequests(
-      [
+    const requests = Effect.runSync(
+      deriveActionsToOrderRequests(
+        [
+          {
+            kind: "close",
+            symbol: instrument,
+            side: "buy",
+            positionKind: "option",
+            venue: "derive",
+          },
+        ],
+        current,
         {
-          kind: "close",
-          symbol: instrument,
-          side: "buy",
-          positionKind: "option",
-          venue: "derive",
+          [instrument]: {
+            symbol: instrument,
+            bid: 50,
+            ask: 52,
+            last: 51,
+            mark: 50,
+          },
         },
-      ],
-      current,
-      {
-        [instrument]: {
-          symbol: instrument,
-          bid: 50,
-          ask: 52,
-          last: 51,
-          mark: 50,
-        },
-      },
+      ),
     )
 
     expect(requests).toEqual([
@@ -875,28 +879,30 @@ describe("deriveActionsToOrderRequests", () => {
   })
 
   it("builds an expansion rebalance at the ask, sized on mark", () => {
-    const requests = deriveActionsToOrderRequests(
-      [
+    const requests = Effect.runSync(
+      deriveActionsToOrderRequests(
+        [
+          {
+            kind: "rebalance",
+            symbol: instrument,
+            signedNotionalDelta: 110,
+            leverage: 1,
+            leverageChanged: false,
+            positionKind: "option",
+            venue: "derive",
+          },
+        ],
+        {},
         {
-          kind: "rebalance",
-          symbol: instrument,
-          signedNotionalDelta: 110,
-          leverage: 1,
-          leverageChanged: false,
-          positionKind: "option",
-          venue: "derive",
+          [instrument]: {
+            symbol: instrument,
+            bid: 50,
+            ask: 55,
+            last: 52,
+            mark: 55,
+          },
         },
-      ],
-      {},
-      {
-        [instrument]: {
-          symbol: instrument,
-          bid: 50,
-          ask: 55,
-          last: 52,
-          mark: 55,
-        },
-      },
+      ),
     )
 
     expect(requests).toEqual([
@@ -924,5 +930,33 @@ describe("deriveActionsToOrderRequests", () => {
         "buy",
       ),
     ).toBe(8)
+  })
+
+  it("fails with DeriveOrderMappingFailed when the ticker is missing", () => {
+    const result = Effect.runSync(
+      Effect.either(
+        deriveActionsToOrderRequests(
+          [
+            {
+              kind: "rebalance",
+              symbol: instrument,
+              signedNotionalDelta: 110,
+              leverage: 1,
+              leverageChanged: false,
+              positionKind: "option",
+              venue: "derive",
+            },
+          ],
+          {},
+          {},
+        ),
+      ),
+    )
+
+    expect(Either.isLeft(result)).toBe(true)
+    if (Either.isLeft(result)) {
+      expect(result.left._tag).toBe("DeriveOrderMappingFailed")
+      expect(result.left.reason).toContain("Missing Derive ticker")
+    }
   })
 })

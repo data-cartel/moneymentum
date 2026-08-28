@@ -7,6 +7,7 @@ import {
 } from "solid-js"
 import Decimal from "decimal.js"
 import * as Effect from "effect/Effect"
+import * as Either from "effect/Either"
 import {
   useHyperliquidAccountSummary,
   useHyperliquidPositions,
@@ -31,6 +32,7 @@ import {
   syncDeletedArchiveWithCurrent,
   targetAndArchiveAfterRebalance,
   targetTotalAfterExchangeMerge,
+  type DeriveRebalanceAction,
   type RebalanceAction,
 } from "./portfolioRebalancer"
 import { getErrorMessage, getExchangeErrorDetail } from "@/lib/error-message"
@@ -1050,7 +1052,10 @@ export const usePortfolioState = () => {
     const hyperliquidActions = allActions.filter(
       action => action.venue === "hyperliquid",
     )
-    const deriveActions = allActions.filter(action => action.venue === "derive")
+    const deriveActions = allActions.filter(
+      (action): action is DeriveRebalanceAction =>
+        action.venue === "derive" && action.kind !== "preciseRebalance",
+    )
 
     if (hyperliquidActions.length === 0 && deriveActions.length === 0) {
       return
@@ -1072,81 +1077,93 @@ export const usePortfolioState = () => {
 
     setIsRebalancingUi(true)
 
-    void (async () => {
-      const submittedOrders: OrderResult[] = []
-      const submittedActions: RebalanceAction[] = []
-      let failureMessage: string | undefined
+    const mutationEffect = <Value>(run: () => Promise<Value>) =>
+      Effect.tryPromise({
+        try: run,
+        catch: (cause: unknown) => cause,
+      })
 
-      if (hyperliquidActions.length > 0) {
-        try {
-          const orders = await rebalanceHyperliquidMutation.mutateAsync({
-            actions: hyperliquidActions,
-          })
-          submittedOrders.push(...orders)
-          submittedActions.push(...hyperliquidActions)
-        } catch (error) {
-          console.error(
-            "hyperliquid rebalance failed",
-            getExchangeErrorDetail(error),
+    void Effect.runPromise(
+      Effect.gen(function* () {
+        const submittedOrders: OrderResult[] = []
+        const submittedActions: RebalanceAction[] = []
+        let failureMessage: string | undefined
+
+        if (hyperliquidActions.length > 0) {
+          const hyperliquidResult = yield* Effect.either(
+            mutationEffect(() =>
+              rebalanceHyperliquidMutation.mutateAsync({
+                actions: hyperliquidActions,
+              }),
+            ),
           )
-          failureMessage = getErrorMessage(error)
-        }
-      }
-
-      if (deriveActions.length > 0 && failureMessage === undefined) {
-        try {
-          const credentials = deriveSession()
-          if (credentials === null) {
-            throw new Error("Unlock Derive before rebalancing Derive positions")
+          if (Either.isRight(hyperliquidResult)) {
+            submittedOrders.push(...hyperliquidResult.right)
+            submittedActions.push(...hyperliquidActions)
+          } else {
+            console.error(
+              "hyperliquid rebalance failed",
+              getExchangeErrorDetail(hyperliquidResult.left),
+            )
+            failureMessage = getErrorMessage(hyperliquidResult.left)
           }
+        }
+
+        if (deriveActions.length > 0 && failureMessage === undefined) {
+          const credentials = deriveSession()
           const symbols = [
             ...new Set(deriveActions.map(action => action.symbol)),
           ]
-          const tickers = await Effect.runPromise(
-            fetchDeriveTickers(credentials, symbols),
+          const deriveResult = yield* Effect.either(
+            Effect.gen(function* () {
+              const tickers = yield* fetchDeriveTickers(credentials, symbols)
+              const requests = yield* deriveActionsToOrderRequests(
+                deriveActions,
+                currentSnapshot,
+                tickers,
+              )
+              return yield* mutationEffect(() =>
+                rebalanceDeriveMutation.mutateAsync({
+                  requests,
+                }),
+              )
+            }),
           )
-          console.info("[derive] rebalance tickers", tickers)
-          const requests = deriveActionsToOrderRequests(
-            deriveActions,
-            currentSnapshot,
-            tickers,
+          if (Either.isRight(deriveResult)) {
+            submittedOrders.push(...deriveResult.right)
+            submittedActions.push(...deriveActions)
+          } else {
+            console.error(
+              "derive rebalance failed",
+              getExchangeErrorDetail(deriveResult.left),
+            )
+            failureMessage = getErrorMessage(deriveResult.left)
+          }
+        } else if (deriveActions.length > 0 && failureMessage !== undefined) {
+          toast.message(
+            `${String(deriveActions.length)} Derive action(s) skipped after Hyperliquid failure`,
           )
-          console.info("[derive] rebalance mapped requests", {
-            actions: deriveActions,
-            requests,
-          })
-          const orders = await rebalanceDeriveMutation.mutateAsync({
-            requests,
-          })
-          submittedOrders.push(...orders)
-          submittedActions.push(...deriveActions)
-        } catch (error) {
-          console.error(
-            "derive rebalance failed",
-            getExchangeErrorDetail(error),
-          )
-          failureMessage = getErrorMessage(error)
         }
-      } else if (deriveActions.length > 0 && failureMessage !== undefined) {
-        toast.message(
-          `${String(deriveActions.length)} Derive action(s) skipped after Hyperliquid failure`,
-        )
-      }
 
-      if (submittedOrders.length === 0) {
+        if (submittedOrders.length === 0) {
+          if (failureMessage !== undefined) {
+            toast.error(failureMessage)
+          }
+          setIsRebalancingUi(false)
+          return
+        }
+
         if (failureMessage !== undefined) {
           toast.error(failureMessage)
         }
-        setIsRebalancingUi(false)
-        return
-      }
 
-      if (failureMessage !== undefined) {
-        toast.error(failureMessage)
-      }
-
-      await finalizeRebalance(submittedOrders, submittedActions)
-    })()
+        // Continues the rebalance click-handler Effect after venue submissions.
+        // eslint-disable-next-line solid/reactivity
+        yield* mutationEffect(() =>
+          finalizeRebalance(submittedOrders, submittedActions),
+        )
+      }),
+    )
   }
 
   const canSubmit = () => {
