@@ -1162,7 +1162,19 @@ export class HyperliquidClient {
     console.log("rebalancePositions", actions)
     const allSymbols = [...new Set(actions.map(action => action.symbol))]
 
-    let step = "fetch_markets"
+    type RebalanceStep =
+      | "fetch_markets"
+      | "hydrate_markets"
+      | "set_leverage"
+      | "fetch_tickers_positions"
+      | "split_phases"
+      | "watch_orders_subscribe"
+      | "create_orders_reduction"
+      | "create_orders_expansion"
+      | "watch_orders"
+      | "fetch_orders_reconcile"
+
+    let step: RebalanceStep = "fetch_markets"
     try {
       const [backendMarkets, perpContexts] = await Promise.all([
         this.fetchMarketsCatalog(),
