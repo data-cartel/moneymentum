@@ -492,13 +492,13 @@ describe("useTrading hooks", () => {
   })
 
   describe("useWalletSettings", () => {
-    it("returns null data when not connected", () => {
+    it("returns disconnected venues when not connected", () => {
       const { result } = renderHook(() => useWalletSettings(), {
         wrapper: createWrapper(),
       })
 
-      expect(result.data()).toBeNull()
       expect(result.isConnected()).toBe(false)
+      expect(result.data().venues.every(venue => !venue.connected)).toBe(true)
     })
 
     it("returns wallet settings when connected", async () => {
@@ -514,7 +514,11 @@ describe("useTrading hooks", () => {
 
       await waitUntilWalletConnected(() => result.isConnected())
 
-      expect(result.data().accountAddress).toBe("0xMyAccountAddress")
+      const hyperliquid = result
+        .data()
+        .venues.find(venue => venue.id === "hyperliquid")
+      expect(hyperliquid?.connected).toBe(true)
+      expect(hyperliquid?.address).toBe("0xMyAccountAddress")
       expect(result.data().isTestnet).toBe(true)
     })
 

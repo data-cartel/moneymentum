@@ -19,6 +19,12 @@ import {
   WalletUnlockContextChanged,
 } from "@/services/wallet"
 import {
+  DeriveRpcError,
+  DeriveSessionKeyInvalid,
+  DeriveSessionMissing,
+  DeriveSubaccountMissing,
+} from "@/services/derive/index"
+import {
   ApproveAgentFailed,
   ReownWalletRejected,
   ReownWalletUnavailable,
@@ -74,6 +80,28 @@ describe("getErrorMessage", () => {
     )
     expect(getErrorMessage(failure)).toBe(
       "Failed to set leverage for BANANA/USDC:USDC: Cross margin is not allowed for this asset.",
+    )
+  })
+
+  it("unwraps a nested FiberFailure inside ExchangeRequestError", async () => {
+    const inner = await asFiberFailure(
+      new HttpStatusError({ status: 502, detail: "bad gateway from api" }),
+    )
+    const failure = await asFiberFailure(
+      new ExchangeRequestError({ cause: inner }),
+    )
+    expect(getErrorMessage(failure)).toBe("bad gateway from api")
+    expect(getExchangeErrorDetail(failure)).toBe("bad gateway from api")
+  })
+
+  it("does not surface Effect's opaque FiberFailure message", async () => {
+    const failure = await asFiberFailure(
+      new ExchangeRequestError({
+        cause: new Error("An error has occurred"),
+      }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "The exchange rejected the request. Please try again.",
     )
   })
 
@@ -145,6 +173,17 @@ describe("getErrorMessage", () => {
     )
   })
 
+  it("unwraps DeriveSessionKeyInvalid from WalletConnectError", async () => {
+    const failure = await asFiberFailure(
+      new WalletConnectError({
+        cause: new DeriveSessionKeyInvalid({ cause: new Error("bad key") }),
+      }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Invalid session private key. Paste a 0x-prefixed 32-byte hex key from derive.xyz Developers.",
+    )
+  })
+
   it.each([
     [
       new ApproveAgentFailed({ cause: new Error("approval rejected") }),
@@ -199,12 +238,19 @@ describe("getErrorMessage", () => {
     expect(getErrorMessage(failure)).toBe(expected)
   })
 
-  it("keeps the generic WalletConnectError message for other causes", async () => {
+  it("surfaces plain Error cause text from WalletConnectError", async () => {
     const failure = await asFiberFailure(
       new WalletConnectError({ cause: new Error("encrypt failed") }),
     )
+    expect(getErrorMessage(failure)).toBe("encrypt failed")
+  })
+
+  it("falls back when WalletConnectError cause has no message", async () => {
+    const failure = await asFiberFailure(
+      new WalletConnectError({ cause: new Error("") }),
+    )
     expect(getErrorMessage(failure)).toBe(
-      "Failed to connect Hyperliquid agent. Please try again.",
+      "Failed to connect wallet credentials. Please try again.",
     )
   })
 
@@ -214,5 +260,24 @@ describe("getErrorMessage", () => {
 
   it("stringifies unknown non-error values", () => {
     expect(getErrorMessage("weird")).toBe("weird")
+  })
+
+  it("maps DeriveRpcError to a provider message", async () => {
+    const failure = await asFiberFailure(
+      new DeriveRpcError({ code: 14021, message: "missing wallet header" }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Derive rejected the request: missing wallet header",
+    )
+  })
+
+  it("maps DeriveSessionMissing to a setup message", async () => {
+    const failure = await asFiberFailure(new DeriveSessionMissing())
+    expect(getErrorMessage(failure)).toContain("No Derive credentials")
+  })
+
+  it("maps DeriveSubaccountMissing to a subaccount selection message", async () => {
+    const failure = await asFiberFailure(new DeriveSubaccountMissing())
+    expect(getErrorMessage(failure)).toContain("Select a Derive subaccount")
   })
 })
