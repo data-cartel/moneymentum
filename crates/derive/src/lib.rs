@@ -315,10 +315,15 @@ struct OptionsCatalogue {
     expiry_unix_sorted_asc: Vec<i64>,
 }
 
+#[derive(Clone)]
+struct SharedActiveOptions {
+    asset: String,
+    catalogue: OptionsCatalogue,
+}
+
 struct DeriveState {
     assets: Vec<String>,
-    active_asset: Arc<RwLock<String>>,
-    catalogue: Arc<RwLock<OptionsCatalogue>>,
+    active: Arc<RwLock<SharedActiveOptions>>,
     snapshot: Arc<RwLock<OptionsSnapshot>>,
     tx: broadcast::Sender<OptionsSnapshot>,
     command_tx: mpsc::Sender<HubCommand>,
@@ -983,8 +988,7 @@ async fn apply_tab_switch(
 struct OptionsHub {
     http: Client,
     rest_base_url: Url,
-    shared_catalogue: Arc<RwLock<OptionsCatalogue>>,
-    shared_asset: Arc<RwLock<String>>,
+    shared_active: Arc<RwLock<SharedActiveOptions>>,
     snapshot: Arc<RwLock<OptionsSnapshot>>,
     broadcast_tx: broadcast::Sender<OptionsSnapshot>,
 }
@@ -1006,6 +1010,13 @@ struct WsSession<'session> {
 enum SessionControl {
     Continue,
     Reconnect,
+}
+
+async fn publish_shared_active(hub: &OptionsHub, runtime: &HubRuntime) {
+    *hub.shared_active.write().await = SharedActiveOptions {
+        asset: runtime.asset.clone(),
+        catalogue: runtime.catalogue.clone(),
+    };
 }
 
 async fn resubscribe_active_tab(
@@ -1103,9 +1114,8 @@ async fn handle_set_asset(
     };
 
     runtime.catalogue = next_catalogue;
-    *hub.shared_catalogue.write().await = runtime.catalogue.clone();
     runtime.asset = next_asset;
-    *hub.shared_asset.write().await = runtime.asset.clone();
+    publish_shared_active(hub, runtime).await;
     runtime.active_expiry_unix = next_expiry_unix;
 
     if let Err(error) = resubscribe_active_tab(session, hub, runtime).await {
@@ -1177,7 +1187,7 @@ async fn handle_catalogue_refresh(
     };
 
     runtime.catalogue = next_catalogue;
-    *hub.shared_catalogue.write().await = runtime.catalogue.clone();
+    publish_shared_active(hub, runtime).await;
     runtime.active_expiry_unix = next_active;
 
     if let Err(error) = resubscribe_active_tab(session, hub, runtime).await {
@@ -1265,7 +1275,7 @@ async fn run_websocket_hub(
         quote_map: HashMap::new(),
         active_expiry_unix: initial_expiry_unix,
         asset: initial_asset,
-        catalogue: hub.shared_catalogue.read().await.clone(),
+        catalogue: hub.shared_active.read().await.catalogue.clone(),
     };
 
     let mut refresh = tokio::time::interval(CATALOGUE_REFRESH_INTERVAL);
@@ -1367,9 +1377,12 @@ async fn get_bootstrap(
     Query(query): Query<NetworkQuery>,
 ) -> Json<OptionsBootstrap> {
     let state = networks.for_network(query.network);
-    let asset = state.active_asset.read().await.clone();
-    let catalogue = state.catalogue.read().await;
-    Json(build_bootstrap(&catalogue, asset.as_str(), &state.assets))
+    let active = state.active.read().await;
+    Json(build_bootstrap(
+        &active.catalogue,
+        active.asset.as_str(),
+        &state.assets,
+    ))
 }
 
 async fn get_snapshot(
@@ -1419,11 +1432,15 @@ async fn post_active_expiry(
     Json(body): Json<ActiveExpiryBody>,
 ) -> Result<StatusCode, StatusCode> {
     let state = networks.for_network(query.network);
-    let catalogue = state.catalogue.read().await;
-    if !catalogue.expiry_unix_sorted_asc.contains(&body.expiry_unix) {
+    let active = state.active.read().await;
+    if !active
+        .catalogue
+        .expiry_unix_sorted_asc
+        .contains(&body.expiry_unix)
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
-    drop(catalogue);
+    drop(active);
     state
         .command_tx
         .send(HubCommand::SetExpiry(body.expiry_unix))
@@ -1492,13 +1509,14 @@ async fn spawn_options_hub(
     let snapshot = Arc::new(RwLock::new(empty_snapshot));
     let (broadcast_tx, _) = broadcast::channel(2048);
     let (command_tx, command_rx) = mpsc::channel::<HubCommand>(32);
-    let shared_catalogue = Arc::new(RwLock::new(catalogue));
-    let shared_asset = Arc::new(RwLock::new(default_asset.clone()));
+    let shared_active = Arc::new(RwLock::new(SharedActiveOptions {
+        asset: default_asset.clone(),
+        catalogue,
+    }));
 
     let state = Arc::new(DeriveState {
         assets,
-        active_asset: Arc::clone(&shared_asset),
-        catalogue: Arc::clone(&shared_catalogue),
+        active: Arc::clone(&shared_active),
         snapshot: Arc::clone(&snapshot),
         tx: broadcast_tx.clone(),
         command_tx,
@@ -1512,8 +1530,7 @@ async fn spawn_options_hub(
             OptionsHub {
                 http: http_for_task,
                 rest_base_url,
-                shared_catalogue,
-                shared_asset,
+                shared_active,
                 snapshot: snapshot_for_task,
                 broadcast_tx,
             },
