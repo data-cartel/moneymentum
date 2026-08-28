@@ -994,24 +994,42 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
 }
 
 /// Mounts Derive options routes when configured; otherwise returns `router` unchanged.
+/// Discovery and catalogue fetches are bounded so a hung Derive API cannot
+/// block listener bind or `/health`.
+const DERIVE_OPTIONS_STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 async fn mount_derive_options_routes(
     router: Router,
     derive_config: Option<derive::DeriveConfig>,
 ) -> Router {
     match derive_config {
-        Some(derive_config) => match derive::derive_options_router(derive_config).await {
-            Ok(options_router) => {
-                info!("derive options routes mounted");
-                router.merge(options_router)
+        Some(derive_config) => {
+            match tokio::time::timeout(
+                DERIVE_OPTIONS_STARTUP_TIMEOUT,
+                derive::derive_options_router(derive_config),
+            )
+            .await
+            {
+                Ok(Ok(options_router)) => {
+                    info!("derive options routes mounted");
+                    router.merge(options_router)
+                }
+                Ok(Err(error)) => {
+                    error!(
+                        error = %error,
+                        "derive options hub failed to start; serving without options routes"
+                    );
+                    router
+                }
+                Err(_) => {
+                    error!(
+                        timeout_secs = DERIVE_OPTIONS_STARTUP_TIMEOUT.as_secs(),
+                        "derive options hub startup timed out; serving without options routes"
+                    );
+                    router
+                }
             }
-            Err(error) => {
-                error!(
-                    error = %error,
-                    "derive options hub failed to start; serving without options routes"
-                );
-                router
-            }
-        },
+        }
         None => router,
     }
 }
