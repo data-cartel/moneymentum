@@ -258,6 +258,21 @@ describe("getErrorMessage", () => {
     expect(getErrorMessage(new Error("boom"))).toBe("boom")
   })
 
+  it("does not surface Effect's opaque FiberFailure message from a plain Error", () => {
+    expect(getErrorMessage(new Error("An error has occurred"))).toBe(
+      "Something went wrong. Please try again.",
+    )
+  })
+
+  it("does not surface opaque FiberFailure text from WalletConnectError cause", async () => {
+    const failure = await asFiberFailure(
+      new WalletConnectError({ cause: new Error("An error has occurred") }),
+    )
+    expect(getErrorMessage(failure)).toBe(
+      "Failed to connect wallet credentials. Please try again.",
+    )
+  })
+
   it("stringifies unknown non-error values", () => {
     expect(getErrorMessage("weird")).toBe("weird")
   })

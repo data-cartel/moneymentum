@@ -20,7 +20,10 @@ export const getErrorMessage = (error: unknown): string => {
 
   if (unwrapped instanceof Error) {
     const message = unwrapped.message.trim()
-    if (message.length > 0 && message !== FIBER_FAILURE_OPAQUE_MESSAGE) {
+    if (message === FIBER_FAILURE_OPAQUE_MESSAGE) {
+      return GENERIC_ERROR_MESSAGE
+    }
+    if (message.length > 0) {
       return message
     }
   }
@@ -33,6 +36,9 @@ const EXCHANGE_REJECTED_MESSAGE =
 
 /** Effect FiberFailure's generic `Error.message` when the Cause is not unwrapped. */
 const FIBER_FAILURE_OPAQUE_MESSAGE = "An error has occurred"
+
+/** Stable UI fallback when the only available text is Effect's opaque FiberFailure. */
+const GENERIC_ERROR_MESSAGE = "Something went wrong. Please try again."
 
 /** Readable text from an ExchangeRequestError cause, or null if unusable. */
 const messageFromExchangeCause = (cause: unknown): string | null => {
@@ -165,7 +171,7 @@ const messageForTag = (error: TaggedError): string | null => {
       }
       if (cause instanceof Error) {
         const message = cause.message.trim()
-        if (message.length > 0) {
+        if (message.length > 0 && message !== FIBER_FAILURE_OPAQUE_MESSAGE) {
           return message
         }
       }
