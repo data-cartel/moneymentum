@@ -7,6 +7,8 @@ import { PositionsPanelRow } from "./PositionsPanelRow"
 const portfolioPosition = () => ({
   symbol: "ETH/USDC:USDC",
   side: "buy" as const,
+  kind: "perp" as const,
+  venue: "hyperliquid" as const,
   leverage: 2,
   notional: 500,
 })
