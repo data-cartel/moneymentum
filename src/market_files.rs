@@ -13,7 +13,7 @@ use polars::prelude::{DataFrame, NamedFrom, Series};
 use tracing::{debug, warn};
 
 use crate::dataframe::{self, DataFrameError};
-use crate::derive_markets::{DeriveInstrument, DeriveInstrumentType, Strike};
+use crate::derive_markets::{DeriveInstrument, Strike};
 use crate::hyperliquid::HyperliquidNetwork;
 use crate::market_metadata::MarketMetadata;
 
@@ -149,6 +149,7 @@ pub(crate) async fn persist_derive_markets(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::derive_markets::DeriveInstrumentType;
     use crate::finance::Market;
     use crate::market_metadata::MarketMetadata;
     use tempfile::TempDir;
@@ -224,7 +225,7 @@ mod tests {
         assert!(contents.contains(
             "instrument_name,instrument_type,base_currency,quote_currency,is_active,option_type,strike,expiry_unix"
         ));
-        assert!(contents.contains("ETH-20260829-2000-C,option,ETH,USDC,true,C,2000,1788000000"));
+        assert!(contents.contains("ETH-20260829-2000-C,option,ETH,USDC,true,C,2000.0,1788000000"));
         assert!(!contents.contains("max_leverage"));
     }
 }

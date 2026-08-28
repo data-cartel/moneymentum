@@ -93,7 +93,7 @@ pub(crate) struct DeriveInstrument {
 }
 
 /// `GET /derive/markets` response shape for the test page.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeriveMarketsApiResponse {
     pub(crate) tickers: Vec<String>,
