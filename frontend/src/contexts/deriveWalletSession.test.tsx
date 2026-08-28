@@ -79,11 +79,13 @@ describe("Derive encrypted session via WalletProvider", () => {
     )
     expect(result.deriveCredentials()?.subaccountId).toBe(42)
     expect(result.deriveCredentials()?.networkMode).toBe("testnet")
+    expect(result.storedDeriveWallet()).toBe(DERIVE_WALLET)
     expect(localStorage.getItem(DERIVE_WALLET_STORAGE_KEY)).not.toBeNull()
 
     const reloaded = renderHook(() => useWallet(), { wrapper }).result
     expect(reloaded.isDeriveConnected()).toBe(true)
     expect(reloaded.isDeriveLocked()).toBe(true)
+    expect(reloaded.storedDeriveWallet()).toBe(DERIVE_WALLET)
 
     await Effect.runPromise(reloaded.unlock(TEST_PIN))
     expect(reloaded.isDeriveLocked()).toBe(false)
@@ -134,5 +136,6 @@ describe("Derive encrypted session via WalletProvider", () => {
     expect(result.isDeriveConnected()).toBe(false)
     expect(result.deriveCredentials()).toBeNull()
     expect(localStorage.getItem(DERIVE_WALLET_STORAGE_KEY)).toBeNull()
+    expect(result.storedDeriveWallet()).toBeNull()
   })
 })

@@ -148,6 +148,9 @@ export const WalletProvider = (props: ParentProps) => {
   const [hasStoredDeriveSession, setHasStoredDeriveSession] = createSignal(
     storedDeriveSession !== null,
   )
+  const [storedDeriveWallet, setStoredDeriveWallet] = createSignal<
+    string | null
+  >(storedDeriveSession?.deriveWallet ?? null)
   const [deriveSessionNetworkMode, setDeriveSessionNetworkMode] =
     createSignal<NetworkMode | null>(storedDeriveSession?.networkMode ?? null)
   const [hasVerifiedSessionPin, setHasVerifiedSessionPin] = createSignal(false)
@@ -194,6 +197,7 @@ export const WalletProvider = (props: ParentProps) => {
     setHasStoredSession(getStoredEncryptedSession() !== null)
     const deriveSession = getStoredEncryptedDeriveSession()
     setHasStoredDeriveSession(deriveSession !== null)
+    setStoredDeriveWallet(deriveSession?.deriveWallet ?? null)
     setDeriveSessionNetworkMode(deriveSession?.networkMode ?? null)
   }
 
@@ -938,6 +942,7 @@ export const WalletProvider = (props: ParentProps) => {
         isDeriveLocked,
         hasStoredSession,
         hasStoredDeriveSession,
+        storedDeriveWallet,
         hasVerifiedSessionPin,
         canTrade,
         client,

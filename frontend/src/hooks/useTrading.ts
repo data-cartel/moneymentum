@@ -2,7 +2,6 @@ import * as Effect from "effect/Effect"
 import { createMemo } from "solid-js"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/solid-query"
 import { useWallet } from "./useWallet"
-import { getStoredEncryptedDeriveSession } from "@/contexts/wallet-context"
 import type {
   OrderResult,
   CurrentPosition,
@@ -273,6 +272,7 @@ export const useWalletSettings = () => {
     credentials,
     mainAddress,
     deriveCredentials,
+    storedDeriveWallet,
     networkMode,
     isConnected,
     isHyperliquidConnected,
@@ -289,9 +289,7 @@ export const useWalletSettings = () => {
     const hyperliquidAddress =
       credentials()?.accountAddress ?? mainAddress() ?? null
     const deriveAddress =
-      deriveCredentials()?.deriveWallet ??
-      getStoredEncryptedDeriveSession()?.deriveWallet ??
-      null
+      deriveCredentials()?.deriveWallet ?? storedDeriveWallet()
 
     return {
       isTestnet: networkMode() === "testnet",

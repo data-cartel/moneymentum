@@ -59,6 +59,8 @@ export interface WalletContextType {
   hasStoredSession: Accessor<boolean>
   /** True when an encrypted Derive session is stored. */
   hasStoredDeriveSession: Accessor<boolean>
+  /** Public Derive smart-contract wallet from the stored session, if any. */
+  storedDeriveWallet: Accessor<string | null>
   /**
    * True when the agent private key is unlocked in memory and the lazily loaded
    * Hyperliquid client is available (can submit trades).
