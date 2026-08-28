@@ -452,7 +452,7 @@ export const useCancelDeriveOrder = () => {
   }))
 }
 
-export const useFullHyperliquidRefresh = () => {
+export const useFullVenueRefresh = () => {
   const queryClient = useQueryClient()
 
   return () => {
