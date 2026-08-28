@@ -68,19 +68,19 @@ pub(crate) async fn write_derive_markets(
     path: PathBuf,
     instruments: &[DeriveInstrument],
 ) -> Result<(), DataFrameError> {
-    let names: Vec<String> = instruments
+    let instrument_names: Vec<String> = instruments
         .iter()
         .map(|instrument| instrument.instrument_name.clone())
         .collect();
-    let types: Vec<String> = instruments
+    let instrument_types: Vec<String> = instruments
         .iter()
         .map(|instrument| instrument.instrument_type.as_str().to_string())
         .collect();
-    let bases: Vec<String> = instruments
+    let base_currencies: Vec<String> = instruments
         .iter()
         .map(|instrument| instrument.base_currency.clone())
         .collect();
-    let quotes: Vec<String> = instruments
+    let quote_currencies: Vec<String> = instruments
         .iter()
         .map(|instrument| instrument.quote_currency.clone())
         .collect();
@@ -101,20 +101,20 @@ pub(crate) async fn write_derive_markets(
         .iter()
         .map(|instrument| instrument.strike.map(Strike::get))
         .collect();
-    let expiries: Vec<Option<i64>> = instruments
+    let expiry_unix_values: Vec<Option<i64>> = instruments
         .iter()
         .map(|instrument| instrument.expiry_unix)
         .collect();
 
     let dataframe = DataFrame::new(vec![
-        Series::new("instrument_name".into(), names).into(),
-        Series::new("instrument_type".into(), types).into(),
-        Series::new("base_currency".into(), bases).into(),
-        Series::new("quote_currency".into(), quotes).into(),
+        Series::new("instrument_name".into(), instrument_names).into(),
+        Series::new("instrument_type".into(), instrument_types).into(),
+        Series::new("base_currency".into(), base_currencies).into(),
+        Series::new("quote_currency".into(), quote_currencies).into(),
         Series::new("is_active".into(), active).into(),
         Series::new("option_type".into(), option_types).into(),
         Series::new("strike".into(), strikes).into(),
-        Series::new("expiry_unix".into(), expiries).into(),
+        Series::new("expiry_unix".into(), expiry_unix_values).into(),
     ])?;
 
     dataframe::write_csv(path.clone(), dataframe).await?;
