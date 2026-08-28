@@ -32,7 +32,15 @@ import {
   syncDeletedArchiveWithCurrent,
   targetAndArchiveAfterRebalance,
   targetTotalAfterExchangeMerge,
+  isOptionPosition,
+  isPerpPosition,
+  MIN_USD,
   type DeriveRebalanceAction,
+  type OptionPortfolioPosition,
+  type PerpPortfolioPosition,
+  type PortfolioInterface,
+  type PortfolioPositionKind,
+  type PortfolioVenue,
   type RebalanceAction,
 } from "./portfolioRebalancer"
 import { getErrorMessage, getExchangeErrorDetail } from "@/lib/error-message"
@@ -45,7 +53,16 @@ import {
 import { useWallet } from "@/hooks/useWallet"
 import { createStore, produce, reconcile } from "solid-js/store"
 
-export const MIN_USD = 11
+export {
+  isOptionPosition,
+  isPerpPosition,
+  MIN_USD,
+  type OptionPortfolioPosition,
+  type PerpPortfolioPosition,
+  type PortfolioInterface,
+  type PortfolioPositionKind,
+  type PortfolioVenue,
+}
 
 /**
  * Target allocation band for submit + the under/over-100% alerts.
@@ -97,42 +114,6 @@ export const writeManualWeightEntry = (isManualWeightEntry: boolean): void => {
 const MAX_CROSS_ACCOUNT_LEVERAGE = 5
 const DEFAULT_CROSS_ACCOUNT_LEVERAGE = 1
 const POSITION_CLOSE_EPSILON = 0.01
-
-export type PortfolioPositionKind = "perp" | "option"
-export type PortfolioVenue = "hyperliquid" | "derive"
-
-/** Hyperliquid or Derive perp row in the unified portfolio model. */
-export interface PerpPortfolioPosition {
-  kind: "perp"
-  venue: PortfolioVenue
-  symbol: string
-  side: OrderSide
-  leverage: number
-  notional: number
-}
-
-/**
- * Derive option row. Notional is premium USD (`contracts * mark` at fetch /
- * `contracts * limit` when staging); contracts are derived at order time as
- * `notional / price`.
- */
-export interface OptionPortfolioPosition {
-  kind: "option"
-  venue: "derive"
-  symbol: string
-  side: OrderSide
-  notional: number
-}
-
-export type PortfolioInterface = PerpPortfolioPosition | OptionPortfolioPosition
-
-export const isPerpPosition = (
-  position: PortfolioInterface,
-): position is PerpPortfolioPosition => position.kind === "perp"
-
-export const isOptionPosition = (
-  position: PortfolioInterface,
-): position is OptionPortfolioPosition => position.kind === "option"
 
 export interface StagedTradeItem {
   underlying: string

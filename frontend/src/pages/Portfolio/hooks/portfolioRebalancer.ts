@@ -8,13 +8,43 @@ import type {
   DeriveTickerQuote,
 } from "@/services/derive/index"
 
-import {
-  isPerpPosition,
-  MIN_USD,
-  type PortfolioInterface,
-  type PortfolioPositionKind,
-  type PortfolioVenue,
-} from "@/pages/Portfolio/hooks/usePortfolioState"
+export const MIN_USD = 11
+
+export type PortfolioPositionKind = "perp" | "option"
+export type PortfolioVenue = "hyperliquid" | "derive"
+
+/** Hyperliquid or Derive perp row in the unified portfolio model. */
+export interface PerpPortfolioPosition {
+  kind: "perp"
+  venue: PortfolioVenue
+  symbol: string
+  side: OrderSide
+  leverage: number
+  notional: number
+}
+
+/**
+ * Derive option row. Notional is premium USD (`contracts * mark` at fetch /
+ * `contracts * limit` when staging); contracts are derived at order time as
+ * `notional / price`.
+ */
+export interface OptionPortfolioPosition {
+  kind: "option"
+  venue: "derive"
+  symbol: string
+  side: OrderSide
+  notional: number
+}
+
+export type PortfolioInterface = PerpPortfolioPosition | OptionPortfolioPosition
+
+export const isPerpPosition = (
+  position: PortfolioInterface,
+): position is PerpPortfolioPosition => position.kind === "perp"
+
+export const isOptionPosition = (
+  position: PortfolioInterface,
+): position is OptionPortfolioPosition => position.kind === "option"
 
 /** Accepted on the venue: filled, still resting (working), or watch timed out. */
 const orderAcceptedOnExchange = (order: OrderResult): boolean =>
