@@ -45,6 +45,8 @@ pub(crate) enum DeriveMarketsError {
     InvalidOptionType { option_type: String },
     #[error("failed to parse derive strike: {strike}")]
     InvalidStrike { strike: String },
+    #[error("derive expiry {expiry} does not fit i64")]
+    InvalidExpiry { expiry: u64 },
 }
 
 /// Option vs perpetual, matching Derive's `instrument_type` wire values.
@@ -351,7 +353,11 @@ impl TryFrom<RawInstrument> for DeriveInstrument {
                 (
                     Some(option_type),
                     Some(Strike::parse(&details.strike)?),
-                    i64::try_from(details.expiry).ok(),
+                    Some(i64::try_from(details.expiry).map_err(|_| {
+                        DeriveMarketsError::InvalidExpiry {
+                            expiry: details.expiry,
+                        }
+                    })?),
                 )
             }
             None => (None, None, None),
@@ -459,5 +465,19 @@ mod tests {
 
         let error = DeriveInstrument::try_from(raw).unwrap_err();
         assert!(matches!(error, DeriveMarketsError::InvalidStrike { .. }));
+    }
+
+    #[test]
+    fn try_from_rejects_expiry_that_does_not_fit_i64() {
+        let mut raw = sample_raw_option();
+        if let Some(details) = raw.option_details.as_mut() {
+            details.expiry = u64::MAX;
+        }
+
+        let error = DeriveInstrument::try_from(raw).unwrap_err();
+        assert!(matches!(
+            error,
+            DeriveMarketsError::InvalidExpiry { expiry: u64::MAX }
+        ));
     }
 }
