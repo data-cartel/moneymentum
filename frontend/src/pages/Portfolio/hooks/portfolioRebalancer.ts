@@ -611,17 +611,14 @@ const requireDeriveTicker = (
   symbol: string,
   actionLabel: string,
 ): Effect.Effect<DeriveTickerQuote, DeriveOrderMappingFailed> => {
-  const entry = Object.entries(tickers).find(
-    ([tickerSymbol]) => tickerSymbol === symbol,
-  )
-  if (entry === undefined) {
+  if (!(symbol in tickers)) {
     return Effect.fail(
       new DeriveOrderMappingFailed({
         reason: `Missing Derive ticker for ${actionLabel} of ${symbol}`,
       }),
     )
   }
-  return Effect.succeed(entry[1])
+  return Effect.succeed(tickers[symbol])
 }
 
 /**
