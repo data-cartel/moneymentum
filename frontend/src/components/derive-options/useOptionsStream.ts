@@ -8,8 +8,10 @@ import {
 } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import * as Effect from "effect/Effect"
+import * as Either from "effect/Either"
 
 import type { NetworkMode } from "@/contexts/wallet-context"
+import { getErrorMessage } from "@/lib/error-message"
 import { NetworkError } from "@/lib/http"
 import * as deriveService from "@/services/derive/options"
 
@@ -126,28 +128,36 @@ export const useOptionsStream = (
   const postActiveExpiry = (
     expiryUnix: ExpiryUnix,
     signal?: AbortSignal,
-  ): Promise<void> =>
-    Effect.runPromise(
-      deriveService.postActiveExpiry(
-        deriveBaseUrl,
-        networkMode(),
-        expiryUnix,
-        signal,
-      ),
-    )
+  ): Effect.Effect<void, string> =>
+    deriveService
+      .postActiveExpiry(deriveBaseUrl, networkMode(), expiryUnix, signal)
+      .pipe(
+        Effect.catchTag("NetworkError", error =>
+          isAbortError(error)
+            ? Effect.void
+            : Effect.fail(getErrorMessage(error)),
+        ),
+        Effect.catchTag("HttpStatusError", error =>
+          Effect.fail(getErrorMessage(error)),
+        ),
+      )
 
   const postActiveAsset = (
     asset: string,
     signal?: AbortSignal,
-  ): Promise<void> =>
-    Effect.runPromise(
-      deriveService.postActiveAsset(
-        deriveBaseUrl,
-        networkMode(),
-        asset,
-        signal,
-      ),
-    )
+  ): Effect.Effect<void, string> =>
+    deriveService
+      .postActiveAsset(deriveBaseUrl, networkMode(), asset, signal)
+      .pipe(
+        Effect.catchTag("NetworkError", error =>
+          isAbortError(error)
+            ? Effect.void
+            : Effect.fail(getErrorMessage(error)),
+        ),
+        Effect.catchTag("HttpStatusError", error =>
+          Effect.fail(getErrorMessage(error)),
+        ),
+      )
 
   const clearQuotesForPendingSwitch = (
     nextExpiryUnix: ExpiryUnix | null,
@@ -193,20 +203,20 @@ export const useOptionsStream = (
     clearQuotesForPendingSwitch(expiryUnix, null)
     selectionBridge.clear()
 
-    void postActiveExpiry(expiryUnix, controller.signal)
-      .then(() => {
-        setErrorMessage(null)
-      })
-      .catch((error: unknown) => {
-        if (isAbortError(error)) {
-          return
-        }
-        expirySwitchInFlightRef.blockStreamUntilExpiryUnix = null
-        setSelectedExpiryUnix(previousExpiryUnix)
-        setErrorMessage(
-          error instanceof Error ? error.message : "Expiry tab switch failed",
-        )
-      })
+    void Effect.runPromise(
+      postActiveExpiry(expiryUnix, controller.signal).pipe(
+        Effect.match({
+          onFailure: message => {
+            expirySwitchInFlightRef.blockStreamUntilExpiryUnix = null
+            setSelectedExpiryUnix(previousExpiryUnix)
+            setErrorMessage(message)
+          },
+          onSuccess: () => {
+            setErrorMessage(null)
+          },
+        }),
+      ),
+    )
   }
 
   const switchAssetTab = (asset: string): void => {
@@ -235,22 +245,22 @@ export const useOptionsStream = (
     clearQuotesForPendingSwitch(null, asset)
     setIsLoading(true)
 
-    void postActiveAsset(asset, controller.signal)
-      .then(() => {
-        setErrorMessage(null)
-      })
-      .catch((error: unknown) => {
-        if (isAbortError(error)) {
-          return
-        }
-        assetSwitchInFlightRef.blockStreamUntilAsset = null
-        setSelectedAsset(previousAsset)
-        setSelectedExpiryUnix(previousExpiryUnix)
-        setIsLoading(false)
-        setErrorMessage(
-          error instanceof Error ? error.message : "Asset switch failed",
-        )
-      })
+    void Effect.runPromise(
+      postActiveAsset(asset, controller.signal).pipe(
+        Effect.match({
+          onFailure: message => {
+            assetSwitchInFlightRef.blockStreamUntilAsset = null
+            setSelectedAsset(previousAsset)
+            setSelectedExpiryUnix(previousExpiryUnix)
+            setIsLoading(false)
+            setErrorMessage(message)
+          },
+          onSuccess: () => {
+            setErrorMessage(null)
+          },
+        }),
+      ),
+    )
   }
 
   const loadSnapshot = (signal?: AbortSignal): Promise<OptionsSnapshot> =>
@@ -371,7 +381,16 @@ export const useOptionsStream = (
         setSelectedAsset(boot.asset)
         const defaultUnix = boot.default_expiry_unix
         setSelectedExpiryUnix(defaultUnix)
-        await postActiveExpiry(defaultUnix, controller.signal)
+        const postedExpiry = await Effect.runPromise(
+          Effect.either(postActiveExpiry(defaultUnix, controller.signal)),
+        )
+        if (Either.isLeft(postedExpiry)) {
+          if (mountGeneration.value !== claim) {
+            return
+          }
+          setErrorMessage(postedExpiry.left)
+          return
+        }
         if (mountGeneration.value !== claim) {
           return
         }
