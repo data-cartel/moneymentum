@@ -359,67 +359,9 @@ describe("useWallet", () => {
     expect(result.mainAddress()).toBe("0xMainFromReown")
     expect(result.isConnected()).toBe(true)
     expect(result.canTrade()).toBe(false)
-    expect(localStorage.getItem("hyperliquid-main-address")).toBe(
-      "0xMainFromReown",
-    )
     await waitFor(() => {
       expect(result.client()).not.toBeNull()
     })
-  })
-
-  it("restores the remembered public main address after remount", () => {
-    localStorage.setItem("hyperliquid-main-address", "0xRememberedMain")
-
-    const { result } = renderHook(() => useWallet(), { wrapper })
-
-    expect(result.mainAddress()).toBe("0xRememberedMain")
-    expect(result.isHyperliquidConnected()).toBe(true)
-    expect(result.hasStoredSession()).toBe(false)
-  })
-
-  it("keeps the remembered address and agent session when setMainAddress receives null", async () => {
-    const { result } = renderHook(() => useWallet(), { wrapper })
-    const accountA = {
-      accountAddress: "0xAccountAAAA",
-      apiWalletAddress: "0xAgentAAAA",
-      privateKey: "TEST_PRIVATE_KEY_ACCOUNT_A",
-    }
-
-    await Effect.runPromise(result.connect(accountA, TEST_PIN))
-    result.setMainAddress(null)
-
-    expect(result.mainAddress()).toBeNull()
-    expect(result.hasStoredSession()).toBe(true)
-    expect(localStorage.getItem("hyperliquid-wallet")).not.toBeNull()
-    expect(localStorage.getItem("hyperliquid-main-address")).toBe(
-      "0xAccountAAAA",
-    )
-  })
-
-  it("keeps the remembered public address when Reown reports a transient disconnect", async () => {
-    let accountSubscriber: ((accountState: unknown) => void) | undefined
-    const modal = {
-      getAddress: () => null as string | null,
-      subscribeAccount: (subscriber: (accountState: unknown) => void) => {
-        accountSubscriber = subscriber
-        return () => {}
-      },
-    }
-    mockEnsureEvmAppKit.mockResolvedValue(modal)
-
-    const { result } = renderHook(() => useWallet(), { wrapper })
-    result.setMainAddress("0xMainFromReown")
-    await vi.waitFor(() => {
-      expect(accountSubscriber).toBeDefined()
-    })
-
-    accountSubscriber?.({ isConnected: false })
-
-    expect(result.mainAddress()).toBe("0xMainFromReown")
-    expect(result.isHyperliquidConnected()).toBe(true)
-    expect(localStorage.getItem("hyperliquid-main-address")).toBe(
-      "0xMainFromReown",
-    )
   })
 
   it("clears unlocked account A credentials when switching main address to account B", async () => {

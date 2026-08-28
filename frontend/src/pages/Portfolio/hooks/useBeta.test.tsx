@@ -22,16 +22,12 @@ const createWrapper = () => {
 
 const targetPortfolio = (): Record<string, PortfolioInterface | undefined> => ({
   "BTC/USDC:USDC": {
-    kind: "perp",
-    venue: "hyperliquid",
     symbol: "BTC/USDC:USDC",
     side: "buy",
     leverage: 1,
     notional: 60,
   },
   "ETH/USDC:USDC": {
-    kind: "perp",
-    venue: "hyperliquid",
     symbol: "ETH/USDC:USDC",
     side: "buy",
     leverage: 1,

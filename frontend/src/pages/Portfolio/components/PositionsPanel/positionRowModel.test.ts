@@ -11,8 +11,6 @@ import {
 const btcPosition = (
   overrides: Partial<PortfolioInterface> = {},
 ): PortfolioInterface => ({
-  kind: "perp",
-  venue: "hyperliquid",
   symbol: "BTC/USDC:USDC",
   side: "buy",
   leverage: 1,

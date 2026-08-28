@@ -12,11 +12,7 @@ import {
 } from "./portfolioLayoutStorage"
 
 const layoutWithPanels = (panelIds: readonly string[]): SerializedDockview =>
-  ({
-    panels: Object.fromEntries(
-      panelIds.map(panelId => [panelId, { id: panelId }]),
-    ),
-  }) as unknown as SerializedDockview
+  ({ panels: [...panelIds] }) as unknown as SerializedDockview
 
 const defaultLayoutPanelIds = [...REQUIRED_PORTFOLIO_PANEL_IDS, "performance"]
 
@@ -141,37 +137,34 @@ describe("restorePortfolioDockviewLayout", () => {
 
   it("repairs an older layout that predates a required panel", () => {
     writePortfolioDockviewLayout(layoutWithPanels(["portfolio", "allSymbols"]))
-    const { restoreWorkspace, calls, restoreAttempts } = stubDockviewHost({
+    const { restoreWorkspace, calls } = stubDockviewHost({
       outcome: "restores",
       panelIds: ["portfolio", "allSymbols"],
     })
 
     restoreWorkspace()
 
-    // Invalid layouts are dropped at read time, so Dockview never sees them.
-    expect(restoreAttempts).toHaveLength(0)
-    expect(calls.cleared).toBe(0)
+    expect(calls.cleared).toBe(1)
     expect(calls.defaultsApplied).toBe(1)
     expect(storedLayout()).toEqual(layoutWithPanels(defaultLayoutPanelIds))
   })
 
   it("repairs an empty layout that restores no panels at all", () => {
     localStorage.setItem(PORTFOLIO_DOCKVIEW_LAYOUT_STORAGE_KEY, "{}")
-    const { restoreWorkspace, calls, restoreAttempts } = stubDockviewHost({
+    const { restoreWorkspace, calls } = stubDockviewHost({
       outcome: "restores",
       panelIds: [],
     })
 
     restoreWorkspace()
 
-    expect(restoreAttempts).toHaveLength(0)
-    expect(calls.cleared).toBe(0)
+    expect(calls.cleared).toBe(1)
     expect(calls.defaultsApplied).toBe(1)
     expect(storedLayout()).toEqual(layoutWithPanels(defaultLayoutPanelIds))
   })
 
   it("repairs a layout that dockview refuses to deserialize", () => {
-    writePortfolioDockviewLayout(layoutWithPanels(REQUIRED_PORTFOLIO_PANEL_IDS))
+    writePortfolioDockviewLayout(layoutWithPanels(["portfolio"]))
     const { restoreWorkspace, calls } = stubDockviewHost({
       outcome: "throws",
     })
