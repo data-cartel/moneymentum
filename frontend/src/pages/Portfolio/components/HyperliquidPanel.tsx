@@ -108,7 +108,7 @@ export const WalletInlineConnect = (): JSX.Element => {
       </p>
       <p class="max-w-[45ch] text-center text-[12px] leading-snug">
         Connect your main EVM wallet with Reown. Positions load read-only. Use
-        Connect to Hyperliquid on staged changes to authorize a trading agent.
+        Connect Hyperliquid agent to authorize a trading agent.
       </p>
       <Show
         when={projectIdConfigured()}
