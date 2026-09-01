@@ -303,33 +303,37 @@ describe("fetchDeriveBalance", () => {
 
 describe("parseStoredDeriveSession", () => {
   it("returns null for invalid JSON", () => {
-    expect(parseStoredDeriveSession("{not-json")).toBeNull()
+    expect(Effect.runSync(parseStoredDeriveSession("{not-json"))).toBeNull()
   })
 
   it("returns null when deriveWallet is missing", () => {
     expect(
-      parseStoredDeriveSession(
-        JSON.stringify({
-          sessionAddress: "0xdef",
-          sessionPrivateKey:
-            "0x3333333333333333333333333333333333333333333333333333333333333333",
-          networkMode: "testnet",
-          subaccountId: null,
-        }),
+      Effect.runSync(
+        parseStoredDeriveSession(
+          JSON.stringify({
+            sessionAddress: "0xdef",
+            sessionPrivateKey:
+              "0x3333333333333333333333333333333333333333333333333333333333333333",
+            networkMode: "testnet",
+            subaccountId: null,
+          }),
+        ),
       ),
     ).toBeNull()
   })
 
   it("parses a valid session payload", () => {
-    const parsed = parseStoredDeriveSession(
-      JSON.stringify({
-        deriveWallet: "0x1111111111111111111111111111111111111111",
-        sessionAddress: "0x2222222222222222222222222222222222222222",
-        sessionPrivateKey:
-          "0x3333333333333333333333333333333333333333333333333333333333333333",
-        networkMode: "testnet",
-        subaccountId: 42,
-      }),
+    const parsed = Effect.runSync(
+      parseStoredDeriveSession(
+        JSON.stringify({
+          deriveWallet: "0x1111111111111111111111111111111111111111",
+          sessionAddress: "0x2222222222222222222222222222222222222222",
+          sessionPrivateKey:
+            "0x3333333333333333333333333333333333333333333333333333333333333333",
+          networkMode: "testnet",
+          subaccountId: 42,
+        }),
+      ),
     )
 
     expect(parsed).toEqual({
@@ -344,15 +348,17 @@ describe("parseStoredDeriveSession", () => {
 
   it("returns null for a negative subaccount id", () => {
     expect(
-      parseStoredDeriveSession(
-        JSON.stringify({
-          deriveWallet: "0x1111111111111111111111111111111111111111",
-          sessionAddress: "0x2222222222222222222222222222222222222222",
-          sessionPrivateKey:
-            "0x3333333333333333333333333333333333333333333333333333333333333333",
-          networkMode: "testnet",
-          subaccountId: -1,
-        }),
+      Effect.runSync(
+        parseStoredDeriveSession(
+          JSON.stringify({
+            deriveWallet: "0x1111111111111111111111111111111111111111",
+            sessionAddress: "0x2222222222222222222222222222222222222222",
+            sessionPrivateKey:
+              "0x3333333333333333333333333333333333333333333333333333333333333333",
+            networkMode: "testnet",
+            subaccountId: -1,
+          }),
+        ),
       ),
     ).toBeNull()
   })

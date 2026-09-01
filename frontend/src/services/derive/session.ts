@@ -163,44 +163,44 @@ export const parseOptionalSubaccountId = (
 /** Parse a JSON blob into session credentials (e.g. encrypted wallet payload). */
 export const parseStoredDeriveSession = (
   raw: string,
-): DeriveSessionCredentials | null => {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return null
-  }
+): Effect.Effect<DeriveSessionCredentials | null> =>
+  Effect.try({
+    try: () => JSON.parse(raw) as unknown,
+    catch: cause => cause,
+  }).pipe(
+    Effect.map(parsed => {
+      if (typeof parsed !== "object" || parsed === null) {
+        return null
+      }
 
-  if (typeof parsed !== "object" || parsed === null) {
-    return null
-  }
+      const record = parsed as Record<string, unknown>
+      const deriveWallet = record.deriveWallet
+      const sessionAddress = record.sessionAddress
+      const sessionPrivateKey = record.sessionPrivateKey
+      const networkMode = record.networkMode
+      const subaccountId = record.subaccountId
 
-  const record = parsed as Record<string, unknown>
-  const deriveWallet = record.deriveWallet
-  const sessionAddress = record.sessionAddress
-  const sessionPrivateKey = record.sessionPrivateKey
-  const networkMode = record.networkMode
-  const subaccountId = record.subaccountId
+      if (typeof deriveWallet !== "string") return null
+      if (typeof sessionAddress !== "string") return null
+      if (typeof sessionPrivateKey !== "string") return null
+      if (!sessionPrivateKey.startsWith("0x")) return null
+      if (networkMode !== "testnet" && networkMode !== "mainnet") return null
+      if (
+        subaccountId !== null &&
+        (typeof subaccountId !== "number" ||
+          !Number.isSafeInteger(subaccountId) ||
+          subaccountId < 0)
+      ) {
+        return null
+      }
 
-  if (typeof deriveWallet !== "string") return null
-  if (typeof sessionAddress !== "string") return null
-  if (typeof sessionPrivateKey !== "string") return null
-  if (!sessionPrivateKey.startsWith("0x")) return null
-  if (networkMode !== "testnet" && networkMode !== "mainnet") return null
-  if (
-    subaccountId !== null &&
-    (typeof subaccountId !== "number" ||
-      !Number.isSafeInteger(subaccountId) ||
-      subaccountId < 0)
-  ) {
-    return null
-  }
-
-  return {
-    deriveWallet,
-    sessionAddress,
-    sessionPrivateKey: sessionPrivateKey as `0x${string}`,
-    networkMode,
-    subaccountId,
-  }
-}
+      return {
+        deriveWallet,
+        sessionAddress,
+        sessionPrivateKey: sessionPrivateKey as `0x${string}`,
+        networkMode,
+        subaccountId,
+      }
+    }),
+    Effect.orElseSucceed(() => null),
+  )
