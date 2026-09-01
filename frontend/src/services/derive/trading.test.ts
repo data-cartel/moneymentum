@@ -53,6 +53,7 @@ describe("snapToDeriveStep", () => {
     )
     expect(snapToDeriveStep(2, DEFAULT_DERIVE_AMOUNT_STEP)).toBe(2)
     expect(snapToDeriveStep(0, DEFAULT_DERIVE_AMOUNT_STEP)).toBe(0)
+    expect(snapToDeriveStep(0.000025, 2.5e-5)).toBe(0.000025)
   })
 })
 

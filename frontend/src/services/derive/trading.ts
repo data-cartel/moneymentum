@@ -136,9 +136,14 @@ const positivePriceOrNull = (
 
 const decimalPlacesFromStep = (step: number): number => {
   const exponential = step.toExponential()
-  const scientific = /e-(\d+)$/i.exec(exponential)
+  const scientific = /^(-?\d+(?:\.\d+)?)e-(\d+)$/i.exec(exponential)
   if (scientific !== null) {
-    const digits = Number(scientific[1])
+    const mantissa = scientific[1]
+    const exponent = Number(scientific[2])
+    const fractionalDigits = mantissa.includes(".")
+      ? mantissa.split(".")[1].length
+      : 0
+    const digits = exponent + fractionalDigits
     return Number.isFinite(digits) ? digits : 8
   }
   const fraction = String(step).split(".")
