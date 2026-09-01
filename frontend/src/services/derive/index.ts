@@ -50,6 +50,8 @@ export {
 export {
   cancelDeriveOrder,
   DEFAULT_DERIVE_AMOUNT_STEP,
+  DeriveInstrumentNotFound,
+  DeriveOrderSizeInvalid,
   DeriveTradingClient,
   fetchDeriveFundingRates,
   fetchDeriveOpenOrders,

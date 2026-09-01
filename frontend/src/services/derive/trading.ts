@@ -1,4 +1,5 @@
 import type { Order } from "ccxt"
+import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 
 import { getErrorMessage } from "@/lib/error-message"
@@ -17,7 +18,22 @@ import {
   requireDeriveSession,
   type DeriveSessionCredentials,
   DeriveSessionMissing,
+  DeriveSubaccountMissing,
 } from "./session"
+
+export class DeriveInstrumentNotFound extends Data.TaggedError(
+  "DeriveInstrumentNotFound",
+)<{
+  readonly instrument: string
+}> {}
+
+export class DeriveOrderSizeInvalid extends Data.TaggedError(
+  "DeriveOrderSizeInvalid",
+)<{
+  readonly symbol: string
+  readonly amount: number
+  readonly amountStep: number
+}> {}
 
 const DERIVE_ORDER_NONCE_GAP_MS = 2
 /** Derive always requires max_fee; ~2x notional matches the UI default for options. */
@@ -198,9 +214,7 @@ const defaultMaxFee = (price: number, amount: number): number =>
 
 const requireSubaccountId = (credentials: DeriveSessionCredentials): number => {
   if (credentials.subaccountId === null) {
-    throw new Error(
-      "Derive trading requires a subaccount id -- set it in credentials",
-    )
+    throw new DeriveSubaccountMissing()
   }
   return credentials.subaccountId
 }
@@ -263,7 +277,7 @@ export class DeriveTradingClient {
       instrument_name: instrumentOrSymbol,
     })
     if (response.result === undefined || response.result === null) {
-      throw new Error(`Derive instrument not found: ${instrumentOrSymbol}`)
+      throw new DeriveInstrumentNotFound({ instrument: instrumentOrSymbol })
     }
 
     const market = this.exchange.parseMarket(response.result)
@@ -390,9 +404,11 @@ export class DeriveTradingClient {
     })
 
     if (!(amount > 0) || !(price > 0)) {
-      throw new Error(
-        `Derive amount/price snapped to zero for ${request.symbol} (amount=${String(request.amount)} step=${String(amountStep)})`,
-      )
+      throw new DeriveOrderSizeInvalid({
+        symbol: request.symbol,
+        amount: request.amount,
+        amountStep,
+      })
     }
 
     const maxFee = request.maxFee ?? defaultMaxFee(price, amount)
@@ -567,12 +583,31 @@ export class DeriveTradingClient {
   }
 }
 
+type TradingExchangeFailure =
+  | ExchangeRequestError
+  | DeriveSubaccountMissing
+  | DeriveInstrumentNotFound
+  | DeriveOrderSizeInvalid
+
+const isPreservedTradingFailure = (
+  cause: unknown,
+): cause is
+  | DeriveSubaccountMissing
+  | DeriveInstrumentNotFound
+  | DeriveOrderSizeInvalid =>
+  cause instanceof DeriveSubaccountMissing ||
+  cause instanceof DeriveInstrumentNotFound ||
+  cause instanceof DeriveOrderSizeInvalid
+
 const wrapExchange = <Value>(
   run: () => Promise<Value>,
-): Effect.Effect<Value, ExchangeRequestError> =>
+): Effect.Effect<Value, TradingExchangeFailure> =>
   Effect.tryPromise({
     try: run,
-    catch: cause => new ExchangeRequestError({ cause }),
+    catch: cause =>
+      isPreservedTradingFailure(cause)
+        ? cause
+        : new ExchangeRequestError({ cause }),
   })
 
 export const fetchDeriveTickers = (
@@ -580,7 +615,7 @@ export const fetchDeriveTickers = (
   instrumentsOrSymbols: string[],
 ): Effect.Effect<
   Record<string, DeriveTickerQuote>,
-  DeriveSessionMissing | ExchangeRequestError
+  DeriveSessionMissing | TradingExchangeFailure
 > =>
   requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
@@ -595,7 +630,7 @@ export const fetchDeriveFundingRates = (
   instrumentsOrSymbols: string[],
 ): Effect.Effect<
   Record<string, DeriveFundingRateQuote>,
-  DeriveSessionMissing | ExchangeRequestError
+  DeriveSessionMissing | TradingExchangeFailure
 > =>
   requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
@@ -610,7 +645,10 @@ export const fetchDeriveFundingRates = (
 export const placeAndMonitorDeriveOrders = (
   credentials: DeriveSessionCredentials | null,
   requests: DeriveBatchOrderRequest[],
-): Effect.Effect<OrderResult[], DeriveSessionMissing | ExchangeRequestError> =>
+): Effect.Effect<
+  OrderResult[],
+  DeriveSessionMissing | TradingExchangeFailure
+> =>
   requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() =>
@@ -623,7 +661,7 @@ export const fetchDeriveOpenOrders = (
   credentials: DeriveSessionCredentials | null,
 ): Effect.Effect<
   DeriveCcxtOrder[],
-  DeriveSessionMissing | ExchangeRequestError
+  DeriveSessionMissing | TradingExchangeFailure
 > =>
   requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
@@ -636,7 +674,7 @@ export const cancelDeriveOrder = (
   request: { id: string; symbol: string },
 ): Effect.Effect<
   DeriveCcxtOrder,
-  DeriveSessionMissing | ExchangeRequestError
+  DeriveSessionMissing | TradingExchangeFailure
 > =>
   requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>

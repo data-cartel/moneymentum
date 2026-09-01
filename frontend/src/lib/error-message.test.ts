@@ -24,6 +24,8 @@ import {
   DeriveSessionKeyInvalid,
   DeriveSessionMissing,
   DeriveSubaccountMissing,
+  DeriveInstrumentNotFound,
+  DeriveOrderSizeInvalid,
 } from "@/services/derive/index"
 import {
   ApproveAgentFailed,
@@ -306,5 +308,23 @@ describe("getErrorMessage", () => {
   it("maps DeriveSubaccountMissing to a subaccount selection message", async () => {
     const failure = await asFiberFailure(new DeriveSubaccountMissing())
     expect(getErrorMessage(failure)).toContain("Select a Derive subaccount")
+  })
+
+  it("maps DeriveInstrumentNotFound to an instrument message", async () => {
+    const failure = await asFiberFailure(
+      new DeriveInstrumentNotFound({ instrument: "ETH-PERP" }),
+    )
+    expect(getErrorMessage(failure)).toContain("instrument was not found")
+  })
+
+  it("maps DeriveOrderSizeInvalid to a size message", async () => {
+    const failure = await asFiberFailure(
+      new DeriveOrderSizeInvalid({
+        symbol: "ETH-PERP",
+        amount: 0,
+        amountStep: 0.00001,
+      }),
+    )
+    expect(getErrorMessage(failure)).toContain("rounded to zero")
   })
 })

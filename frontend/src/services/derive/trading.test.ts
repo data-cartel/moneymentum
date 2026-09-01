@@ -263,7 +263,7 @@ describe("DeriveTradingClient.createOrdersBatch", () => {
       client.createOrdersBatch([
         { symbol: "ETH-PERP", side: "buy", amount: 1, price: 10 },
       ]),
-    ).rejects.toThrow(/subaccount id/)
+    ).rejects.toMatchObject({ _tag: "DeriveSubaccountMissing" })
   })
 })
 

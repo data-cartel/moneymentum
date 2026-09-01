@@ -226,6 +226,10 @@ const messageForTag = (error: TaggedError): string | null => {
       return "No Derive credentials. Paste Derive Wallet and Session Key from Developers."
     case "DeriveSubaccountMissing":
       return "Select a Derive subaccount before trading or loading open orders."
+    case "DeriveInstrumentNotFound":
+      return "Derive instrument was not found. Refresh markets and try again."
+    case "DeriveOrderSizeInvalid":
+      return "Order size rounded to zero. Increase size or check the instrument step."
     case "DeriveOrderMappingFailed":
       return (
         error.reason ?? "Could not map Derive orders from the staged trades."
