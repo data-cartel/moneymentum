@@ -269,9 +269,11 @@ export const DeriveOpenOrdersPanel = (): JSX.Element => {
                           <td class="px-1 py-1.5" title={order.symbol}>
                             {order.label}
                           </td>
-                          <td class="px-1 py-1.5 uppercase">{order.side}</td>
+                          <td class="px-1 py-1.5 uppercase">
+                            {order.side ?? "—"}
+                          </td>
                           <td class="px-1 py-1.5">
-                            {formatSignedSize(order.amount, order.side)}
+                            {formatSignedSize(order.amount, order.side ?? "")}
                           </td>
                           <td class="px-1 py-1.5">
                             {formatPrice(order.price)}

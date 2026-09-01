@@ -25,7 +25,7 @@ export interface DeriveOpenOrderRow {
   id: string
   symbol: string
   label: string
-  side: "buy" | "sell" | "—"
+  side: "buy" | "sell" | null
   amount: number | null
   price: number | null
   notional: number | null
@@ -144,7 +144,7 @@ export const mapDeriveOpenOrderRow = (
   const instrumentName = readInfoString(order.info, "instrument_name") ?? symbol
   const sideRaw = (order.side ?? "").toLowerCase()
   const side: DeriveOpenOrderRow["side"] =
-    sideRaw === "buy" || sideRaw === "sell" ? sideRaw : "—"
+    sideRaw === "buy" || sideRaw === "sell" ? sideRaw : null
 
   const amount = readRestingAmount(order)
   const price = readLimitPrice(order)
