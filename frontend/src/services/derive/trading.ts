@@ -1,4 +1,3 @@
-import type { Order } from "ccxt"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 
@@ -166,7 +165,7 @@ const readMarketPriceStep = (
   return fromInfo > 0 ? fromInfo : null
 }
 
-const readOrderStatus = (order: DeriveCcxtOrder | Order): string => {
+const readOrderStatus = (order: DeriveCcxtOrder): string => {
   const info: unknown = order.info
   if (typeof info === "object" && info !== null) {
     const orderStatus = (info as { order_status?: unknown }).order_status
@@ -182,7 +181,7 @@ const readOrderStatus = (order: DeriveCcxtOrder | Order): string => {
 }
 
 export const mapDeriveOrderForWatch = (
-  order: DeriveCcxtOrder | Order,
+  order: DeriveCcxtOrder,
 ): { status: OrderResult["status"]; message: string | null } => {
   const status = readOrderStatus(order).toLowerCase()
 

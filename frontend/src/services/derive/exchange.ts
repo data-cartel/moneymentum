@@ -1,4 +1,5 @@
 import derive from "ccxt/derive"
+import type { Market, Order, Ticker } from "ccxt"
 
 import type { NetworkMode } from "@/contexts/wallet-context"
 
@@ -70,40 +71,42 @@ export interface DeriveCcxtExchange {
   close?: () => Promise<void>
 }
 
-export interface DeriveCcxtMarket {
-  id?: string
-  symbol: string
-  option?: boolean
-  swap?: boolean
-  precision?: {
-    amount?: number
-    price?: number
+type OptionalPick<Type, Keys extends keyof Type> = {
+  [Key in Keys]?: Type[Key]
+}
+
+type CcxtMarket = NonNullable<Market>
+type CcxtOrder = NonNullable<Order>
+type CcxtTicker = NonNullable<Ticker>
+
+/** Shared CCXT order projection used by status mapping and watch recovery. */
+export type DeriveCcxtOrder = OptionalPick<
+  CcxtOrder,
+  | "id"
+  | "symbol"
+  | "side"
+  | "status"
+  | "amount"
+  | "filled"
+  | "remaining"
+  | "price"
+  | "average"
+  | "cost"
+  | "timestamp"
+> & {
+  info?: Record<string, unknown>
+}
+
+export type DeriveCcxtMarket = Pick<CcxtMarket, "symbol"> &
+  OptionalPick<CcxtMarket, "id" | "option" | "swap" | "precision"> & {
+    info?: Record<string, unknown>
   }
-  info?: Record<string, unknown>
-}
 
-export interface DeriveCcxtTicker {
-  symbol?: string
-  last?: number
-  close?: number
-  bid?: number
-  ask?: number
+export type DeriveCcxtTicker = OptionalPick<
+  CcxtTicker,
+  "symbol" | "last" | "close" | "bid" | "ask"
+> & {
   mark?: number
-  info?: Record<string, unknown>
-}
-
-export interface DeriveCcxtOrder {
-  id?: string
-  symbol?: string
-  side?: string
-  status?: string
-  amount?: number
-  filled?: number
-  remaining?: number
-  price?: number
-  average?: number
-  cost?: number
-  timestamp?: number
   info?: Record<string, unknown>
 }
 
