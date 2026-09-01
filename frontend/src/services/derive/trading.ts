@@ -219,7 +219,10 @@ export const mapDeriveOrderForWatch = (
     return { status: "working", message: null }
   }
 
-  return { status: "working", message: null }
+  return {
+    status: "working",
+    message: `Unknown order status: ${status}`,
+  }
 }
 
 const defaultMaxFee = (price: number, amount: number): number =>

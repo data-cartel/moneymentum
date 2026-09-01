@@ -84,6 +84,18 @@ describe("mapDeriveOrderForWatch", () => {
       }),
     ).toEqual({ status: "failed", message: "Order cancelled" })
   })
+
+  it("keeps unrecognized statuses working with a diagnostic", () => {
+    expect(
+      mapDeriveOrderForWatch({
+        status: "open",
+        info: { order_status: "partially_filled" },
+      }),
+    ).toEqual({
+      status: "working",
+      message: "Unknown order status: partially_filled",
+    })
+  })
 })
 
 describe("DeriveTradingClient.createOrdersBatch", () => {
