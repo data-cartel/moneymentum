@@ -1,5 +1,6 @@
 import {
   createEffect,
+  createMemo,
   createSignal,
   Show,
   type Accessor,
@@ -62,7 +63,6 @@ export const DerivePanel = (props: {
   const [pinDialogOpen, setPinDialogOpen] = createSignal(false)
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const [isSubmitting, setIsSubmitting] = createSignal(false)
-  const [deriveUnlockFocused, setDeriveUnlockFocused] = createSignal(false)
   let walletInputElement: HTMLInputElement | undefined
 
   const pinAlreadyExists = () => hasSharedWalletPin()
@@ -79,12 +79,9 @@ export const DerivePanel = (props: {
     return storedNetwork
   }
 
-  // createEffect: focus PIN when Derive panel is active and session is locked.
-  createEffect(() => {
-    setDeriveUnlockFocused(
-      keyboard?.focusedPanel() === "derive" && isDeriveLocked(),
-    )
-  })
+  const deriveUnlockFocused = createMemo(
+    () => keyboard?.focusedPanel() === "derive" && isDeriveLocked(),
+  )
 
   // createEffect: focus wallet field when shell requests Derive focus.
   createEffect(() => {

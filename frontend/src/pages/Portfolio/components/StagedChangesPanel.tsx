@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal } from "solid-js"
+import { For, Show, createMemo } from "solid-js"
 import { cn } from "@/lib/cn"
 import { Send } from "lucide-solid"
 import { Button } from "@/components/ui/button"
@@ -46,8 +46,6 @@ const UNLOCK_PIN_PLACEHOLDER = "Enter 6-digit PIN to unlock"
 
 export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
   const keyboard = tryUsePortfolioKeyboardContext()
-  const [stagedUnlockFocused, setStagedUnlockFocused] = createSignal(false)
-
   const stagedTrades = () => props.stagedTrades
   const hasStaged = () => stagedTrades().length > 0
 
@@ -58,12 +56,9 @@ export const StagedChangesPanel = (props: StagedChangesPanelProps) => {
   const showUnlockPinField = () => connectionState() === "agentLocked"
   const showVenueChooser = () => connectionState() === "chooseVenue"
 
-  // createEffect: focus PIN when staged panel activates while agent is locked
-  createEffect(() => {
-    setStagedUnlockFocused(
-      keyboard?.focusedPanel() === "staged" && showUnlockPinField(),
-    )
-  })
+  const stagedUnlockFocused = createMemo(
+    () => keyboard?.focusedPanel() === "staged" && showUnlockPinField(),
+  )
 
   const primaryLabel = () => {
     if (isRebalancing()) {
