@@ -5,6 +5,7 @@ import {
   createMemo,
   createSignal,
   onCleanup,
+  untrack,
   type JSX,
 } from "solid-js"
 import { toast } from "solid-sonner"
@@ -30,7 +31,10 @@ const formatSignedSize = (amount: number | null, side: string): string => {
     return "—"
   }
   const sign = side === "sell" ? "-" : "+"
-  return `${sign}${amount}`
+  const formatted = amount.toLocaleString("en-US", {
+    maximumFractionDigits: 8,
+  })
+  return `${sign}${formatted}`
 }
 
 const formatPrice = (price: number | null): string => {
@@ -155,7 +159,7 @@ export const DeriveOpenOrdersPanel = (): JSX.Element => {
       return
     }
 
-    let startedAtMs = cycleStartedAtMs()
+    let startedAtMs = untrack(cycleStartedAtMs)
     if (startedAtMs === null) {
       startedAtMs = Date.now()
       setCycleStartedAtMs(startedAtMs)
