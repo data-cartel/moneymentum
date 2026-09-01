@@ -6,11 +6,12 @@ import {
   createEffect,
   type JSX,
 } from "solid-js"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Slider } from "@/components/ui/slider"
 import type { OrderSide } from "@/hooks/useTrading"
 import { useWallet } from "@/hooks/useWallet"
-import { WalletInlineConnect } from "./WalletInlineConnect"
+import { tryUsePortfolioShell } from "../../portfolioShellContext"
 import { useFactorScores } from "../../hooks/useFactorScores"
 import { type PortfolioInterface } from "../../hooks/usePortfolioState"
 import type { ReadonlyBtcRow } from "../../hooks/useReadonlyPortfolioState"
@@ -35,10 +36,12 @@ import {
   CROSS_ACCOUNT_LEVERAGE_MIN,
   CROSS_ACCOUNT_LEVERAGE_STEP,
 } from "./crossAccountLeverage"
+import { DeriveOpenOrdersPanel } from "./DeriveOpenOrdersPanel"
 import { ReadonlyBtcPanel } from "./ReadonlyBtcPanel"
 
 interface PositionsPanelProps {
   hasTotalWeightExceeded: boolean
+  hasUnderAllocation: boolean
   currentPortfolio: Record<string, PortfolioInterface | undefined>
   targetPortfolio: Record<string, PortfolioInterface | undefined>
   deletedArchive: Record<string, PortfolioInterface | undefined>
@@ -79,6 +82,12 @@ interface PositionsPanelProps {
 
 export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
   const { isConnected } = useWallet()
+  const shell = tryUsePortfolioShell()
+  const focusVenue = (
+    request: Parameters<NonNullable<typeof shell>["focusVenue"]>[0],
+  ) => {
+    shell?.focusVenue(request)
+  }
   const factorScoresQuery = useFactorScores()
 
   const [leverageInput, setLeverageInput] = createSignal("")
@@ -217,13 +226,48 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
             </div>
           }
         >
-          <Show when={isConnected()} fallback={<WalletInlineConnect />}>
+          <Show
+            when={isConnected()}
+            fallback={
+              <div class="flex h-full flex-col items-center justify-center gap-4 overflow-auto p-4 text-[16px] text-muted-foreground">
+                <p class="max-w-[45ch] text-center font-medium text-foreground">
+                  Connect a venue to start
+                </p>
+                <p class="max-w-[45ch] text-center text-[12px] leading-snug">
+                  Connect Hyperliquid and/or Derive. You can use either venue
+                  alone.
+                </p>
+                <div class="flex w-full max-w-[45ch] flex-col gap-2">
+                  <Button
+                    type="button"
+                    variant="default"
+                    class="h-8 px-3 text-[12px] font-medium"
+                    onClick={() => {
+                      focusVenue({ venue: "hyperliquid", openConnect: true })
+                    }}
+                  >
+                    Connect Hyperliquid
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    class="h-8 px-3 text-[12px] font-medium"
+                    onClick={() => {
+                      focusVenue({ venue: "derive", focusWalletField: true })
+                    }}
+                  >
+                    Connect Derive
+                  </Button>
+                </div>
+              </div>
+            }
+          >
             <div class="min-h-0 flex-1 overflow-auto scrollbar-hide">
               <Show
                 when={hasRenderablePortfolioRows()}
                 fallback={
                   <div class="p-4 text-center text-[11px] text-muted-foreground">
-                    Add positions from All Symbols.
+                    Add positions from Hyperliquid or Derive.
                   </div>
                 }
               >
@@ -237,6 +281,7 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
                   meta={positionsTableMeta()}
                 />
               </Show>
+              <DeriveOpenOrdersPanel />
             </div>
             <ReadonlyBtcPanel
               rows={props.readonlyBtcRows}
@@ -256,6 +301,7 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
         isConnected={isConnected()}
         hasPositions={hasRenderablePortfolioRows()}
         hasTotalWeightExceeded={props.hasTotalWeightExceeded}
+        hasUnderAllocation={props.hasUnderAllocation}
         targetAllocationPercent={props.targetAllocationPercent}
         symbolsBelowMinimum={props.symbolsBelowMinimum}
         symbolsDeltaBelowMinimum={props.symbolsDeltaBelowMinimum}

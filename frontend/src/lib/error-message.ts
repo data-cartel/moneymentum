@@ -18,7 +18,15 @@ export const getErrorMessage = (error: unknown): string => {
     if (message !== null) return message
   }
 
-  if (unwrapped instanceof Error) return unwrapped.message
+  if (unwrapped instanceof Error) {
+    const message = unwrapped.message.trim()
+    if (message === FIBER_FAILURE_OPAQUE_MESSAGE) {
+      return GENERIC_ERROR_MESSAGE
+    }
+    if (message.length > 0) {
+      return message
+    }
+  }
 
   return String(unwrapped)
 }
@@ -26,15 +34,43 @@ export const getErrorMessage = (error: unknown): string => {
 const EXCHANGE_REJECTED_MESSAGE =
   "The exchange rejected the request. Please try again."
 
+/** Effect FiberFailure's generic `Error.message` when the Cause is not unwrapped. */
+const FIBER_FAILURE_OPAQUE_MESSAGE = "An error has occurred"
+
+/** Stable UI fallback when the only available text is Effect's opaque FiberFailure. */
+const GENERIC_ERROR_MESSAGE = "Something went wrong. Please try again."
+
 /** Readable text from an ExchangeRequestError cause, or null if unusable. */
 const messageFromExchangeCause = (cause: unknown): string | null => {
-  if (cause instanceof Error) {
-    const message = cause.message.trim()
+  const unwrappedCause = unwrapTaggedError(cause)
+
+  if (hasTag(unwrappedCause)) {
+    const taggedMessage = messageForTag(unwrappedCause)
+    if (taggedMessage !== null) {
+      return taggedMessage
+    }
+  }
+
+  if (unwrappedCause instanceof Error) {
+    const message = unwrappedCause.message.trim()
+    if (message.length > 0 && message !== FIBER_FAILURE_OPAQUE_MESSAGE) {
+      return message
+    }
+  }
+  if (typeof unwrappedCause === "string") {
+    const message = unwrappedCause.trim()
     return message.length > 0 ? message : null
   }
-  if (typeof cause === "string") {
-    const message = cause.trim()
-    return message.length > 0 ? message : null
+  if (
+    typeof unwrappedCause === "object" &&
+    unwrappedCause !== null &&
+    "message" in unwrappedCause &&
+    typeof (unwrappedCause as { message: unknown }).message === "string"
+  ) {
+    const message = (unwrappedCause as { message: string }).message.trim()
+    if (message.length > 0 && message !== FIBER_FAILURE_OPAQUE_MESSAGE) {
+      return message
+    }
   }
   return null
 }
@@ -57,12 +93,27 @@ export const getExchangeErrorDetail = (error: unknown): string => {
   return getErrorMessage(error)
 }
 
+/**
+ * Peel nested FiberFailures until a typed / raw error remains. Nested
+ * `Effect.runPromise` inside `wrapExchange` is a common source of
+ * ExchangeRequestError → FiberFailure → real error chains.
+ */
 const unwrapTaggedError = (error: unknown): unknown => {
-  if (Runtime.isFiberFailure(error)) {
-    const failure = Cause.failureOption(error[Runtime.FiberFailureCauseId])
-    if (Option.isSome(failure)) return failure.value
+  let current: unknown = error
+
+  for (let depth = 0; depth < 8; depth++) {
+    if (!Runtime.isFiberFailure(current)) {
+      break
+    }
+
+    const failure = Cause.failureOption(current[Runtime.FiberFailureCauseId])
+    if (Option.isNone(failure)) {
+      break
+    }
+    current = failure.value
   }
-  return error
+
+  return current
 }
 
 interface TaggedError {
@@ -70,6 +121,7 @@ interface TaggedError {
   readonly status?: number
   readonly detail?: string
   readonly message?: string
+  readonly reason?: string
 }
 
 const hasTag = (value: unknown): value is TaggedError =>
@@ -83,6 +135,9 @@ const messageForTag = (error: TaggedError): string | null => {
     case "NetworkError":
       return "Network request failed. Check your connection and try again."
     case "HttpStatusError":
+      if (error.status === 403) {
+        return "Derive auth gateway rejected the request (403). Retry Sign and load once; if it persists, the account wallet may need a registered session key."
+      }
       return (
         error.detail ??
         (error.status
@@ -109,21 +164,19 @@ const messageForTag = (error: TaggedError): string | null => {
     }
     case "WalletConnectError": {
       const cause = "cause" in error ? error.cause : undefined
-      if (
-        hasTag(cause) &&
-        (cause._tag === "ApproveAgentFailed" ||
-          cause._tag === "ReownWalletUnavailable" ||
-          cause._tag === "ReownWalletRejected" ||
-          cause._tag === "RevokeAgentFailed" ||
-          cause._tag === "WalletAuthorizationAccountChanged" ||
-          cause._tag === "WalletAuthorizationNetworkChanged" ||
-          cause._tag === "WalletAuthorizationContextChanged" ||
-          cause._tag === "WalletConnectionContextChanged" ||
-          cause._tag === "WalletOperationContextChanged")
-      ) {
-        return messageForTag(cause)
+      if (hasTag(cause)) {
+        const causeMessage = messageForTag(cause)
+        if (causeMessage !== null) {
+          return causeMessage
+        }
       }
-      return "Failed to connect Hyperliquid agent. Please try again."
+      if (cause instanceof Error) {
+        const message = cause.message.trim()
+        if (message.length > 0 && message !== FIBER_FAILURE_OPAQUE_MESSAGE) {
+          return message
+        }
+      }
+      return "Failed to connect wallet credentials. Please try again."
     }
     case "WalletUnlockError":
       return "Failed to unlock wallet. Please try again."
@@ -163,6 +216,43 @@ const messageForTag = (error: TaggedError): string | null => {
       return "Failed to revoke Hyperliquid agent. Please try again."
     case "ReownModalOpenFailed":
       return "Could not open wallet connect."
+    case "ReownAppKitUnavailable":
+      return "Could not open wallet connect."
+    case "ReownProviderUnavailable":
+      return "Connect a wallet with Reown first."
+    case "DeriveWalletInvalid":
+      return "Invalid Derive wallet address."
+    case "DeriveSessionMissing":
+      return "No Derive credentials. Paste Derive Wallet and Session Key from Developers."
+    case "DeriveSubaccountMissing":
+      return "Select a Derive subaccount before trading or loading open orders."
+    case "DeriveInstrumentNotFound":
+      return "Derive instrument was not found. Refresh markets and try again."
+    case "DeriveOrderSizeInvalid":
+      return "Order size rounded to zero. Increase size or check the instrument step."
+    case "DeriveOrderMappingFailed":
+      return (
+        error.reason ?? "Could not map Derive orders from the staged trades."
+      )
+    case "DeriveSessionSignFailed":
+      return "Failed to sign with the Derive session key."
+    case "DeriveSessionKeyInvalid":
+      return "Invalid session private key. Paste a 0x-prefixed 32-byte hex key from derive.xyz Developers."
+    case "DeriveSubaccountIdInvalid":
+      return "Subaccount ID must be a non-negative integer, or leave empty."
+    case "DeriveRpcError": {
+      const message =
+        "message" in error && typeof error.message === "string"
+          ? error.message.trim()
+          : ""
+      return message.length > 0
+        ? `Derive rejected the request: ${message}`
+        : "Derive rejected the request."
+    }
+    case "OptionsPayloadDecodeError":
+      return "Derive options data could not be read."
+    case "Eip1193ProviderNotReady":
+      return "Wallet connected, but the signer is not ready. Click Connect Hyperliquid agent again."
     case "HyperliquidClientLoadFailed":
       return "Could not load Hyperliquid trading. Please try again."
     case "BitcoinAddressValidatorLoadFailed":

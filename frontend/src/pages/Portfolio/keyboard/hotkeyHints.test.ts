@@ -6,8 +6,9 @@ import { modifierKeyLabel } from "./modifierLabel"
 describe("hotkeyHints", () => {
   it("maps digits to fixed panel ids", () => {
     expect(panelIdForDigitKey("1")).toBe("portfolio")
-    expect(panelIdForDigitKey("2")).toBe("allSymbols")
-    expect(panelIdForDigitKey("3")).toBe("staged")
+    expect(panelIdForDigitKey("2")).toBe("hyperliquid")
+    expect(panelIdForDigitKey("3")).toBe("derive")
+    expect(panelIdForDigitKey("4")).toBe("staged")
     expect(panelIdForDigitKey("9")).toBeUndefined()
   })
 

@@ -1,5 +1,6 @@
 mod candle;
 mod dataframe;
+mod derive_markets;
 mod factors;
 mod finance;
 mod funding;
@@ -8,6 +9,7 @@ mod ingestion;
 mod local_ingest;
 mod market_catalog;
 mod market_enablement;
+mod market_files;
 mod market_metadata;
 mod portfolio;
 mod readonly_portfolio;
@@ -30,6 +32,7 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use derive::DeriveNetwork;
 use event_sorcery::{
     AggregateError, CircuitBreakerConfig, FAIL_STOP_RECOVERY_TIMEOUT, JobBackend, LifecycleError,
     Monitor as EventSorceryMonitor, Projection, SendError, Store, StoreBuilder,
@@ -41,9 +44,10 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use thiserror::Error;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
+use crate::derive_markets::DeriveMarketsClients;
 use crate::hyperliquid::{Hyperliquid, HyperliquidClients, HyperliquidNetwork};
 use finance::Symbol;
 use ingestion::{
@@ -72,7 +76,7 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Trace => "trace",
             Self::Debug => "debug",
@@ -112,6 +116,11 @@ impl Config {
     pub fn port(&self) -> u16 {
         self.port
     }
+
+    /// Tracing verbosity from the loaded configuration file.
+    pub fn log_level(&self) -> LogLevel {
+        self.log_level
+    }
 }
 
 #[derive(Debug, Error)]
@@ -128,6 +137,7 @@ pub(crate) struct AppState {
     config: Config,
     database_pool: SqlitePool,
     hyperliquid_clients: HyperliquidClients,
+    derive_markets_clients: DeriveMarketsClients,
     portfolio_store: Arc<Store<Portfolio>>,
     portfolio_projection: Arc<Projection<Portfolio>>,
     market_enablement: Arc<Store<MarketEnablement>>,
@@ -684,6 +694,7 @@ struct HyperliquidMarketsQuery {
 /// trading client consumes. Fetched live from the exchange on every request:
 /// the asset indexes in the response route orders, so they must always match
 /// the exchange's current universe rather than a cached observation.
+/// Also rewrites `data/market_hyperliquid(_testnet).csv` as an inspection cache.
 async fn get_hyperliquid_markets(
     State(state): State<Arc<AppState>>,
     Query(query): Query<HyperliquidMarketsQuery>,
@@ -699,6 +710,8 @@ async fn get_hyperliquid_markets(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    market_files::persist_hyperliquid_markets(&state.config.data_dir, network, &metadata).await;
+
     debug!(
         markets = metadata.len(),
         ?network,
@@ -706,6 +719,42 @@ async fn get_hyperliquid_markets(
     );
     Ok(Json(market_metadata::markets_api_response(
         &metadata,
+        chrono::Utc::now(),
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+struct DeriveMarketsQuery {
+    network: DeriveNetwork,
+}
+
+/// Serves the Derive option + perp universe for the integration test page.
+/// Fetched live from `public/get_all_instruments` and cached under
+/// `data/market_derive(_testnet).csv`. No max_leverage -- not applicable.
+async fn get_derive_markets(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DeriveMarketsQuery>,
+) -> Result<Json<derive_markets::DeriveMarketsApiResponse>, StatusCode> {
+    let network = query.network;
+    let instruments = state
+        .derive_markets_clients
+        .for_network(network)
+        .fetch_instruments()
+        .await
+        .map_err(|err| {
+            error!(error = %err, ?network, "failed to fetch derive markets");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    market_files::persist_derive_markets(&state.config.data_dir, network, &instruments).await;
+
+    debug!(
+        markets = instruments.len(),
+        ?network,
+        "derive markets served"
+    );
+    Ok(Json(derive_markets::markets_api_response(
+        instruments,
         chrono::Utc::now(),
     )))
 }
@@ -892,6 +941,14 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
         config.max_retries,
     )
     .await?;
+    let derive_markets_clients = DeriveMarketsClients::from_config(
+        config.derive.as_ref().map(|derive| &derive.rest_base_url),
+        config
+            .derive
+            .as_ref()
+            .map(|derive| &derive.testnet_rest_base_url),
+        config.max_retries,
+    )?;
     let hyperliquid: Arc<dyn Hyperliquid> = Arc::clone(&hyperliquid_clients.mainnet);
     let services = IngestionServices {
         hyperliquid,
@@ -921,6 +978,7 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
         config,
         database_pool: pool,
         hyperliquid_clients,
+        derive_markets_clients,
         portfolio_store,
         portfolio_projection,
         market_enablement,
@@ -929,7 +987,51 @@ pub async fn app(config: Config) -> Result<Router, Box<dyn std::error::Error + S
         _ingestion_owner_lease: Some(ingestion_owner_lease),
     });
 
-    Ok(build_router(state))
+    let derive_config = state.config.derive.clone();
+    let router = mount_derive_options_routes(build_router(state), derive_config).await;
+
+    Ok(router)
+}
+
+/// Mounts Derive options routes when configured; otherwise returns `router` unchanged.
+/// Discovery and catalogue fetches are bounded so a hung Derive API cannot
+/// block listener bind or `/health`.
+const DERIVE_OPTIONS_STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+async fn mount_derive_options_routes(
+    router: Router,
+    derive_config: Option<derive::DeriveConfig>,
+) -> Router {
+    match derive_config {
+        Some(derive_config) => {
+            match tokio::time::timeout(
+                DERIVE_OPTIONS_STARTUP_TIMEOUT,
+                derive::derive_options_router(derive_config),
+            )
+            .await
+            {
+                Ok(Ok(options_router)) => {
+                    info!("derive options routes mounted");
+                    router.merge(options_router)
+                }
+                Ok(Err(error)) => {
+                    error!(
+                        error = %error,
+                        "derive options hub failed to start; serving without options routes"
+                    );
+                    router
+                }
+                Err(_) => {
+                    error!(
+                        timeout_secs = DERIVE_OPTIONS_STARTUP_TIMEOUT.as_secs(),
+                        "derive options hub startup timed out; serving without options routes"
+                    );
+                    router
+                }
+            }
+        }
+        None => router,
+    }
 }
 
 /// Wires every moneymentum route to its handler and injects the shared state.
@@ -951,6 +1053,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/portfolio/{id}/rename", post(post_portfolio_rename))
         .route("/portfolio/{id}/archive", post(post_portfolio_archive))
         .route("/hyperliquid/markets", get(get_hyperliquid_markets))
+        .route("/derive/markets", get(get_derive_markets))
         .route("/markets/{venue}", get(get_markets))
         .route("/markets/{venue}/leverage", get(get_markets_leverage))
         .route(
@@ -1034,14 +1137,16 @@ mod tests {
         let hyperliquid_clients = HyperliquidClients::from_config(None, None, 5)
             .await
             .unwrap();
-        test_harness_with_markets(data_dir, hyperliquid_clients).await
+        let derive_markets_clients = DeriveMarketsClients::from_config(None, None, 5).unwrap();
+        test_harness_with_markets(data_dir, hyperliquid_clients, derive_markets_clients).await
     }
 
-    /// Same harness with injected Hyperliquid clients, so markets-endpoint tests
-    /// stub the exchange instead of reaching the real deployments.
+    /// Same harness with injected venue market clients, so markets-endpoint
+    /// tests stub the exchange instead of reaching the real deployments.
     async fn test_harness_with_markets(
         data_dir: &std::path::Path,
         hyperliquid_clients: HyperliquidClients,
+        derive_markets_clients: DeriveMarketsClients,
     ) -> TestHarness {
         let config = Config {
             port: 0,
@@ -1085,6 +1190,7 @@ mod tests {
             config,
             database_pool: pool,
             hyperliquid_clients,
+            derive_markets_clients,
             portfolio_store,
             portfolio_projection,
             market_enablement,
@@ -2025,13 +2131,55 @@ mod tests {
         }
     }
 
+    struct StubDeriveMarkets {
+        instruments: Vec<derive_markets::DeriveInstrument>,
+    }
+
+    #[async_trait::async_trait]
+    impl derive_markets::DeriveMarkets for StubDeriveMarkets {
+        async fn fetch_instruments(
+            &self,
+        ) -> Result<Vec<derive_markets::DeriveInstrument>, derive_markets::DeriveMarketsError>
+        {
+            Ok(self.instruments.clone())
+        }
+    }
+
+    fn stub_derive_instrument(name: &str) -> derive_markets::DeriveInstrument {
+        derive_markets::DeriveInstrument {
+            instrument_name: name.to_string(),
+            instrument_type: derive_markets::DeriveInstrumentType::Option,
+            base_currency: "ETH".to_string(),
+            quote_currency: "USDC".to_string(),
+            is_active: true,
+            option_type: Some(derive::OptionKind::Call),
+            strike: Some(derive_markets::Strike::parse("2000").unwrap()),
+            expiry_unix: Some(1_788_000_000),
+        }
+    }
+
+    fn stub_derive_markets_clients() -> DeriveMarketsClients {
+        DeriveMarketsClients {
+            mainnet: Arc::new(StubDeriveMarkets {
+                instruments: vec![stub_derive_instrument("ETH-20260829-2000-C")],
+            }),
+            testnet: Arc::new(StubDeriveMarkets {
+                instruments: vec![stub_derive_instrument("ETH-20260926-2000-C")],
+            }),
+        }
+    }
+
     #[traced_test]
     #[tokio::test]
     async fn hyperliquid_markets_serves_the_mainnet_universe_and_logs() {
         let data_dir = TempDir::new().unwrap();
-        let router = test_harness_with_markets(data_dir.path(), stub_hyperliquid_clients())
-            .await
-            .router;
+        let router = test_harness_with_markets(
+            data_dir.path(),
+            stub_hyperliquid_clients(),
+            stub_derive_markets_clients(),
+        )
+        .await
+        .router;
 
         let response = router
             .oneshot(get_request("/hyperliquid/markets?network=mainnet"))
@@ -2051,14 +2199,22 @@ mod tests {
             ),
             "serving the universe must log the market count and network"
         );
+        assert!(
+            data_dir.path().join("market_hyperliquid.csv").exists(),
+            "successful fetch must rewrite the hyperliquid markets csv"
+        );
     }
 
     #[tokio::test]
     async fn hyperliquid_markets_routes_testnet_queries_to_the_testnet_client() {
         let data_dir = TempDir::new().unwrap();
-        let router = test_harness_with_markets(data_dir.path(), stub_hyperliquid_clients())
-            .await
-            .router;
+        let router = test_harness_with_markets(
+            data_dir.path(),
+            stub_hyperliquid_clients(),
+            stub_derive_markets_clients(),
+        )
+        .await
+        .router;
 
         let response = router
             .oneshot(get_request("/hyperliquid/markets?network=testnet"))
@@ -2078,9 +2234,10 @@ mod tests {
             mainnet: Arc::new(UnreachableHyperliquid),
             testnet: Arc::new(UnreachableHyperliquid),
         };
-        let router = test_harness_with_markets(data_dir.path(), clients)
-            .await
-            .router;
+        let router =
+            test_harness_with_markets(data_dir.path(), clients, stub_derive_markets_clients())
+                .await
+                .router;
 
         let response = router
             .oneshot(get_request("/hyperliquid/markets?network=mainnet"))
@@ -2100,7 +2257,12 @@ mod tests {
     #[tokio::test]
     async fn hyperliquid_markets_rejects_missing_or_unknown_networks() {
         let data_dir = TempDir::new().unwrap();
-        let harness = test_harness_with_markets(data_dir.path(), stub_hyperliquid_clients()).await;
+        let harness = test_harness_with_markets(
+            data_dir.path(),
+            stub_hyperliquid_clients(),
+            stub_derive_markets_clients(),
+        )
+        .await;
 
         let missing = harness
             .router
@@ -2116,5 +2278,38 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn derive_markets_serves_the_testnet_universe_and_writes_csv() {
+        let data_dir = TempDir::new().unwrap();
+        let router = test_harness_with_markets(
+            data_dir.path(),
+            stub_hyperliquid_clients(),
+            stub_derive_markets_clients(),
+        )
+        .await
+        .router;
+
+        let response = router
+            .oneshot(get_request("/derive/markets?network=testnet"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+        assert_eq!(body["tickers"], serde_json::json!(["ETH-20260926-2000-C"]));
+        assert_eq!(body["instruments"][0]["instrumentType"], "option");
+        assert_eq!(body["instruments"][0]["strike"], 2000.0);
+        assert!(body["instruments"][0].get("maxLeverage").is_none());
+        assert!(
+            data_dir.path().join("market_derive_testnet.csv").exists(),
+            "successful fetch must rewrite the derive testnet markets csv"
+        );
+        assert!(
+            logs_contain_at(tracing::Level::DEBUG, &["derive markets served"]),
+            "serving derive markets must log completion"
+        );
     }
 }

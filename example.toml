@@ -12,8 +12,11 @@ max_concurrent_requests = 3
 max_retries = 5
 
 # Derive (Lyra) options integration.
-# port and connects to the Derive REST and websocket APIs.
+# Options chain routes mount on the main moneymentum HTTP port when present.
+# `port` is only used by the standalone `derive_cli` binary.
 [derive]
 port = 8100
 rest_base_url = "https://api.lyra.finance"
 ws_url = "wss://api.lyra.finance/ws"
+testnet_rest_base_url = "https://api-demo.lyra.finance"
+testnet_ws_url = "wss://api-demo.lyra.finance/ws"

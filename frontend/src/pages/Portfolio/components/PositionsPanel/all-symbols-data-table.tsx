@@ -210,14 +210,14 @@ export const AllSymbolsDataTable = (
   createEffect(() => {
     const symbols = rows().map(row => row.original.symbol)
     keyboard?.setAllSymbolOrder(symbols)
-    if (keyboard?.focusedPanel() === "allSymbols") {
+    if (keyboard?.focusedPanel() === "hyperliquid") {
       keyboard.ensureAllSymbolsSelection()
     }
   })
 
   // createEffect: scroll selected virtual row into view
   createEffect(() => {
-    if (keyboard?.focusedPanel() !== "allSymbols") {
+    if (keyboard?.focusedPanel() !== "hyperliquid") {
       return
     }
     const index = keyboard.selectedAllSymbolsIndex()
@@ -230,7 +230,7 @@ export const AllSymbolsDataTable = (
   const totalSize = () => rowVirtualizer.getTotalSize()
 
   const isSymbolSelected = (symbol: string): boolean => {
-    if (keyboard?.focusedPanel() !== "allSymbols") {
+    if (keyboard?.focusedPanel() !== "hyperliquid") {
       return false
     }
     const index = keyboard.selectedAllSymbolsIndex()
@@ -246,7 +246,7 @@ export const AllSymbolsDataTable = (
       return
     }
     keyboard?.setSelectedAllSymbolsIndex(index)
-    keyboard?.setFocusedPanel("allSymbols")
+    keyboard?.setFocusedPanel("hyperliquid")
   }
 
   const paddingTop = () => {

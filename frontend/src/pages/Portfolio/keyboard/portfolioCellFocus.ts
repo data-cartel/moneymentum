@@ -4,6 +4,7 @@ export const PORTFOLIO_PANEL_ATTR = "data-portfolio-panel"
 export const ALL_SYMBOLS_SEARCH_ATTR = "data-all-symbols-search"
 export const STAGED_PANEL_ATTR = "data-staged-panel"
 export const STAGED_PIN_ATTR = "data-staged-pin"
+export const DERIVE_PIN_ATTR = "data-derive-pin"
 
 export type PortfolioCellKind = "weight" | "notional"
 
@@ -31,8 +32,8 @@ export const focusPanelContainer = (panelId: string): void => {
   }
 }
 
-export const focusAllSymbolsSearch = (): boolean => {
-  const input = document.querySelector(`[${ALL_SYMBOLS_SEARCH_ATTR}]`)
+const focusInputByAttribute = (attributeName: string): boolean => {
+  const input = document.querySelector(`[${attributeName}]`)
   if (!(input instanceof HTMLInputElement)) {
     return false
   }
@@ -42,16 +43,14 @@ export const focusAllSymbolsSearch = (): boolean => {
   return true
 }
 
-export const focusStagedPin = (): boolean => {
-  const input = document.querySelector(`[${STAGED_PIN_ATTR}]`)
-  if (!(input instanceof HTMLInputElement)) {
-    return false
-  }
+export const focusAllSymbolsSearch = (): boolean =>
+  focusInputByAttribute(ALL_SYMBOLS_SEARCH_ATTR)
 
-  input.focus()
-  input.select()
-  return true
-}
+export const focusStagedPin = (): boolean =>
+  focusInputByAttribute(STAGED_PIN_ATTR)
+
+export const focusDerivePin = (): boolean =>
+  focusInputByAttribute(DERIVE_PIN_ATTR)
 
 /** Defer PIN focus until after the staged panel mounts the unlock field. */
 export const scheduleFocusStagedPin = (): void => {

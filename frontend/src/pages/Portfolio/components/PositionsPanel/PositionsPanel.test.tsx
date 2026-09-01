@@ -45,6 +45,10 @@ vi.mock("@/hooks/useWallet", () => ({
     isConnected: () => walletState.connection === "connected",
     mainAddress: () => null,
     setMainAddress: vi.fn(),
+    deriveCredentials: () => null,
+    networkMode: () => "testnet" as const,
+    isDeriveConnected: () => false,
+    isDeriveLocked: () => false,
   }),
 }))
 
@@ -141,6 +145,7 @@ const positionsPanelProps = (
   overrides: Partial<PositionsPanelProps> = {},
 ): PositionsPanelProps => ({
   hasTotalWeightExceeded: false,
+  hasUnderAllocation: false,
   currentPortfolio: { "BTC/USDC:USDC": bitcoinPosition },
   targetPortfolio: {
     "BTC/USDC:USDC": bitcoinPosition,
@@ -370,9 +375,7 @@ describe("PositionsPanel", () => {
 
     renderPositionsPanel()
 
-    expect(
-      screen.getByText("Connect wallet to load your Hyperliquid portfolio"),
-    ).toBeInTheDocument()
+    expect(screen.getByText("Connect a venue to start")).toBeInTheDocument()
     expect(
       screen.queryByRole("table", { hidden: true }),
     ).not.toBeInTheDocument()
@@ -416,7 +419,7 @@ describe("PositionsPanel", () => {
     renderPositionsPanel({ currentPortfolio: {}, targetPortfolio: {} })
 
     expect(
-      screen.getByText("Add positions from All Symbols."),
+      screen.getByText("Add positions from Hyperliquid or Derive."),
     ).toBeInTheDocument()
     expect(
       screen.queryByRole("table", { hidden: true }),

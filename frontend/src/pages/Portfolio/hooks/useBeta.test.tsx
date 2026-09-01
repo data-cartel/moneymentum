@@ -22,19 +22,22 @@ const createWrapper = () => {
 
 const targetPortfolio = (): Record<string, PortfolioInterface | undefined> => ({
   "BTC/USDC:USDC": {
+    kind: "perp",
+    venue: "hyperliquid",
     symbol: "BTC/USDC:USDC",
     side: "buy",
     leverage: 1,
     notional: 60,
   },
   "ETH/USDC:USDC": {
+    kind: "perp",
+    venue: "hyperliquid",
     symbol: "ETH/USDC:USDC",
     side: "buy",
     leverage: 1,
     notional: 40,
   },
 })
-const targetTotalNotional = () => 100
 
 const bitcoinBetaBenchmark: BetaBenchmark = {
   symbol: "BTC",
@@ -76,12 +79,7 @@ describe("useBeta", () => {
 
     const { result } = renderHook(
       () =>
-        useBeta(
-          targetPortfolio,
-          targetTotalNotional,
-          readonlyPositions,
-          () => bitcoinBetaBenchmark,
-        ),
+        useBeta(targetPortfolio, readonlyPositions, () => bitcoinBetaBenchmark),
       { wrapper: createWrapper() },
     )
 
@@ -108,12 +106,7 @@ describe("useBeta", () => {
 
     const { result } = renderHook(
       () =>
-        useBeta(
-          targetPortfolio,
-          targetTotalNotional,
-          readonlyPositions,
-          () => bitcoinBetaBenchmark,
-        ),
+        useBeta(targetPortfolio, readonlyPositions, () => bitcoinBetaBenchmark),
       { wrapper: createWrapper() },
     )
 
@@ -143,7 +136,6 @@ describe("useBeta", () => {
       () =>
         useBeta(
           targetPortfolio,
-          targetTotalNotional,
           () => [],
           () => bitcoinBetaBenchmark,
         ),
@@ -172,7 +164,6 @@ describe("useBeta", () => {
       () =>
         useBeta(
           targetPortfolio,
-          targetTotalNotional,
           () => [],
           () => selectedBenchmark,
         ),
@@ -211,7 +202,6 @@ describe("useBeta", () => {
       () =>
         useBeta(
           targetPortfolio,
-          targetTotalNotional,
           () => [],
           () => bitcoinBetaBenchmark,
         ),
@@ -238,7 +228,6 @@ describe("useBeta", () => {
       () =>
         useBeta(
           targetPortfolio,
-          targetTotalNotional,
           () => [],
           () => selectedBenchmark,
         ),

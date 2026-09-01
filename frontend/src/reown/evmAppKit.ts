@@ -181,3 +181,15 @@ export const readConnectedEip1193Provider = (
 
   return null
 }
+
+/**
+ * True when AppKit has a live injected provider ready to sign (approveAgent).
+ * A remembered main address alone is not enough -- enableReconnect is false.
+ */
+export const hasLiveEip1193Provider = async (): Promise<boolean> => {
+  const modal = await ensureEvmAppKit().catch(() => null)
+  if (modal === null) {
+    return false
+  }
+  return readConnectedEip1193Provider(modal) !== null
+}

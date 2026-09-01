@@ -6,7 +6,8 @@
 //! module ties them together. The tradable set is catalog listings minus
 //! operator disables -- a join over two projections, which makes "a refresh
 //! never clobbers an operator disable" a structural guarantee rather than a
-//! careful merge (the bug the old `markets.csv` left-join had to avoid by hand).
+//! careful merge (the bug the old `market_hyperliquid.csv` left-join had to
+//! avoid by hand).
 
 use std::collections::BTreeSet;
 

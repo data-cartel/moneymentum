@@ -4,6 +4,7 @@ use clap::Parser;
 use derive::derive_app;
 use moneymentum::Config;
 use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 struct Env {
@@ -15,6 +16,14 @@ struct Env {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let env = Env::parse();
     let config = Config::load(&env.config_path)?;
+    let log_level = config.log_level().as_str();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(format!(
+            "derive={log_level},moneymentum={log_level},tower_http={log_level}"
+        ))
+    });
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+
     let derive_config = config
         .derive
         .ok_or(moneymentum::ConfigError::MissingDeriveConfig)?;

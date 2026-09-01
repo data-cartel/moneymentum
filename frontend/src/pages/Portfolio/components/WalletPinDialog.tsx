@@ -1,4 +1,4 @@
-import { createSignal, Show, type JSX } from "solid-js"
+import { createMemo, createSignal, Show, type JSX } from "solid-js"
 import * as Effect from "effect/Effect"
 import * as Either from "effect/Either"
 import { toast } from "solid-sonner"
@@ -12,28 +12,56 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
+import { hasSharedWalletPin } from "@/contexts/wallet-context"
 import { useWallet } from "@/hooks/useWallet"
 import { getErrorMessage } from "@/lib/error-message"
-import { prefetchEvmAppKit } from "@/reown/evmAppKit"
-import {
-  normalizeWalletPinInput,
-  WALLET_PIN_LENGTH,
-} from "@/services/walletCredentialCrypto"
+import { hasLiveEip1193Provider, prefetchEvmAppKit } from "@/reown/evmAppKit"
+import { WALLET_PIN_LENGTH } from "@/services/walletCredentialCrypto"
 
-export type WalletPinDialogMode = "authorize" | "unlock"
+import { WalletPinField } from "./WalletPinField"
 
-interface WalletPinDialogProps {
+export type WalletPinDialogMode = "authorize" | "unlock" | "confirm"
+
+interface WalletPinConfirmConfig {
+  title: string
+  description: string
+  submitLabel?: string
+  submittingLabel?: string
+  successToast?: string
+  onConfirm: (pin: string) => Effect.Effect<void, unknown>
+}
+
+interface WalletPinDialogBaseProps {
   open: boolean
-  mode: WalletPinDialogMode
   onOpenChange: (open: boolean) => void
-  /** Called after a successful authorize or unlock. */
+  /** Called after a successful authorize, unlock, or confirm. */
   onSuccess?: () => void
 }
 
+type WalletPinDialogProps =
+  | (WalletPinDialogBaseProps & {
+      mode: "authorize" | "unlock"
+    })
+  | (WalletPinDialogBaseProps & {
+      mode: "confirm"
+      confirm: WalletPinConfirmConfig
+    })
+
+interface WalletPinModeConfig {
+  title: string
+  description: string
+  pinLabel: string
+  submitLabel: string
+  submittingLabel: string
+  successMessage: string | undefined
+  action: (enteredPin: string) => Effect.Effect<void, unknown>
+}
+
 /**
- * Standard PIN confirmation popup used before authorizing a Hyperliquid agent
- * or unlocking an encrypted agent session after reload.
+ * PIN dialog for Hyperliquid agent authorize/unlock, or a caller-supplied
+ * confirm action (e.g. encrypt a Derive session with the shared local PIN).
+ *
+ * Mode copy + Effect action live in one config switch; submit is shared.
  */
 export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
   const { authorizeAgent, unlock } = useWallet()
@@ -41,15 +69,65 @@ export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const [isSubmitting, setIsSubmitting] = createSignal(false)
 
-  const title = () =>
-    props.mode === "authorize"
-      ? "Connect to Hyperliquid"
-      : "Unlock trading agent"
+  const modeConfig = createMemo((): WalletPinModeConfig => {
+    const pinAlreadyExists = hasSharedWalletPin()
+    const defaultPinLabel = pinAlreadyExists
+      ? "PIN"
+      : `Local PIN (${String(WALLET_PIN_LENGTH)} digits)`
 
-  const description = () =>
-    props.mode === "authorize"
-      ? "Enter a 6-digit local PIN to encrypt the new API agent key, then approve the agent in your wallet."
-      : "Enter your 6-digit local PIN to decrypt the stored API agent key."
+    switch (props.mode) {
+      case "confirm": {
+        const confirmConfig = props.confirm
+        return {
+          title: confirmConfig.title,
+          description: confirmConfig.description,
+          pinLabel: defaultPinLabel,
+          submitLabel: confirmConfig.submitLabel ?? "Continue",
+          submittingLabel: confirmConfig.submittingLabel ?? "Working...",
+          successMessage: confirmConfig.successToast,
+          action: enteredPin => confirmConfig.onConfirm(enteredPin),
+        }
+      }
+      case "unlock":
+        return {
+          title: "Unlock trading agent",
+          description:
+            "Enter your 6-digit local PIN to decrypt the stored API agent key.",
+          pinLabel: "PIN",
+          submitLabel: "Unlock",
+          submittingLabel: "Unlocking...",
+          successMessage: "Wallet unlocked",
+          action: enteredPin => unlock(enteredPin),
+        }
+      case "authorize":
+        return {
+          title: pinAlreadyExists ? "Enter local PIN" : "Create local PIN",
+          description: pinAlreadyExists
+            ? "Enter the same 6-digit PIN already set for this browser, then approve the API agent in your wallet."
+            : "Choose a 6-digit local PIN to encrypt the new API agent key, then approve the agent in your wallet.",
+          pinLabel: defaultPinLabel,
+          submitLabel: "Continue",
+          submittingLabel: "Loading wallet...",
+          successMessage: "Hyperliquid agent connected",
+          action: enteredPin =>
+            Effect.tryPromise({
+              try: () => hasLiveEip1193Provider(),
+              catch: cause =>
+                cause instanceof Error ? cause : new Error(String(cause)),
+            }).pipe(
+              Effect.flatMap(providerIsLive =>
+                providerIsLive
+                  ? authorizeAgent(enteredPin)
+                  : Effect.fail(
+                      new Error(
+                        "Connect your Hyperliquid wallet first, then approve the agent.",
+                      ),
+                    ),
+              ),
+            ),
+        }
+    }
+  })
 
   const resetForm = () => {
     setPin("")
@@ -76,84 +154,44 @@ export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
     setIsSubmitting(true)
     setErrorMessage(null)
 
-    if (props.mode === "authorize") {
-      const authorizeResult = await Effect.runPromise(
-        Effect.either(authorizeAgent(enteredPin)),
-      )
+    const { action, successMessage } = modeConfig()
+    const result = await Effect.runPromise(Effect.either(action(enteredPin)))
 
-      if (Either.isLeft(authorizeResult)) {
-        console.error(
-          "Failed to authorize Hyperliquid agent:",
-          authorizeResult.left,
-        )
-        setErrorMessage(getErrorMessage(authorizeResult.left))
-        setPin("")
-        setIsSubmitting(false)
-        return
-      }
-
-      toast.success("Hyperliquid agent connected")
-      resetForm()
-      props.onOpenChange(false)
-      props.onSuccess?.()
-      return
-    }
-
-    const unlockResult = await Effect.runPromise(
-      Effect.either(unlock(enteredPin)),
-    )
-
-    if (Either.isLeft(unlockResult)) {
-      console.error("Failed to unlock wallet:", unlockResult.left)
-      setErrorMessage(getErrorMessage(unlockResult.left))
+    if (Either.isLeft(result)) {
+      console.error(`Failed to ${props.mode} with PIN:`, result.left)
+      setErrorMessage(getErrorMessage(result.left))
       setPin("")
       setIsSubmitting(false)
       return
     }
 
-    toast.success("Wallet unlocked")
+    if (successMessage !== undefined) {
+      toast.success(successMessage)
+    }
     resetForm()
     props.onOpenChange(false)
     props.onSuccess?.()
-  }
-
-  const primaryLabel = () => {
-    if (isSubmitting()) {
-      return props.mode === "authorize" ? "Loading wallet..." : "Unlocking..."
-    }
-    return props.mode === "authorize" ? "Continue" : "Unlock"
   }
 
   return (
     <Dialog open={props.open} onOpenChange={handleOpenChange}>
       <DialogContent class="max-w-sm">
         <DialogHeader>
-          <DialogTitle>{title()}</DialogTitle>
-          <DialogDescription>{description()}</DialogDescription>
+          <DialogTitle>{modeConfig().title}</DialogTitle>
+          <DialogDescription>{modeConfig().description}</DialogDescription>
         </DialogHeader>
         <div class="space-y-2">
-          <label for="walletPinDialogInput" class="text-sm font-medium">
-            Local PIN ({String(WALLET_PIN_LENGTH)} digits)
-          </label>
-          <Input
+          <WalletPinField
             id="walletPinDialogInput"
-            type="password"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            placeholder="6-digit PIN"
-            maxlength={WALLET_PIN_LENGTH}
+            label={modeConfig().pinLabel}
             value={pin()}
             disabled={isSubmitting()}
-            class="h-9 font-mono tracking-[0.3em]"
-            onInput={event => {
-              setPin(normalizeWalletPinInput(event.currentTarget.value))
+            onChange={nextPin => {
+              setPin(nextPin)
               setErrorMessage(null)
             }}
-            onKeyDown={event => {
-              if (event.key === "Enter") {
-                event.preventDefault()
-                void submitPin()
-              }
+            onSubmit={() => {
+              void submitPin()
             }}
           />
           <Show when={errorMessage()}>
@@ -185,7 +223,9 @@ export const WalletPinDialog = (props: WalletPinDialogProps): JSX.Element => {
               void submitPin()
             }}
           >
-            {primaryLabel()}
+            {isSubmitting()
+              ? modeConfig().submittingLabel
+              : modeConfig().submitLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

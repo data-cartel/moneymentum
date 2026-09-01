@@ -1,0 +1,471 @@
+/* Derive options chain -- chrome matches Portfolio panel tokens.
+ * Ask lifts (buy) -> green/positive; bid hits (sell) -> red/negative. */
+.derive-options {
+  --d-bg: var(--background);
+  --d-surface: var(--background);
+  --d-elevated: color-mix(in oklch, var(--muted) 35%, var(--background));
+  --d-border: var(--border);
+  --d-border-soft: var(--border);
+  --d-muted: var(--muted-foreground);
+  --d-text: var(--foreground);
+  --d-buy: var(--green);
+  --d-sell: var(--red);
+  --d-call: var(--green);
+  --d-put: var(--red);
+  --d-itm: color-mix(in srgb, var(--green) 6%, transparent);
+  --d-chip: color-mix(in oklch, var(--muted) 40%, var(--background));
+  --d-chip-active: color-mix(in oklch, var(--muted) 70%, var(--background));
+  --d-accent: var(--primary);
+  --d-selected-fg: oklch(0.145 0 0);
+
+  background: var(--d-bg);
+  color: var(--d-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.derive-options .d-chip {
+  border: 1px solid var(--d-border);
+  background: var(--d-chip);
+  color: var(--d-muted);
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+  font-size: 11px;
+  line-height: 1.2;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.derive-options .d-chip:hover {
+  color: var(--d-text);
+  border-color: color-mix(in oklch, var(--border) 40%, var(--foreground));
+}
+
+.derive-options .d-chip-active {
+  background: var(--d-chip-active);
+  border-color: color-mix(in oklch, var(--primary) 40%, var(--border));
+  color: var(--d-text);
+}
+
+.derive-options .d-expiry {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--d-muted);
+  padding: 0.45rem 0.65rem 0.35rem;
+  font-size: 11px;
+}
+
+.derive-options .d-expiry:hover {
+  color: var(--d-text);
+}
+
+.derive-options .d-expiry-active {
+  color: var(--d-text);
+  border-bottom-color: var(--d-accent);
+}
+
+.derive-options .d-board {
+  border: 1px solid var(--d-border);
+  background: var(--d-surface);
+  border-radius: 0.25rem;
+  overflow: hidden;
+}
+
+.derive-options .d-chain-scroll {
+  background: var(--d-surface);
+  /* Localize paints to the scrolling chain, not the whole dockview panel. */
+  contain: content;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.derive-options .d-chain-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.derive-options .d-greeks-scroll {
+  contain: content;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.derive-options .d-greeks-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.derive-options .d-options-split {
+  min-height: 0;
+}
+
+.derive-options .d-options-split .dv-split-view-container {
+  height: 100%;
+  width: 100%;
+}
+
+.derive-options .d-chain {
+  /* Fixed cols sized in `ch` from BTC 2026-08-27 snapshot maxima. */
+  table-layout: fixed;
+  width: max-content;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 11px;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  /* Horizontal cell padding (0.4rem each side) baked into col widths. */
+  --d-cell-x: 0.8rem;
+}
+
+/* Options chain: max rendered lengths -- size 4, iv 6, quote 9, mark 8, delta 6, strike 6. */
+.derive-options .d-options-chain .d-col-size {
+  width: calc(4ch + var(--d-cell-x));
+}
+
+.derive-options .d-options-chain .d-col-iv {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+.derive-options .d-options-chain .d-col-quote {
+  width: calc(9ch + var(--d-cell-x));
+}
+
+.derive-options .d-options-chain .d-col-mark {
+  width: calc(8ch + var(--d-cell-x));
+}
+
+.derive-options .d-options-chain .d-col-delta {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+.derive-options .d-options-chain .d-col-strike {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+/* Greeks: maxima from the same snapshot (instrument 20, theta 9, ...). */
+.derive-options .d-greeks-chain .d-g-col-instrument {
+  width: calc(20ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-strike {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-type {
+  width: calc(4ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-money {
+  width: calc(5ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-quote {
+  width: calc(9ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-iv {
+  width: calc(5ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-delta {
+  width: calc(7ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-gamma {
+  width: calc(8ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-vega {
+  width: calc(7ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-theta {
+  width: calc(9ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-side-iv {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-rho {
+  width: calc(5ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-forward {
+  width: calc(7ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-df {
+  width: calc(6ch + var(--d-cell-x));
+}
+
+.derive-options .d-greeks-chain .d-g-col-mdl {
+  width: calc(5ch + var(--d-cell-x));
+}
+
+.derive-options .d-chain thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--d-elevated);
+  border-bottom: 1px solid var(--d-border);
+  color: var(--d-muted);
+  font-weight: 500;
+  padding: 0.35rem 0.4rem;
+  white-space: nowrap;
+}
+
+.derive-options .d-chain tbody td {
+  padding: 0.28rem 0.4rem;
+  border-bottom: 1px solid var(--d-border-soft);
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.derive-options .d-chain thead th.text-right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.derive-options .d-chain tbody tr:hover td {
+  background: color-mix(in oklch, var(--muted) 45%, transparent);
+}
+
+.derive-options .d-calls-label {
+  color: var(--d-call);
+  text-align: center;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+.derive-options .d-puts-label {
+  color: var(--d-put);
+  text-align: center;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+.derive-options .d-strike-col {
+  position: sticky;
+  z-index: 1;
+  background: var(--d-surface);
+  border-left: 1px solid var(--d-border);
+  border-right: 1px solid var(--d-border);
+  text-align: center !important;
+  font-weight: 600;
+  color: var(--d-text);
+}
+
+.derive-options thead .d-expiry-countdown {
+  overflow: visible;
+  border-left: none;
+  border-right: none;
+  z-index: 4;
+  font-weight: 500;
+}
+
+.derive-options .d-expiry-countdown-label {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--d-muted);
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  text-align: center;
+  pointer-events: none;
+}
+
+.derive-options thead .d-strike-col {
+  z-index: 3;
+  background: var(--d-elevated);
+}
+
+.derive-options thead .d-strike-col.d-expiry-countdown {
+  z-index: 4;
+}
+
+.derive-options .d-itm {
+  background: var(--d-itm);
+}
+
+.derive-options .d-spot-divider-row td {
+  position: relative;
+  height: 2rem;
+  padding: 0 !important;
+  border: none !important;
+  overflow: visible;
+  vertical-align: middle;
+  background: var(--d-surface);
+}
+
+.derive-options .d-spot-divider {
+  position: relative;
+  height: 2rem;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.derive-options .d-spot-divider-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1.5px dashed color-mix(in oklch, var(--primary) 55%, transparent);
+}
+
+.derive-options .d-spot-badge {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  border-radius: 999px;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  padding: 0.2rem 0.65rem;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+/* Ask -> buy (green); bid -> sell (red). Flash = 30% tint via default transition. */
+.derive-options .d-ask,
+.derive-options .d-bid {
+  font-weight: 500;
+  background-color: transparent;
+  transition: background-color var(--default-transition-duration)
+    var(--default-transition-timing-function);
+}
+
+.derive-options .d-ask {
+  color: var(--d-buy);
+}
+
+.derive-options .d-bid {
+  color: var(--d-sell);
+}
+
+.derive-options .d-bid.quote-flash {
+  background-color: color-mix(in srgb, var(--red) 30%, transparent);
+}
+
+.derive-options .d-ask.quote-flash {
+  background-color: color-mix(in srgb, var(--green) 30%, transparent);
+}
+
+.derive-options .d-size,
+.derive-options .d-iv,
+.derive-options .d-delta {
+  color: var(--d-muted);
+}
+
+.derive-options .d-mark {
+  color: var(--d-text);
+}
+
+.derive-options .d-spot {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--d-text);
+}
+
+.derive-options button.d-price-btn {
+  cursor: pointer;
+  border: 1px solid var(--d-border);
+  background: transparent;
+  box-sizing: border-box;
+  width: 100%;
+  font-family: inherit;
+  font-size: inherit;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.derive-options button.d-price-btn.text-center {
+  text-align: center;
+}
+
+.derive-options button.d-price-btn.text-right {
+  text-align: right;
+}
+
+.derive-options
+  button.d-price-btn:hover:not(.d-price-selected-ask):not(
+    .d-price-selected-bid
+  ) {
+  border-color: color-mix(in oklch, var(--border) 30%, var(--foreground));
+}
+
+.derive-options button.d-price-selected-ask,
+.derive-options span.d-price-selected-ask {
+  background: var(--d-buy);
+  border-color: var(--d-buy);
+  color: var(--d-selected-fg);
+}
+
+.derive-options button.d-price-selected-bid,
+.derive-options span.d-price-selected-bid {
+  background: var(--d-sell);
+  border-color: var(--d-sell);
+  color: var(--d-selected-fg);
+}
+
+.derive-options .d-side-toggle button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--d-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.derive-options .d-side-toggle button.d-side-buy.d-side-active {
+  background: var(--d-buy);
+  color: var(--d-selected-fg);
+}
+
+.derive-options .d-side-toggle button.d-side-sell.d-side-active {
+  background: var(--d-sell);
+  color: var(--d-selected-fg);
+}
+
+.derive-options .d-side-toggle button:not(.d-side-active):hover {
+  color: var(--d-text);
+  background: var(--d-elevated);
+}
+
+.derive-options .d-detail-tab {
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--d-muted);
+  padding: 0.2rem 0.55rem;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.derive-options .d-detail-tab:hover {
+  color: var(--d-text);
+}
+
+.derive-options .d-detail-tab-active {
+  background: var(--d-chip-active);
+  color: var(--d-text);
+}

@@ -2,6 +2,38 @@ import type { SerializedDockview } from "@arminmajerie/dockview-solid"
 
 export const PORTFOLIO_DOCKVIEW_LAYOUT_STORAGE_KEY = "portfolio-dockview-layout"
 
+/** Panels the workspace cannot operate without; their absence forces a repair. */
+export const REQUIRED_PORTFOLIO_PANEL_IDS = [
+  "portfolio",
+  "hyperliquid",
+  "derive",
+  "staged",
+] as const
+
+const layoutHasRequiredPanels = (
+  value: unknown,
+): value is SerializedDockview => {
+  if (typeof value !== "object" || value === null) {
+    return false
+  }
+  if (!("panels" in value)) {
+    return false
+  }
+  const panels = value.panels
+  if (typeof panels !== "object" || panels === null || Array.isArray(panels)) {
+    return false
+  }
+  const panelIds = Object.keys(panels)
+  return REQUIRED_PORTFOLIO_PANEL_IDS.every(panelId =>
+    panelIds.includes(panelId),
+  )
+}
+
+/**
+ * Loads the persisted dockview layout. Drops layouts that still use the
+ * pre-multi-venue `allSymbols` panel id (or are missing `hyperliquid` /
+ * `derive`) so the default layout can be applied instead.
+ */
 export const readPortfolioDockviewLayout = (): SerializedDockview | null => {
   try {
     if (
@@ -17,10 +49,13 @@ export const readPortfolioDockviewLayout = (): SerializedDockview | null => {
     }
 
     const parsed: unknown = JSON.parse(raw)
-    if (typeof parsed !== "object" || parsed === null) {
+    if (!layoutHasRequiredPanels(parsed)) {
+      if (typeof parsed === "object" && parsed !== null) {
+        localStorage.removeItem(PORTFOLIO_DOCKVIEW_LAYOUT_STORAGE_KEY)
+      }
       return null
     }
-    return parsed as SerializedDockview
+    return parsed
   } catch {
     return null
   }
@@ -45,13 +80,6 @@ export const writePortfolioDockviewLayout = (
     return
   }
 }
-
-/** Panels the workspace cannot operate without; their absence forces a repair. */
-export const REQUIRED_PORTFOLIO_PANEL_IDS = [
-  "portfolio",
-  "allSymbols",
-  "staged",
-] as const
 
 /** The slice of the Dockview API that layout restoration drives. */
 export interface PortfolioLayoutHost {

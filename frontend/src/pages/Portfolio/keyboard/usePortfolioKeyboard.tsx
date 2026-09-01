@@ -19,6 +19,7 @@ import { isPrimaryModifierPressed } from "./modifierLabel"
 import {
   blurActiveElement,
   focusAllSymbolsSearch,
+  focusDerivePin,
   focusPanelContainer,
   focusPortfolioCell,
   focusStagedPin,
@@ -32,6 +33,8 @@ export interface PortfolioKeyboardActions {
   getAllSymbolSymbols: () => string[]
   isPinDialogOpen: () => boolean
   connectionState: () => StagedConnectionState
+  /** Derive stored session present but credentials not decrypted. */
+  isDeriveSessionLocked: () => boolean
   onRemove: (symbol: string) => void
   onUndoRemove: (symbol: string) => void
   onSideChange: (symbol: string, side: OrderSide) => void
@@ -200,9 +203,20 @@ export const PortfolioKeyboardProvider = (props: {
       return
     }
 
-    if (panelId === "allSymbols") {
+    if (panelId === "hyperliquid") {
       ensureAllSymbolsSelection()
-      focusPanelContainer("allSymbols")
+      focusPanelContainer("hyperliquid")
+      return
+    }
+
+    if (panelId === "derive") {
+      focusPanelContainer("derive")
+      if (props.actions.isDeriveSessionLocked()) {
+        // Defer so the PIN field is mounted when switching into Derive.
+        queueMicrotask(() => {
+          focusDerivePin()
+        })
+      }
       return
     }
 
@@ -436,10 +450,10 @@ export const PortfolioKeyboardProvider = (props: {
       event.preventDefault()
 
       const connection = props.actions.connectionState()
-      if (
-        connection === "walletDisconnected" ||
-        connection === "agentMissing"
-      ) {
+      if (connection === "chooseVenue") {
+        return
+      }
+      if (connection === "agentMissing") {
         props.actions.onOpenWalletPinDialog()
         return
       }
@@ -524,7 +538,7 @@ export const PortfolioKeyboardProvider = (props: {
       case "portfolio":
         handlePortfolioKeys(event)
         break
-      case "allSymbols":
+      case "hyperliquid":
         handleAllSymbolsKeys(event)
         break
       case "staged":

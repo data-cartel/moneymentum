@@ -4,14 +4,14 @@
   reviewed via the resulting PR rather than a separate ADR sign-off
 - Date: 2026-06-28
 - Tracking issue: TBD (to be filed)
-- Relates to: PR #158 (adds `src/derive.rs`), ADR 0001 (event-sorcery; cites the
-  SPEC's dual-abstraction principle -- abstract both data sources and execution
-  venues)
+- Relates to: PR #158 (originally added `src/derive.rs`, now
+  `crates/derive/src/lib.rs`), ADR 0001 (event-sorcery; cites the SPEC's
+  dual-abstraction principle -- abstract both data sources and execution venues)
 
 ## Context
 
-The backend is a **single `moneymentum` crate**. Two venue integrations live in
-it today, at very different levels of maturity:
+The backend is a **single `moneymentum` crate** plus per-venue crates. Two venue
+integrations live at very different levels of maturity:
 
 - `src/hyperliquid.rs` (702 lines) is **already trait-abstracted**: a
   `pub(crate) trait Hyperliquid: Send + Sync` (`list_markets`, `fetch_candles`,
@@ -19,13 +19,13 @@ it today, at very different levels of maturity:
   `hyperliquid_rust_sdk`, generic ingesters (`CandleIngester<H>`,
   `FundingRateIngester<H>`), and a `MockHyperliquid` already used in tests
   (currently behind `#[cfg(test)]`).
-- `src/derive.rs` (1036 lines, new in PR #158) is a **monolith**: it mixes wire
-  DTOs, `DeriveConfig`, in-memory state (`OptionsCatalogue`, `DeriveState`), a
-  Axum CORS middleware, the websocket hub (`run_websocket_hub`,
-  subscribe/unsubscribe batching), parsing helpers, options-domain math
-  (`build_greeks`, `aggregate_risk`, `scenario_pnl`), **and** the Axum HTTP
-  routes/SSE stream. There is no client trait, no mock seam, and financial
-  values flow as raw `f64`.
+- `crates/derive/src/lib.rs` (2052 lines; extracted from the `src/derive.rs`
+  monolith in PR #158) is still a **monolith**: it mixes wire DTOs,
+  `DeriveConfig`, in-memory state (`OptionsCatalogue`, `DeriveState`), Axum CORS
+  middleware, the websocket hub (`run_websocket_hub`, subscribe/unsubscribe
+  batching), parsing helpers, options-domain math (`build_greeks`), **and** the
+  Axum HTTP routes/SSE stream. There is no client trait, no mock seam, and
+  financial values flow as raw `f64`.
 
 The maintainer wants: hyperliquid integration as its own crate, derive
 integration as its own crate, a trait interface for both, and Cargo feature
@@ -49,13 +49,13 @@ recorded here for review before any code moves.
 
 2. **Per-venue capability traits, NOT one unified trait.** Hyperliquid exposes
    perp **market data** (markets, candles, funding); Derive exposes an **options
-   catalogue + live quotes/greeks/risk** over a websocket. These capability sets
-   do not overlap, so a single `trait Venue { ... }` covering both would be a
-   leaky abstraction -- every consumer would get methods that are meaningless
-   for the other venue. Keep `trait Hyperliquid` and a new `trait Derive`, and
-   unify them only under a **minimal shared supertrait** for what is genuinely
-   common (e.g. `trait Venue: Send + Sync { fn name(&self) -> VenueName; }`,
-   plus a connect/health hook if a real shared lifecycle emerges). This honors
+   catalogue + live quotes/greeks** over a websocket. These capability sets do
+   not overlap, so a single `trait Venue { ... }` covering both would be a leaky
+   abstraction -- every consumer would get methods that are meaningless for the
+   other venue. Keep `trait Hyperliquid` and a new `trait Derive`, and unify
+   them only under a **minimal shared supertrait** for what is genuinely common
+   (e.g. `trait Venue: Send + Sync { fn name(&self) -> VenueName; }`, plus a
+   connect/health hook if a real shared lifecycle emerges). This honors
    "decouple what varies independently" -- the abstraction models distinct venue
    capabilities, not a forced union.
 
@@ -70,10 +70,10 @@ recorded here for review before any code moves.
 4. **Decompose `derive.rs` first; only the venue client moves into the crate.**
    Split the monolith into: (a) the **Derive venue client** (websocket hub +
    catalogue + quote state) behind `trait Derive` -> `crates/derive`; (b) the
-   **options domain** (greeks/risk/scenario, pure functions) -> a module in the
-   derive crate; (c) the **Axum routes/SSE + CORS middleware** -> stay in the
-   app crate as the web adapter. The HTTP layer is not part of the venue
-   integration and must not live in the venue crate.
+   **options domain** (greeks, pure functions) -> a module in the derive crate;
+   (c) the **Axum routes/SSE + CORS middleware** -> stay in the app crate as the
+   web adapter. The HTTP layer is not part of the venue integration and must not
+   live in the venue crate.
 
 5. **Replace `f64` money/quantity at the venue boundary with `rust_decimal` /
    domain newtypes** as part of the extraction (`rust_decimal` is already a
@@ -88,6 +88,23 @@ recorded here for review before any code moves.
   must be re-pointed at the new crates.
 - Larger blast radius than a review fix -- this is its own effort, not a
   surgical change.
+
+## Superseding note (shipped HTTP boundary)
+
+Decision 4 said the Axum routes/SSE stream and CORS middleware stay in the app
+crate as a web adapter, with only the venue client and options domain moving
+into `crates/derive`.
+
+The shipped crate keeps that HTTP adapter inside `crates/derive/src/lib.rs`:
+`derive_options_router`, `get_bootstrap`, `get_snapshot`, `stream_options`,
+`post_active_expiry`, `post_active_asset`, and `cors_middleware`. The app crate
+mounts `derive::derive_options_router` and does not own Derive HTTP internals.
+
+Those handlers share `DeriveState`, the options catalogue, and the websocket
+hub. Exporting that surface so the app crate can own the routes would leak venue
+internals across the crate boundary. The HTTP adapter therefore lives next to
+the hub it drives; a later split can still extract it if a thinner client trait
+appears.
 
 ## Alternatives considered
 

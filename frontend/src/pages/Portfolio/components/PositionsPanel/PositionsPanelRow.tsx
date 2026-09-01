@@ -19,7 +19,14 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/cn"
 import type { OrderSide } from "@/hooks/useTrading"
-import { MIN_USD, type PortfolioInterface } from "../../hooks/usePortfolioState"
+import deriveIconUrl from "@/assets/venues/derive.png"
+import hyperliquidIconUrl from "@/assets/venues/hyperliquid.png"
+import {
+  MIN_USD,
+  isPerpPosition,
+  type PortfolioInterface,
+  type PortfolioVenue,
+} from "../../hooks/usePortfolioState"
 import {
   betaClassName,
   formatDecimal,
@@ -69,6 +76,12 @@ const getSideBadgeClass = (side: OrderSide) =>
   side === "buy"
     ? "bg-green-500/20 text-green-500"
     : "bg-red-500/20 text-red-500"
+
+const venueIconUrl = (venue: PortfolioVenue): string =>
+  venue === "hyperliquid" ? hyperliquidIconUrl : deriveIconUrl
+
+const venueLabel = (venue: PortfolioVenue): string =>
+  venue === "hyperliquid" ? "Hyperliquid" : "Derive"
 
 export const PositionsPanelRow = (props: {
   symbol: string
@@ -129,8 +142,20 @@ export const PositionsPanelRow = (props: {
 
   const isNew = () => props.status === "new"
 
+  const canEditLeverage = () => {
+    const position = props.position()
+    return isPerpPosition(position) && position.venue === "hyperliquid"
+  }
+
+  const positionLeverage = () => {
+    const position = props.position()
+    return isPerpPosition(position) ? position.leverage : 1
+  }
+
   const baseSymbol = () =>
     props.position().symbol.split("/")[0] ?? props.position().symbol
+
+  const positionVenue = () => props.position().venue
 
   const leverageEditorSpan = () => leverageEditorColumnSpan()
 
@@ -290,6 +315,9 @@ export const PositionsPanelRow = (props: {
   let openedByKeyboardRequest = false
 
   const openLeverageEditor = () => {
+    if (!canEditLeverage()) {
+      return
+    }
     clearLeverageEditorTimers()
     resetLeverageKeyboardEntry()
     setIsLeverageEditorMounted(true)
@@ -477,6 +505,12 @@ export const PositionsPanelRow = (props: {
               </div>
             </Show>
             <div class="flex min-w-0 flex-row items-center gap-[4px]">
+              <img
+                src={venueIconUrl(positionVenue())}
+                alt={venueLabel(positionVenue())}
+                title={venueLabel(positionVenue())}
+                class="h-3.5 w-3.5 shrink-0 rounded-sm"
+              />
               <span
                 class={cn(
                   "min-w-0 truncate font-medium",
@@ -485,17 +519,19 @@ export const PositionsPanelRow = (props: {
               >
                 {baseSymbol()}
               </span>
-              <kbd class={rowHintClass()}>l</kbd>
-              <LeverageEditorTrigger
-                isOpen={isLeverageEditorMounted()}
-                onOpen={openLeverageEditor}
-                onClose={closeLeverageEditor}
-                symbol={props.position().symbol}
-                leverage={props.position().leverage}
-                maxLeverage={props.maxLeverage}
-                leverageLimitsIsLoading={props.leverageLimitsIsLoading}
-                disabled={isClosing()}
-              />
+              <Show when={canEditLeverage()}>
+                <kbd class={rowHintClass()}>l</kbd>
+                <LeverageEditorTrigger
+                  isOpen={isLeverageEditorMounted()}
+                  onOpen={openLeverageEditor}
+                  onClose={closeLeverageEditor}
+                  symbol={props.position().symbol}
+                  leverage={positionLeverage()}
+                  maxLeverage={props.maxLeverage}
+                  leverageLimitsIsLoading={props.leverageLimitsIsLoading}
+                  disabled={isClosing()}
+                />
+              </Show>
             </div>
           </div>
         </td>
@@ -695,7 +731,7 @@ export const PositionsPanelRow = (props: {
               <div class="w-full max-w-[13.875rem]">
                 <LeverageSliderEditor
                   symbol={props.position().symbol}
-                  leverage={props.position().leverage}
+                  leverage={positionLeverage()}
                   maxLeverage={props.maxLeverage}
                   onLeverageChange={props.onLeverageChange}
                 />

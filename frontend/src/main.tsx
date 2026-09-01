@@ -14,7 +14,6 @@ const PortfolioPage = lazy(() => import("./pages/Portfolio"))
 const MainPage = lazy(() => import("./pages/MainPage"))
 const PrototypePage = lazy(() => import("./pages/Prototype"))
 const TokenPage = lazy(() => import("./pages/TokenPage"))
-const DeriveOptionsPage = lazy(() => import("./pages/DeriveOptions"))
 
 const NotFound = () => <div>Page not found</div>
 
@@ -72,9 +71,6 @@ render(
             </Route>
             <Route path="/token/:ticker" component={AppLayout}>
               <Route path="/" component={TokenPage} />
-            </Route>
-            <Route path="/derive-options" component={AppLayout}>
-              <Route path="/" component={DeriveOptionsPage} />
             </Route>
             <Route path="*404" component={NotFound} />
           </Router>

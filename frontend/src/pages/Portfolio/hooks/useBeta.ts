@@ -2,7 +2,11 @@ import * as Effect from "effect/Effect"
 import { useQuery } from "@tanstack/solid-query"
 import { createMemo } from "solid-js"
 import { postJson } from "@/lib/http"
-import type { PortfolioInterface } from "./usePortfolioState"
+import {
+  isPerpPosition,
+  type PerpPortfolioPosition,
+  type PortfolioInterface,
+} from "./usePortfolioState"
 import type { ReadonlyBetaPosition } from "./useReadonlyPortfolioState"
 
 export interface BetaBenchmark {
@@ -18,11 +22,14 @@ const symbolToTicker = (symbol: string): string =>
 
 const weightsFromPortfolio = (
   portfolio: Record<string, PortfolioInterface | undefined>,
-  portfolioTotalNotional: number,
   readonlyPositions: ReadonlyBetaPosition[],
 ): Record<string, number> => {
+  // Options and Derive perps are excluded from beta until we map underlyings.
   const exchangePositions = Object.values(portfolio).filter(
-    (position): position is PortfolioInterface => position !== undefined,
+    (position): position is PerpPortfolioPosition =>
+      position !== undefined &&
+      isPerpPosition(position) &&
+      position.venue === "hyperliquid",
   )
   const includedReadonlyPositions = readonlyPositions.filter(
     position =>
@@ -35,7 +42,11 @@ const weightsFromPortfolio = (
     (notionalSum, position) => notionalSum + position.notionalUsd,
     0,
   )
-  const totalNotional = portfolioTotalNotional + readonlyTotalNotional
+  const perpTotalNotional = exchangePositions.reduce(
+    (sum, position) => sum + position.notional,
+    0,
+  )
+  const totalNotional = perpTotalNotional + readonlyTotalNotional
 
   if (totalNotional <= 0) return {}
 
@@ -91,16 +102,11 @@ const fetchBeta = (
 
 export const useBeta = (
   portfolio: () => Record<string, PortfolioInterface | undefined>,
-  portfolioTotalNotional: () => number,
   readonlyPositions: () => ReadonlyBetaPosition[],
   selectedBenchmark: () => BetaBenchmark,
 ) => {
   const weights = createMemo(() =>
-    weightsFromPortfolio(
-      portfolio(),
-      portfolioTotalNotional(),
-      readonlyPositions(),
-    ),
+    weightsFromPortfolio(portfolio(), readonlyPositions()),
   )
   const weightsKey = createMemo(() => queryKeyFromWeights(weights()))
   const methodology = createMemo(() => {

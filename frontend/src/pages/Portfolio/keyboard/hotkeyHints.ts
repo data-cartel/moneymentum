@@ -1,6 +1,6 @@
 import { modifierKeyLabel } from "./modifierLabel"
 
-export type KeyboardPanelId = "portfolio" | "allSymbols" | "staged"
+export type KeyboardPanelId = "portfolio" | "hyperliquid" | "derive" | "staged"
 
 export interface HotkeyHint {
   keys: string
@@ -9,15 +9,19 @@ export interface HotkeyHint {
 
 export const PANEL_DIGIT_BY_ID: Record<KeyboardPanelId, string> = {
   portfolio: "1",
-  allSymbols: "2",
-  staged: "3",
+  hyperliquid: "2",
+  derive: "3",
+  staged: "4",
 }
 
 /** True when `panelId` is a keyboard-navigable portfolio panel. */
 export const isKeyboardPanelId = (
   panelId: string,
 ): panelId is KeyboardPanelId =>
-  panelId === "portfolio" || panelId === "allSymbols" || panelId === "staged"
+  panelId === "portfolio" ||
+  panelId === "hyperliquid" ||
+  panelId === "derive" ||
+  panelId === "staged"
 
 /** Digit badge for a panel id, or undefined when the panel has no binding. */
 export const panelDigitForId = (panelId: string): string | undefined => {
@@ -51,12 +55,14 @@ export const hotkeyHintsForPanel = (panelId: KeyboardPanelId): HotkeyHint[] => {
         { keys: "[ ]", description: "step lev" },
         { keys: "Shift+[ ]", description: "acct lev" },
       ]
-    case "allSymbols":
+    case "hyperliquid":
       return [
         { keys: "j/k", description: "move" },
         { keys: "Enter", description: "add/remove" },
         { keys: "s", description: "search" },
       ]
+    case "derive":
+      return []
     case "staged":
       return [
         { keys: `${mod}+Enter`, description: "rebalance" },

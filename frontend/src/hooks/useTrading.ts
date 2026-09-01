@@ -14,6 +14,16 @@ import {
   type LeverageLimit,
 } from "@/services/hyperliquid-markets"
 import * as Hyperliquid from "@/services/hyperliquid"
+import {
+  cancelDeriveOrder,
+  fetchDeriveAccountSnapshot,
+  fetchDeriveBalance,
+  fetchDeriveOpenOrders,
+  placeAndMonitorDeriveOrders,
+  requireDeriveSessionWithSubaccount,
+  type DeriveBatchOrderRequest,
+  type DeriveSessionCredentials,
+} from "@/services/derive/index"
 import type { RebalanceAction } from "@/pages/Portfolio/hooks/portfolioRebalancer"
 
 export type {
@@ -30,13 +40,22 @@ const QUERY_KEYS = {
   positions: ["hyperliquid", "positions"],
   markets: ["hyperliquid", "markets"],
   fundingRates: ["hyperliquid", "funding-rates"],
+  deriveBalance: ["derive", "balance"],
+  deriveAccount: ["derive", "account"],
+  deriveOpenOrders: ["derive", "open-orders"],
 } as const
 
 const DATA_STALE_TIME_MS = 30_000
 
 export const useHyperliquidClient = () => {
-  const { client, credentials, networkMode, isConnected } = useWallet()
-  return { client, credentials, isConnected, networkMode }
+  const { client, credentials, networkMode, isHyperliquidConnected } =
+    useWallet()
+  return {
+    client,
+    credentials,
+    isConnected: isHyperliquidConnected,
+    networkMode,
+  }
 }
 
 export const useHyperliquidMarkets = () => {
@@ -202,49 +221,249 @@ export interface RebalanceParams {
 }
 
 export const useRebalanceHyperliquidPositions = () => {
-  const { client, credentials, networkMode } = useHyperliquidClient()
-  const queryClient = useQueryClient()
+  const { client } = useHyperliquidClient()
 
   return useMutation(() => ({
     mutationFn: (params: RebalanceParams) =>
       Effect.runPromise(
         Hyperliquid.rebalancePositions(client(), params.actions),
       ),
-    onSuccess: () => {
-      const account = credentials()?.accountAddress
-      const network = networkMode()
-      void queryClient.invalidateQueries({
-        queryKey: [...QUERY_KEYS.positions, account, network],
-      })
-      void queryClient.invalidateQueries({
-        queryKey: [...QUERY_KEYS.balance, account, network],
-      })
-      void queryClient.invalidateQueries({
-        queryKey: [...QUERY_KEYS.accountSummary, account, network],
+    // Portfolio `finalizeRebalance` owns post-trade refresh. Invalidating here
+    // races that settle and can briefly reapply a stale snapshot.
+  }))
+}
+
+export interface DeriveRebalanceParams {
+  requests: DeriveBatchOrderRequest[]
+}
+
+/**
+ * Place + monitor Derive limit orders (same path as the Derive Test trading
+ * tab). Callers map portfolio actions to requests before mutate.
+ */
+export const useRebalanceDerivePositions = () => {
+  const session = useDeriveSessionCredentials()
+  const queryClient = useQueryClient()
+
+  return useMutation(() => ({
+    mutationFn: (params: DeriveRebalanceParams) => {
+      if (params.requests.length === 0) {
+        return Promise.resolve([] as OrderResult[])
+      }
+
+      return Effect.runPromise(
+        requireDeriveSessionWithSubaccount(session()).pipe(
+          Effect.flatMap(credentials =>
+            placeAndMonitorDeriveOrders(credentials, params.requests),
+          ),
+        ),
+      )
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: QUERY_KEYS.deriveOpenOrders,
       })
     },
   }))
 }
 
+export const formatUsdBalance = (value: number): string =>
+  value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+
 export const useWalletSettings = () => {
-  const { credentials, mainAddress, networkMode, isConnected } = useWallet()
+  const {
+    credentials,
+    mainAddress,
+    deriveCredentials,
+    storedDeriveWallet,
+    networkMode,
+    isConnected,
+    isHyperliquidConnected,
+    isDeriveConnected,
+    hasStoredSession,
+    hasStoredDeriveSession,
+    canTrade,
+  } = useWallet()
+
+  const hyperliquidSummary = useHyperliquidAccountSummary()
+  const deriveBalance = useDeriveBalance()
 
   const data = createMemo(() => {
-    if (!isConnected()) return null
+    const hyperliquidAddress =
+      credentials()?.accountAddress ?? mainAddress() ?? null
+    const deriveAddress =
+      deriveCredentials()?.deriveWallet ?? storedDeriveWallet()
+
     return {
-      accountAddress: credentials()?.accountAddress ?? mainAddress() ?? "",
       isTestnet: networkMode() === "testnet",
+      venues: [
+        {
+          id: "hyperliquid" as const,
+          connected: isHyperliquidConnected(),
+          address: hyperliquidAddress,
+          balanceUsd: isHyperliquidConnected()
+            ? (hyperliquidSummary.data?.accountValue ?? null)
+            : null,
+          canRevoke:
+            isHyperliquidConnected() && (hasStoredSession() || canTrade()),
+        },
+        {
+          id: "derive" as const,
+          connected: isDeriveConnected(),
+          address: deriveAddress,
+          balanceUsd: isDeriveConnected()
+            ? (deriveBalance.data?.accountValue ?? null)
+            : null,
+          canRevoke: false,
+        },
+      ],
     }
   })
 
-  return { data, isConnected }
+  return {
+    data,
+    isConnected,
+    isHyperliquidConnected,
+    isDeriveConnected,
+    hasStoredDeriveSession,
+  }
 }
 
-export const useFullHyperliquidRefresh = () => {
+export const useDeriveSessionCredentials = () => {
+  const { deriveCredentials, networkMode } = useWallet()
+
+  const sessionCredentials = createMemo((): DeriveSessionCredentials | null => {
+    const unlocked = deriveCredentials()
+    if (unlocked === null) {
+      return null
+    }
+    if (unlocked.networkMode !== networkMode()) {
+      return null
+    }
+
+    return {
+      deriveWallet: unlocked.deriveWallet,
+      sessionAddress: unlocked.sessionAddress,
+      sessionPrivateKey: unlocked.sessionPrivateKey,
+      networkMode: unlocked.networkMode,
+      subaccountId: unlocked.subaccountId,
+    }
+  })
+
+  return sessionCredentials
+}
+
+export const useDeriveBalance = () => {
+  const session = useDeriveSessionCredentials()
+  const { isDeriveConnected, isDeriveLocked } = useWallet()
+
+  return useQuery(() => {
+    const credentials = session()
+    return {
+      queryKey: [
+        ...QUERY_KEYS.deriveBalance,
+        credentials?.deriveWallet,
+        credentials?.subaccountId,
+        credentials?.networkMode,
+      ],
+      queryFn: () => Effect.runPromise(fetchDeriveBalance(credentials)),
+      enabled: isDeriveConnected() && !isDeriveLocked() && credentials !== null,
+      staleTime: DATA_STALE_TIME_MS,
+    }
+  })
+}
+
+export const useDeriveAccountSnapshot = () => {
+  const session = useDeriveSessionCredentials()
+  const { isDeriveConnected, isDeriveLocked } = useWallet()
+
+  return useQuery(() => {
+    const credentials = session()
+    // Always list every subaccount for the picker; selected id only filters balance.
+    const listCredentials =
+      credentials === null
+        ? null
+        : {
+            ...credentials,
+            subaccountId: null,
+          }
+    return {
+      queryKey: [
+        ...QUERY_KEYS.deriveAccount,
+        listCredentials?.deriveWallet,
+        listCredentials?.networkMode,
+      ],
+      queryFn: () =>
+        Effect.runPromise(fetchDeriveAccountSnapshot(listCredentials)),
+      enabled:
+        isDeriveConnected() && !isDeriveLocked() && listCredentials !== null,
+      staleTime: DATA_STALE_TIME_MS,
+    }
+  })
+}
+
+export const useDeriveOpenOrders = () => {
+  const session = useDeriveSessionCredentials()
+  const { isDeriveConnected, isDeriveLocked } = useWallet()
+
+  return useQuery(() => {
+    const credentials = session()
+    const canFetch =
+      isDeriveConnected() &&
+      !isDeriveLocked() &&
+      credentials !== null &&
+      credentials.subaccountId !== null
+
+    return {
+      queryKey: [
+        ...QUERY_KEYS.deriveOpenOrders,
+        credentials?.sessionAddress ?? null,
+        credentials?.subaccountId ?? null,
+        credentials?.networkMode ?? null,
+      ],
+      queryFn: () =>
+        // Re-read session at fetch time -- refetch() ignores `enabled`.
+        Effect.runPromise(
+          requireDeriveSessionWithSubaccount(session()).pipe(
+            Effect.flatMap(credentials => fetchDeriveOpenOrders(credentials)),
+          ),
+        ),
+      enabled: canFetch,
+      staleTime: DATA_STALE_TIME_MS,
+      // Refresh cadence is owned by DeriveOpenOrdersPanel's timer ring.
+      refetchInterval: false,
+    }
+  })
+}
+
+export const useCancelDeriveOrder = () => {
+  const session = useDeriveSessionCredentials()
+  const queryClient = useQueryClient()
+
+  return useMutation(() => ({
+    mutationFn: (params: { id: string; symbol: string }) =>
+      Effect.runPromise(
+        requireDeriveSessionWithSubaccount(session()).pipe(
+          Effect.flatMap(credentials => cancelDeriveOrder(credentials, params)),
+        ),
+      ),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: QUERY_KEYS.deriveOpenOrders,
+      })
+    },
+  }))
+}
+
+export const useFullVenueRefresh = () => {
   const queryClient = useQueryClient()
 
   return () => {
     void queryClient.invalidateQueries({ queryKey: ["hyperliquid"] })
+    void queryClient.invalidateQueries({ queryKey: ["derive"] })
   }
 }
 
@@ -255,8 +474,10 @@ export const useSwitchNetwork = () => {
   return useMutation(() => ({
     mutationFn: async (network: "testnet" | "mainnet") => {
       await queryClient.cancelQueries({ queryKey: ["hyperliquid"] })
+      await queryClient.cancelQueries({ queryKey: ["derive"] })
       setNetworkMode(network)
       await queryClient.invalidateQueries({ queryKey: ["hyperliquid"] })
+      await queryClient.invalidateQueries({ queryKey: ["derive"] })
       return network
     },
   }))
