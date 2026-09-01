@@ -449,22 +449,16 @@ export const applyOptionsSnapshot = (
       }
     }
 
-    for (const [strikeKey, instrumentName] of Object.entries(
-      index.callByStrike,
-    )) {
-      const strike = Number(strikeKey)
-      setBook("callByStrike", strike, previousName =>
-        previousName === instrumentName ? previousName : instrumentName,
-      )
-    }
-    for (const [strikeKey, instrumentName] of Object.entries(
-      index.putByStrike,
-    )) {
-      const strike = Number(strikeKey)
-      setBook("putByStrike", strike, previousName =>
-        previousName === instrumentName ? previousName : instrumentName,
-      )
-    }
+    setBook("byInstrument", current => {
+      const next: Record<string, OptionQuote> = {}
+      for (const name of Object.keys(index.byInstrument)) {
+        next[name] = current[name]
+      }
+      return next
+    })
+
+    setBook("callByStrike", index.callByStrike)
+    setBook("putByStrike", index.putByStrike)
 
     setBook("strikesAsc", previousStrikes =>
       numberArraysEqual(previousStrikes, index.strikesAsc)
