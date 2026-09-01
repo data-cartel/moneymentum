@@ -10,10 +10,22 @@ export const REQUIRED_PORTFOLIO_PANEL_IDS = [
   "staged",
 ] as const
 
-const layoutHasRequiredPanels = (layout: SerializedDockview): boolean => {
-  const serialized = JSON.stringify(layout)
+const layoutHasRequiredPanels = (
+  value: unknown,
+): value is SerializedDockview => {
+  if (typeof value !== "object" || value === null) {
+    return false
+  }
+  if (!("panels" in value)) {
+    return false
+  }
+  const panels = value.panels
+  if (typeof panels !== "object" || panels === null || Array.isArray(panels)) {
+    return false
+  }
+  const panelIds = Object.keys(panels)
   return REQUIRED_PORTFOLIO_PANEL_IDS.every(panelId =>
-    serialized.includes(`"id":"${panelId}"`),
+    panelIds.includes(panelId),
   )
 }
 
@@ -37,15 +49,13 @@ export const readPortfolioDockviewLayout = (): SerializedDockview | null => {
     }
 
     const parsed: unknown = JSON.parse(raw)
-    if (typeof parsed !== "object" || parsed === null) {
+    if (!layoutHasRequiredPanels(parsed)) {
+      if (typeof parsed === "object" && parsed !== null) {
+        localStorage.removeItem(PORTFOLIO_DOCKVIEW_LAYOUT_STORAGE_KEY)
+      }
       return null
     }
-    const layout = parsed as SerializedDockview
-    if (!layoutHasRequiredPanels(layout)) {
-      localStorage.removeItem(PORTFOLIO_DOCKVIEW_LAYOUT_STORAGE_KEY)
-      return null
-    }
-    return layout
+    return parsed
   } catch {
     return null
   }
