@@ -1,5 +1,5 @@
 import { batch } from "solid-js"
-import type { SetStoreFunction } from "solid-js/store"
+import { produce, type SetStoreFunction } from "solid-js/store"
 
 import {
   EMPTY_OPTION_GREEKS,
@@ -449,16 +449,17 @@ export const applyOptionsSnapshot = (
       }
     }
 
-    setBook("byInstrument", current => {
-      const next: Record<string, OptionQuote> = {}
-      for (const name of Object.keys(index.byInstrument)) {
-        next[name] = current[name]
-      }
-      return next
-    })
-
-    setBook("callByStrike", index.callByStrike)
-    setBook("putByStrike", index.putByStrike)
+    setBook(
+      produce(current => {
+        const nextByInstrument: Record<string, OptionQuote> = {}
+        for (const name of Object.keys(index.byInstrument)) {
+          nextByInstrument[name] = current.byInstrument[name]
+        }
+        current.byInstrument = nextByInstrument
+        current.callByStrike = index.callByStrike
+        current.putByStrike = index.putByStrike
+      }),
+    )
 
     setBook("strikesAsc", previousStrikes =>
       numberArraysEqual(previousStrikes, index.strikesAsc)

@@ -179,29 +179,39 @@ const withPreservedSubId = (market: DeriveCcxtMarket): DeriveCcxtMarket => ({
  * (take-profit / stop-loss) still use CCXT's number conversion.
  */
 const patchBaseAssetSubIdSigning = (exchange: DeriveCcxtExchange): void => {
-  const originalParseMarket = exchange.parseMarket.bind(exchange)
-  exchange.parseMarket = (raw: unknown): DeriveCcxtMarket =>
-    withPreservedSubId(originalParseMarket(raw))
-
-  const originalLoadMarkets = exchange.loadMarkets.bind(exchange)
-  exchange.loadMarkets = async (
-    reload?: boolean,
-  ): Promise<Record<string, DeriveCcxtMarket>> => {
-    const markets = await originalLoadMarkets(reload)
-    for (const [symbol, market] of Object.entries(markets)) {
-      markets[symbol] = withPreservedSubId(market)
-    }
-    return markets
-  }
-
-  const originalSetMarkets = exchange.setMarkets.bind(exchange)
-  exchange.setMarkets = (markets: DeriveCcxtMarket[]): void => {
-    originalSetMarkets(markets.map(withPreservedSubId))
-  }
-
   const patchable = exchange as DeriveCcxtExchange & {
+    parseMarket?: DeriveCcxtExchange["parseMarket"]
+    loadMarkets?: DeriveCcxtExchange["loadMarkets"]
+    setMarkets?: DeriveCcxtExchange["setMarkets"]
     parseToNumeric?: (value: unknown) => number | bigint
   }
+
+  if (typeof patchable.parseMarket === "function") {
+    const originalParseMarket = patchable.parseMarket.bind(patchable)
+    patchable.parseMarket = (raw: unknown): DeriveCcxtMarket =>
+      withPreservedSubId(originalParseMarket(raw))
+  }
+
+  if (typeof patchable.loadMarkets === "function") {
+    const originalLoadMarkets = patchable.loadMarkets.bind(patchable)
+    patchable.loadMarkets = async (
+      reload?: boolean,
+    ): Promise<Record<string, DeriveCcxtMarket>> => {
+      const markets = await originalLoadMarkets(reload)
+      for (const [symbol, market] of Object.entries(markets)) {
+        markets[symbol] = withPreservedSubId(market)
+      }
+      return markets
+    }
+  }
+
+  if (typeof patchable.setMarkets === "function") {
+    const originalSetMarkets = patchable.setMarkets.bind(patchable)
+    patchable.setMarkets = (markets: DeriveCcxtMarket[]): void => {
+      originalSetMarkets(markets.map(withPreservedSubId))
+    }
+  }
+
   if (typeof patchable.parseToNumeric !== "function") {
     return
   }
