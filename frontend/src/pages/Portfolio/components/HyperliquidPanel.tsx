@@ -23,6 +23,8 @@ class ReownModalOpenFailed extends Data.TaggedError("ReownModalOpenFailed")<{
   readonly cause: unknown
 }> {}
 
+let hyperliquidConnectAccountUnsubscribe: (() => void) | undefined
+
 export const openHyperliquidConnectModal = (options: {
   setMainAddress: (address: string | null) => void
   onOpeningChange?: (opening: boolean) => void
@@ -35,7 +37,19 @@ export const openHyperliquidConnectModal = (options: {
     return
   }
 
+  hyperliquidConnectAccountUnsubscribe?.()
+  hyperliquidConnectAccountUnsubscribe = undefined
   options.onOpeningChange?.(true)
+
+  let unsubscribeAccount: (() => void) | undefined
+  const stopAccountListener = (): void => {
+    const unsubscribe = unsubscribeAccount
+    unsubscribeAccount = undefined
+    unsubscribe?.()
+    if (hyperliquidConnectAccountUnsubscribe === unsubscribe) {
+      hyperliquidConnectAccountUnsubscribe = undefined
+    }
+  }
 
   void Effect.runPromise(
     Effect.gen(function* () {
@@ -54,7 +68,7 @@ export const openHyperliquidConnectModal = (options: {
       }
 
       let notifiedConnected = false
-      modal.subscribeAccount(accountState => {
+      unsubscribeAccount = modal.subscribeAccount(accountState => {
         const nextAddress = readEvmAddressFromAccountState(accountState)
         const connected =
           readEvmWalletConnectedFromAccountState(accountState) ||
@@ -65,11 +79,13 @@ export const openHyperliquidConnectModal = (options: {
           if (!notifiedConnected) {
             notifiedConnected = true
             options.onConnected?.(nextAddress)
+            stopAccountListener()
           }
         }
         // Ignore AppKit disconnect flickers after Connect closes; the wallet
         // provider keeps the remembered public address until explicit revoke.
       }, "eip155")
+      hyperliquidConnectAccountUnsubscribe = unsubscribeAccount
 
       yield* Effect.tryPromise({
         try: () => modal.open({ view: "Connect", namespace: "eip155" }),
@@ -78,6 +94,7 @@ export const openHyperliquidConnectModal = (options: {
     }).pipe(
       Effect.catchAll(error =>
         Effect.sync(() => {
+          stopAccountListener()
           console.error("Failed to open Reown AppKit:", error)
           toast.error(getErrorMessage(error))
         }),
