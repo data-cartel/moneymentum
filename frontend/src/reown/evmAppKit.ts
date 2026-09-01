@@ -187,7 +187,7 @@ export const readConnectedEip1193Provider = (
  * A remembered main address alone is not enough -- enableReconnect is false.
  */
 export const hasLiveEip1193Provider = async (): Promise<boolean> => {
-  const modal = await ensureEvmAppKit()
+  const modal = await ensureEvmAppKit().catch(() => null)
   if (modal === null) {
     return false
   }
