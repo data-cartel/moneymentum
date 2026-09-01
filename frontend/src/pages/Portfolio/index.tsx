@@ -23,6 +23,7 @@ import {
 } from "@/lib/dockviewSolidOwner"
 import { getErrorMessage } from "@/lib/error-message"
 import { hasLiveEip1193Provider } from "@/reown/evmAppKit"
+import { WalletOperationContextChanged } from "@/services/wallet"
 import { useNetwork } from "@/hooks/useNetwork"
 import { useWallet } from "@/hooks/useWallet"
 import {
@@ -467,16 +468,7 @@ const PortfolioPage = () => {
         ),
         Effect.catchAll(error =>
           Effect.sync(() => {
-            // Overlapping clicks / Cmd+Enter while authorize is in flight.
-            const cause =
-              typeof error.cause === "object" && error.cause !== null
-                ? error.cause
-                : null
-            if (
-              cause !== null &&
-              "_tag" in cause &&
-              cause._tag === "WalletOperationContextChanged"
-            ) {
+            if (error.cause instanceof WalletOperationContextChanged) {
               return
             }
             console.error("Failed to authorize Hyperliquid agent:", error)
