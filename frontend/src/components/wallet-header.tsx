@@ -62,6 +62,15 @@ interface SubaccountOption {
   label: string
 }
 
+const subaccountSelectLabel = (
+  selected: SubaccountOption | null | undefined,
+): string => {
+  if (selected === null || selected === undefined) {
+    return "Select subaccount"
+  }
+  return selected.label
+}
+
 interface WalletHeaderProps {
   handleDisconnect?: () => void
   handleDisconnectDerive?: () => void
@@ -586,10 +595,9 @@ export const WalletHeader = (props: WalletHeaderProps) => {
                       >
                         <SelectTrigger class="h-8 w-full font-mono text-[11px]">
                           <SelectValue<SubaccountOption>>
-                            {state => {
-                              const selected = state.selectedOption()
-                              return selected.label
-                            }}
+                            {state =>
+                              subaccountSelectLabel(state.selectedOption())
+                            }
                           </SelectValue>
                         </SelectTrigger>
                         <SelectContent />
