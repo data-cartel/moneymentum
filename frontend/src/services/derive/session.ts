@@ -149,7 +149,7 @@ export const parseOptionalSubaccountId = (
   }
 
   const parsed = Number(trimmed)
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     return Effect.fail(
       new DeriveSubaccountIdInvalid({
         cause: "Subaccount id must be a non-negative integer",
@@ -189,7 +189,9 @@ export const parseStoredDeriveSession = (
   if (networkMode !== "testnet" && networkMode !== "mainnet") return null
   if (
     subaccountId !== null &&
-    (typeof subaccountId !== "number" || !Number.isInteger(subaccountId))
+    (typeof subaccountId !== "number" ||
+      !Number.isSafeInteger(subaccountId) ||
+      subaccountId < 0)
   ) {
     return null
   }

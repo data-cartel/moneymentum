@@ -341,6 +341,21 @@ describe("parseStoredDeriveSession", () => {
       subaccountId: 42,
     })
   })
+
+  it("returns null for a negative subaccount id", () => {
+    expect(
+      parseStoredDeriveSession(
+        JSON.stringify({
+          deriveWallet: "0x1111111111111111111111111111111111111111",
+          sessionAddress: "0x2222222222222222222222222222222222222222",
+          sessionPrivateKey:
+            "0x3333333333333333333333333333333333333333333333333333333333333333",
+          networkMode: "testnet",
+          subaccountId: -1,
+        }),
+      ),
+    ).toBeNull()
+  })
 })
 
 describe("parseSessionPrivateKey", () => {
@@ -396,5 +411,16 @@ describe("parseOptionalSubaccountId", () => {
   it("rejects non-integers", async () => {
     const result = await Effect.runPromiseExit(parseOptionalSubaccountId("1.5"))
     expect(result._tag).toBe("Failure")
+  })
+
+  it("rejects negative and unsafe integers", async () => {
+    const negative = await Effect.runPromiseExit(
+      parseOptionalSubaccountId("-1"),
+    )
+    expect(negative._tag).toBe("Failure")
+    const unsafe = await Effect.runPromiseExit(
+      parseOptionalSubaccountId("9007199254740993"),
+    )
+    expect(unsafe._tag).toBe("Failure")
   })
 })
