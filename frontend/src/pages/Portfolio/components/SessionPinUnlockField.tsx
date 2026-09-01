@@ -1,6 +1,8 @@
 import { createEffect, createSignal, onCleanup, Show, type JSX } from "solid-js"
+import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
-import * as Either from "effect/Either"
+import * as Exit from "effect/Exit"
+import * as Option from "effect/Option"
 import { toast } from "solid-sonner"
 
 import { useWallet } from "@/hooks/useWallet"
@@ -67,24 +69,26 @@ export const SessionPinUnlockField = (props: {
     }
 
     setIsUnlocking(true)
+    const unlockExit = await Effect.runPromiseExit(unlock(enteredPin))
+    setIsUnlocking(false)
 
-    const unlockResult = await Effect.runPromise(
-      Effect.either(unlock(enteredPin)),
-    )
-
-    if (Either.isLeft(unlockResult)) {
-      console.error("Failed to unlock wallet:", unlockResult.left)
-      setErrorMessage(getErrorMessage(unlockResult.left))
-      setIsUnlocking(false)
-      shakePinField()
+    if (Exit.isSuccess(unlockExit)) {
+      toast.success(props.successMessage ?? "Wallet unlocked")
+      setPin("")
+      setErrorMessage(null)
+      props.onUnlocked?.()
       return
     }
 
-    toast.success(props.successMessage ?? "Wallet unlocked")
-    setPin("")
-    setErrorMessage(null)
-    setIsUnlocking(false)
-    props.onUnlocked?.()
+    const failure = Cause.failureOption(unlockExit.cause)
+    if (Option.isSome(failure)) {
+      console.error("Failed to unlock wallet:", failure.value)
+      setErrorMessage(getErrorMessage(failure.value))
+    } else {
+      console.error("Failed to unlock wallet:", unlockExit.cause)
+      setErrorMessage(getErrorMessage(unlockExit.cause))
+    }
+    shakePinField()
   }
 
   // Ref so keyboard registration does not close over a reactive callback (solid/reactivity).
