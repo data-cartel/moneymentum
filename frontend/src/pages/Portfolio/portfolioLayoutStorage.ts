@@ -2,7 +2,8 @@ import type { SerializedDockview } from "@arminmajerie/dockview-solid"
 
 export const PORTFOLIO_DOCKVIEW_LAYOUT_STORAGE_KEY = "portfolio-dockview-layout"
 
-const REQUIRED_PANEL_IDS = [
+/** Panels the workspace cannot operate without; their absence forces a repair. */
+export const REQUIRED_PORTFOLIO_PANEL_IDS = [
   "portfolio",
   "hyperliquid",
   "derive",
@@ -11,7 +12,7 @@ const REQUIRED_PANEL_IDS = [
 
 const layoutHasRequiredPanels = (layout: SerializedDockview): boolean => {
   const serialized = JSON.stringify(layout)
-  return REQUIRED_PANEL_IDS.every(panelId =>
+  return REQUIRED_PORTFOLIO_PANEL_IDS.every(panelId =>
     serialized.includes(`"id":"${panelId}"`),
   )
 }
@@ -69,14 +70,6 @@ export const writePortfolioDockviewLayout = (
     return
   }
 }
-
-/** Panels the workspace cannot operate without; their absence forces a repair. */
-export const REQUIRED_PORTFOLIO_PANEL_IDS = [
-  "portfolio",
-  "hyperliquid",
-  "derive",
-  "staged",
-] as const
 
 /** The slice of the Dockview API that layout restoration drives. */
 export interface PortfolioLayoutHost {
