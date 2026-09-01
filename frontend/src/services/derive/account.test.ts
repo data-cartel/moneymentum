@@ -175,7 +175,7 @@ describe("mapDerivePosition", () => {
     ).toBeNull()
   })
 
-  it("drops rows with non-positive mark value", () => {
+  it("keeps non-zero amount rows when mark and average prices are missing", () => {
     expect(
       mapDerivePosition({
         ...sampleOptionLong(),
@@ -183,7 +183,15 @@ describe("mapDerivePosition", () => {
         mark_price: "0",
         average_price: "0",
       }),
-    ).toBeNull()
+    ).toEqual({
+      symbol: "ETH-20260327-2000-C",
+      side: "buy",
+      notional: 0,
+      entryPrice: 0,
+      unrealizedPnl: 23.75,
+      leverage: 1,
+      positionKind: "option",
+    })
   })
 })
 

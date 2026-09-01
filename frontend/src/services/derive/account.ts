@@ -226,10 +226,6 @@ export const mapDerivePosition = (
         ? notionalFromSize
         : notionalFromEntry
 
-  if (!(notional > 0)) {
-    return null
-  }
-
   return {
     symbol: instrumentName,
     side: sideFromSignedAmount(signedAmount),
