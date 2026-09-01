@@ -65,14 +65,24 @@ export const formatDeriveInstrumentLabel = (raw: string): string => {
     return raw
   }
 
+  const year = Number.parseInt(yyyymmdd.slice(0, 4), 10)
+  if (!Number.isFinite(year) || year < 1970) {
+    return raw
+  }
+
   const month = MONTH_ABBREVIATIONS[monthIndex]
   const strike = Number.parseFloat(strikeRaw)
   const strikeLabel = Number.isFinite(strike)
     ? `$${strike.toLocaleString("en-US", { maximumFractionDigits: 4 })}`
     : `$${strikeRaw}`
   const optionLabel = optionCodeRaw.toUpperCase() === "P" ? "Put" : "Call"
+  const currentYear = new Date().getUTCFullYear()
+  const dateLabel =
+    year === currentYear
+      ? `${month} ${String(day)}`
+      : `${month} ${String(day)} ${String(year)}`
 
-  return `${underlyingRaw.toUpperCase()} ${strikeLabel} ${optionLabel} ${month} ${String(day)}`
+  return `${underlyingRaw.toUpperCase()} ${strikeLabel} ${optionLabel} ${dateLabel}`
 }
 
 const readInfoNumber = (

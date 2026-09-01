@@ -18,10 +18,18 @@ describe("refreshProgressAlongCycle", () => {
 describe("formatDeriveInstrumentLabel", () => {
   it("formats put and call instrument names like the Derive UI", () => {
     expect(formatDeriveInstrumentLabel("BTC-20250821-62000-P")).toBe(
-      "BTC $62,000 Put Aug 21",
+      "BTC $62,000 Put Aug 21 2025",
     )
     expect(formatDeriveInstrumentLabel("ETH-20250925-2000-C")).toBe(
-      "ETH $2,000 Call Sep 25",
+      "ETH $2,000 Call Sep 25 2025",
+    )
+  })
+
+  it("omits the year for expiries in the current UTC year", () => {
+    const year = new Date().getUTCFullYear()
+    const yyyymmdd = `${String(year)}0815`
+    expect(formatDeriveInstrumentLabel(`BTC-${yyyymmdd}-1000-C`)).toBe(
+      "BTC $1,000 Call Aug 15",
     )
   })
 
@@ -49,7 +57,7 @@ describe("mapDeriveOpenOrderRow", () => {
     ).toEqual({
       id: "order-1",
       symbol: "BTC/USD:USDC-250821-62000-P",
-      label: "BTC $62,000 Put Aug 21",
+      label: "BTC $62,000 Put Aug 21 2025",
       side: "buy",
       amount: 1,
       price: 0.07813,
