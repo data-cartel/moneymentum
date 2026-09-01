@@ -155,9 +155,50 @@ export const integerForAbiEncode = (value: unknown): bigint | null => {
   return asBigInt
 }
 
-const patchParseToNumericForOptionSubIds = (
-  exchange: DeriveCcxtExchange,
-): void => {
+const preserveBaseAssetSubId = (
+  info: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined => {
+  if (info === undefined) {
+    return undefined
+  }
+  const encoded = integerForAbiEncode(info.base_asset_sub_id)
+  if (encoded === null) {
+    return info
+  }
+  return { ...info, base_asset_sub_id: encoded }
+}
+
+const withPreservedSubId = (market: DeriveCcxtMarket): DeriveCcxtMarket => ({
+  ...market,
+  info: preserveBaseAssetSubId(market.info),
+})
+
+/**
+ * Convert `base_asset_sub_id` on the market, then pass bigint through
+ * parseToNumeric so signing keeps uint256 precision. Shared numeric params
+ * (take-profit / stop-loss) still use CCXT's number conversion.
+ */
+const patchBaseAssetSubIdSigning = (exchange: DeriveCcxtExchange): void => {
+  const originalParseMarket = exchange.parseMarket.bind(exchange)
+  exchange.parseMarket = (raw: unknown): DeriveCcxtMarket =>
+    withPreservedSubId(originalParseMarket(raw))
+
+  const originalLoadMarkets = exchange.loadMarkets.bind(exchange)
+  exchange.loadMarkets = async (
+    reload?: boolean,
+  ): Promise<Record<string, DeriveCcxtMarket>> => {
+    const markets = await originalLoadMarkets(reload)
+    for (const [symbol, market] of Object.entries(markets)) {
+      markets[symbol] = withPreservedSubId(market)
+    }
+    return markets
+  }
+
+  const originalSetMarkets = exchange.setMarkets.bind(exchange)
+  exchange.setMarkets = (markets: DeriveCcxtMarket[]): void => {
+    originalSetMarkets(markets.map(withPreservedSubId))
+  }
+
   const patchable = exchange as DeriveCcxtExchange & {
     parseToNumeric?: (value: unknown) => number | bigint
   }
@@ -166,9 +207,8 @@ const patchParseToNumericForOptionSubIds = (
   }
   const originalParseToNumeric = patchable.parseToNumeric.bind(patchable)
   patchable.parseToNumeric = (value: unknown): number | bigint => {
-    const encoded = integerForAbiEncode(value)
-    if (encoded !== null) {
-      return encoded
+    if (typeof value === "bigint") {
+      return value
     }
     return originalParseToNumeric(value)
   }
@@ -205,6 +245,6 @@ export const createDeriveExchange = (
   }
 
   applyDeriveApiProxy(exchange, credentials.networkMode)
-  patchParseToNumericForOptionSubIds(exchange)
+  patchBaseAssetSubIdSigning(exchange)
   return exchange
 }
