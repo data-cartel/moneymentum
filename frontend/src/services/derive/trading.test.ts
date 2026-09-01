@@ -199,6 +199,43 @@ describe("DeriveTradingClient.createOrdersBatch", () => {
     expect(fetchOpenOrders).toHaveBeenCalled()
   })
 
+  it("does not recover an open order whose symbol only overlaps by substring", async () => {
+    const timeout = new Error(
+      "derive POST /derive-api-demo/private/order request timed out (10000 ms)",
+    )
+    timeout.name = "RequestTimeout"
+    const createOrder = vi.fn().mockRejectedValue(timeout)
+    const fetchOpenOrders = vi.fn().mockResolvedValue([
+      {
+        id: "other",
+        symbol: "ETH/USD:USDC-260925-2000-C",
+        side: "buy",
+        amount: 0.01,
+        price: 2000,
+        status: "open",
+      },
+    ])
+
+    const client = new DeriveTradingClient(credentials())
+    const exchange = (
+      client as unknown as {
+        exchange: {
+          createOrder: typeof createOrder
+          fetchOpenOrders: typeof fetchOpenOrders
+        }
+      }
+    ).exchange
+    exchange.createOrder = createOrder
+    exchange.fetchOpenOrders = fetchOpenOrders
+    vi.spyOn(client, "resolveSymbol").mockResolvedValue("ETH/USD:USDC")
+
+    await expect(
+      client.createOrdersBatch([
+        { symbol: "ETH-PERP", side: "buy", amount: 0.01, price: 2000 },
+      ]),
+    ).rejects.toMatchObject({ name: "RequestTimeout" })
+  })
+
   it("snaps amount and price to market steps before createOrder", async () => {
     const createOrder = vi.fn().mockResolvedValue({
       id: "snapped",

@@ -92,18 +92,27 @@ const amountsMatch = (left: number, right: number): boolean =>
 const pricesMatch = (left: number, right: number): boolean =>
   Math.abs(left - right) <= Math.max(1e-6, Math.abs(right) * 1e-6)
 
+const orderMarketId = (order: DeriveCcxtOrder): string => {
+  const instrumentName = order.info?.instrument_name
+  return typeof instrumentName === "string" && instrumentName.length > 0
+    ? instrumentName
+    : ""
+}
+
 const orderMatchesRequest = (
   order: DeriveCcxtOrder,
   symbol: string,
   request: DeriveBatchOrderRequest,
+  marketId: string,
 ): boolean => {
   const orderSymbol = typeof order.symbol === "string" ? order.symbol : ""
-  const sameSymbol =
-    orderSymbol === symbol ||
-    orderSymbol === request.symbol ||
-    orderSymbol.includes(request.symbol) ||
-    request.symbol.includes(orderSymbol)
-  if (!sameSymbol || order.side !== request.side) {
+  if (orderSymbol !== symbol || orderSymbol !== request.symbol) {
+    return false
+  }
+  if (marketId.length > 0 && orderMarketId(order) !== marketId) {
+    return false
+  }
+  if (order.side !== request.side) {
     return false
   }
   if (
@@ -474,7 +483,11 @@ export class DeriveTradingClient {
         throw error
       }
       console.info(`${stepLabel} createOrder timed out, checking open orders`)
-      const recovered = await this.recoverTimedOutOrder(symbol, sent)
+      const recovered = await this.recoverTimedOutOrder(
+        symbol,
+        sent,
+        market?.id ?? "",
+      )
       if (recovered !== null) {
         console.info(`${stepLabel} recovered open order after timeout`, {
           id: recovered.id ?? null,
@@ -489,10 +502,11 @@ export class DeriveTradingClient {
   private async recoverTimedOutOrder(
     symbol: string,
     request: DeriveBatchOrderRequest,
+    marketId: string,
   ): Promise<DeriveCcxtOrder | null> {
     const openOrders = await this.fetchOpenOrders()
     const match = openOrders.find(order =>
-      orderMatchesRequest(order, symbol, request),
+      orderMatchesRequest(order, symbol, request, marketId),
     )
     return match ?? null
   }
