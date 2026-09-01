@@ -3,12 +3,22 @@ import * as Effect from "effect/Effect"
 import { fetchJson, postEmpty } from "@/lib/http"
 import type { HttpStatusError, JsonParseError, NetworkError } from "@/lib/http"
 import type { NetworkMode } from "@/contexts/wallet-context"
-import type {
-  OptionsBootstrap,
-  OptionsSnapshot,
+import {
+  decodeOptionsBootstrap,
+  decodeOptionsSnapshot,
+  OptionsPayloadDecodeError,
+  type OptionsBootstrap,
+  type OptionsSnapshot,
 } from "@/components/derive-options/optionsSnapshot"
 
-type DeriveFetchError = NetworkError | HttpStatusError | JsonParseError
+type DeriveFetchError =
+  | NetworkError
+  | HttpStatusError
+  | JsonParseError
+  | OptionsPayloadDecodeError
+
+const mapDecodeError = (cause: unknown): OptionsPayloadDecodeError =>
+  new OptionsPayloadDecodeError({ cause })
 
 const withNetworkQuery = (path: string, network: NetworkMode): string => {
   const separator = path.includes("?") ? "&" : "?"
@@ -20,9 +30,13 @@ export const fetchBootstrap = (
   network: NetworkMode,
   signal?: AbortSignal,
 ): Effect.Effect<OptionsBootstrap, DeriveFetchError> =>
-  fetchJson<OptionsBootstrap>(
+  fetchJson<unknown>(
     withNetworkQuery(`${baseUrl}/derive/options/bootstrap`, network),
     { signal },
+  ).pipe(
+    Effect.flatMap(payload =>
+      decodeOptionsBootstrap(payload).pipe(Effect.mapError(mapDecodeError)),
+    ),
   )
 
 export const fetchSnapshot = (
@@ -30,9 +44,13 @@ export const fetchSnapshot = (
   network: NetworkMode,
   signal?: AbortSignal,
 ): Effect.Effect<OptionsSnapshot, DeriveFetchError> =>
-  fetchJson<OptionsSnapshot>(
+  fetchJson<unknown>(
     withNetworkQuery(`${baseUrl}/derive/options/snapshot`, network),
     { signal },
+  ).pipe(
+    Effect.flatMap(payload =>
+      decodeOptionsSnapshot(payload).pipe(Effect.mapError(mapDecodeError)),
+    ),
   )
 
 export const postActiveExpiry = (

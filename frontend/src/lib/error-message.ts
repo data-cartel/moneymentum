@@ -245,6 +245,8 @@ const messageForTag = (error: TaggedError): string | null => {
         ? `Derive rejected the request: ${message}`
         : "Derive rejected the request."
     }
+    case "OptionsPayloadDecodeError":
+      return "Derive options data could not be read."
     case "Eip1193ProviderNotReady":
       return "Wallet connected, but the signer is not ready. Click Connect Hyperliquid agent again."
     case "HyperliquidClientLoadFailed":

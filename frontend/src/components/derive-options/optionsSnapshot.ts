@@ -1,55 +1,89 @@
-export type OptionKind = "C" | "P"
-export type Moneyness = "in_the_money" | "at_the_money" | "out_of_the_money"
+import * as Data from "effect/Data"
+import * as Schema from "effect/Schema"
 
-export type ExpiryUnix = number & { readonly __brand: "ExpiryUnix" }
+export class OptionsPayloadDecodeError extends Data.TaggedError(
+  "OptionsPayloadDecodeError",
+)<{
+  readonly cause: unknown
+}> {}
 
-export type OptionGreeks = {
-  bid_iv: number | null
-  ask_iv: number | null
-  delta: number | null
-  gamma: number | null
-  vega: number | null
-  theta: number | null
-  iv: number | null
-  rho: number | null
-  forward_price: number | null
-  discount_factor: number | null
-  option_model_mark: number | null
-}
+export const OptionKind = Schema.Literal("C", "P")
+export type OptionKind = typeof OptionKind.Type
 
-export type OptionQuote = {
-  instrument_name: string
-  kind: OptionKind
-  strike: number
-  expiry: string
-  expiry_unix: ExpiryUnix
-  bid: number | null
-  ask: number | null
-  bid_size: number | null
-  ask_size: number | null
-  mark: number | null
-  spot_price: number
-  moneyness: Moneyness
-  greeks: OptionGreeks
-}
+export const Moneyness = Schema.Literal(
+  "in_the_money",
+  "at_the_money",
+  "out_of_the_money",
+)
+export type Moneyness = typeof Moneyness.Type
 
-export type OptionsSnapshot = {
-  asset: string
-  updated_at: string
-  active_expiry_unix: ExpiryUnix
-  expiry_unixes: ExpiryUnix[]
-  spot_price: number
-  expiry_dates: string[]
-  strikes: number[]
-  quotes: OptionQuote[]
-}
+export const ExpiryUnix = Schema.Number.pipe(
+  Schema.int(),
+  Schema.brand("ExpiryUnix"),
+)
+export type ExpiryUnix = typeof ExpiryUnix.Type
 
-export type OptionsBootstrap = {
-  asset: string
-  assets: string[]
-  default_expiry_unix: ExpiryUnix
-  tabs: Array<{ expiry_unix: ExpiryUnix; instruments: string[] }>
-}
+export const OptionGreeks = Schema.Struct({
+  bid_iv: Schema.NullOr(Schema.Number),
+  ask_iv: Schema.NullOr(Schema.Number),
+  delta: Schema.NullOr(Schema.Number),
+  gamma: Schema.NullOr(Schema.Number),
+  vega: Schema.NullOr(Schema.Number),
+  theta: Schema.NullOr(Schema.Number),
+  iv: Schema.NullOr(Schema.Number),
+  rho: Schema.NullOr(Schema.Number),
+  forward_price: Schema.NullOr(Schema.Number),
+  discount_factor: Schema.NullOr(Schema.Number),
+  option_model_mark: Schema.NullOr(Schema.Number),
+})
+export type OptionGreeks = typeof OptionGreeks.Type
+
+export const OptionQuote = Schema.Struct({
+  instrument_name: Schema.String,
+  kind: OptionKind,
+  strike: Schema.Number,
+  expiry: Schema.String,
+  expiry_unix: ExpiryUnix,
+  bid: Schema.NullOr(Schema.Number),
+  ask: Schema.NullOr(Schema.Number),
+  bid_size: Schema.NullOr(Schema.Number),
+  ask_size: Schema.NullOr(Schema.Number),
+  mark: Schema.NullOr(Schema.Number),
+  spot_price: Schema.Number,
+  moneyness: Moneyness,
+  greeks: OptionGreeks,
+})
+export type OptionQuote = typeof OptionQuote.Type
+
+export const OptionsSnapshot = Schema.Struct({
+  asset: Schema.String,
+  updated_at: Schema.String,
+  active_expiry_unix: ExpiryUnix,
+  expiry_unixes: Schema.Array(ExpiryUnix),
+  spot_price: Schema.Number,
+  expiry_dates: Schema.Array(Schema.String),
+  strikes: Schema.Array(Schema.Number),
+  quotes: Schema.Array(OptionQuote),
+})
+export type OptionsSnapshot = typeof OptionsSnapshot.Type
+
+export const OptionsBootstrap = Schema.Struct({
+  asset: Schema.String,
+  assets: Schema.Array(Schema.String),
+  default_expiry_unix: ExpiryUnix,
+  tabs: Schema.Array(
+    Schema.Struct({
+      expiry_unix: ExpiryUnix,
+      instruments: Schema.Array(Schema.String),
+    }),
+  ),
+})
+export type OptionsBootstrap = typeof OptionsBootstrap.Type
+
+export const decodeOptionsBootstrap = Schema.decodeUnknown(OptionsBootstrap)
+export const decodeOptionsSnapshot = Schema.decodeUnknown(OptionsSnapshot)
+export const decodeOptionsSnapshotEither =
+  Schema.decodeUnknownEither(OptionsSnapshot)
 
 export const EMPTY_OPTION_GREEKS: OptionGreeks = {
   bid_iv: null,

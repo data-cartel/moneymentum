@@ -17,10 +17,11 @@ import * as deriveService from "@/services/derive/options"
 
 import { deriveOptionsBaseUrl } from "./deriveOptionsBaseUrl"
 import { stabilizeExpiryTabs, type ExpiryTab } from "./expiryTabs"
-import type {
-  ExpiryUnix,
-  OptionsBootstrap,
-  OptionsSnapshot,
+import {
+  decodeOptionsSnapshotEither,
+  type ExpiryUnix,
+  type OptionsBootstrap,
+  type OptionsSnapshot,
 } from "./optionsSnapshot"
 import {
   applyOptionsSnapshot,
@@ -279,7 +280,13 @@ export const useOptionsStream = (
           setErrorMessage("Stream parse error: expected string payload")
           return
         }
-        const next = parseJsonUnknown(event.data) as OptionsSnapshot
+        const decoded = decodeOptionsSnapshotEither(
+          parseJsonUnknown(event.data),
+        )
+        if (Either.isLeft(decoded)) {
+          return
+        }
+        const next = decoded.right
         const pendingAsset = assetSwitchInFlightRef.blockStreamUntilAsset
         if (pendingAsset !== null) {
           if (next.asset !== pendingAsset) {
