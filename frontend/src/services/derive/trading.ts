@@ -227,7 +227,7 @@ const requireSubaccountId = (credentials: DeriveSessionCredentials): number => {
 export class DeriveTradingClient {
   private readonly exchange: DeriveCcxtExchange
   private readonly credentials: DeriveSessionCredentials
-  private marketsLoaded = false
+  private marketsLoad: Promise<void> | null = null
 
   constructor(credentials: DeriveSessionCredentials) {
     this.credentials = credentials
@@ -238,12 +238,23 @@ export class DeriveTradingClient {
     return { subaccount_id: requireSubaccountId(this.credentials) }
   }
 
-  private async ensureMarketsLoaded(): Promise<void> {
-    if (this.marketsLoaded) {
-      return
+  private ensureMarketsLoaded(): Promise<void> {
+    if (this.marketsLoad !== null) {
+      return this.marketsLoad
     }
-    await this.exchange.loadMarkets()
-    this.marketsLoaded = true
+
+    this.marketsLoad = this.exchange
+      .loadMarkets()
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        this.marketsLoad = null
+        if (error instanceof Error) {
+          throw error
+        }
+        throw new ExchangeRequestError({ cause: error })
+      })
+
+    return this.marketsLoad
   }
 
   private marketsByIdEntry(
@@ -610,6 +621,32 @@ const wrapExchange = <Value>(
         : new ExchangeRequestError({ cause }),
   })
 
+let cachedTradingClient: {
+  key: string
+  client: DeriveTradingClient
+} | null = null
+
+const tradingClientCacheKey = (session: DeriveSessionCredentials): string =>
+  [
+    session.networkMode,
+    session.deriveWallet,
+    session.sessionAddress,
+    session.sessionPrivateKey,
+    String(session.subaccountId),
+  ].join(":")
+
+const tradingClientFor = (
+  session: DeriveSessionCredentials,
+): DeriveTradingClient => {
+  const key = tradingClientCacheKey(session)
+  if (cachedTradingClient !== null && cachedTradingClient.key === key) {
+    return cachedTradingClient.client
+  }
+  const client = new DeriveTradingClient(session)
+  cachedTradingClient = { key, client }
+  return client
+}
+
 export const fetchDeriveTickers = (
   credentials: DeriveSessionCredentials | null,
   instrumentsOrSymbols: string[],
@@ -620,7 +657,7 @@ export const fetchDeriveTickers = (
   requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() =>
-        new DeriveTradingClient(session).fetchTickers(instrumentsOrSymbols),
+        tradingClientFor(session).fetchTickers(instrumentsOrSymbols),
       ),
     ),
   )
@@ -635,9 +672,7 @@ export const fetchDeriveFundingRates = (
   requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() =>
-        new DeriveTradingClient(session).fetchFundingRates(
-          instrumentsOrSymbols,
-        ),
+        tradingClientFor(session).fetchFundingRates(instrumentsOrSymbols),
       ),
     ),
   )
@@ -652,7 +687,7 @@ export const placeAndMonitorDeriveOrders = (
   requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() =>
-        new DeriveTradingClient(session).placeAndMonitorOrders(requests),
+        tradingClientFor(session).placeAndMonitorOrders(requests),
       ),
     ),
   )
@@ -665,7 +700,7 @@ export const fetchDeriveOpenOrders = (
 > =>
   requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
-      wrapExchange(() => new DeriveTradingClient(session).fetchOpenOrders()),
+      wrapExchange(() => tradingClientFor(session).fetchOpenOrders()),
     ),
   )
 
@@ -679,10 +714,7 @@ export const cancelDeriveOrder = (
   requireDeriveSession(credentials).pipe(
     Effect.flatMap(session =>
       wrapExchange(() =>
-        new DeriveTradingClient(session).cancelOrder(
-          request.id,
-          request.symbol,
-        ),
+        tradingClientFor(session).cancelOrder(request.id, request.symbol),
       ),
     ),
   )
