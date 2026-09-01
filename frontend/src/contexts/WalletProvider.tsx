@@ -40,6 +40,7 @@ import {
   WalletOperationContextChanged,
   WalletSessionMissing,
   WalletUnlockContextChanged,
+  WalletUnlockError,
   type WalletDisconnectFailure,
   type WalletUnlockFailure,
 } from "@/services/wallet"
@@ -741,10 +742,13 @@ export const WalletProvider = (props: ParentProps) => {
       }
 
       if (deriveSession !== null && derivePrivateKey !== null) {
+        const parsedKey = yield* parseSessionPrivateKey(derivePrivateKey).pipe(
+          Effect.mapError(cause => new WalletUnlockError({ cause })),
+        )
         setDeriveCredentials(
           deriveCredentialsFromSession(
             deriveSession,
-            derivePrivateKey as `0x${string}`,
+            parsedKey.sessionPrivateKey,
           ),
         )
       }
