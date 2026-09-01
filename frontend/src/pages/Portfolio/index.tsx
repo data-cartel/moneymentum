@@ -216,6 +216,9 @@ const VenueBalancesHeader = () => {
               class="size-4"
               aria-hidden="true"
             />
+            <span class="sr-only">
+              {venue.id === "hyperliquid" ? "Hyperliquid" : "Derive"}
+            </span>
             <span class="font-mono text-[12px]">
               ${formatUsdBalance(venue.balanceUsd ?? 0)}
             </span>
