@@ -6,6 +6,7 @@ import {
   createEffect,
   type JSX,
 } from "solid-js"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Slider } from "@/components/ui/slider"
 import type { OrderSide } from "@/hooks/useTrading"
@@ -237,24 +238,26 @@ export const PositionsPanel = (props: PositionsPanelProps): JSX.Element => {
                   alone.
                 </p>
                 <div class="flex w-full max-w-[45ch] flex-col gap-2">
-                  <button
+                  <Button
                     type="button"
-                    class="inline-flex h-8 items-center justify-center rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground"
+                    variant="default"
+                    class="h-8 px-3 text-[12px] font-medium"
                     onClick={() => {
                       focusVenue({ venue: "hyperliquid", openConnect: true })
                     }}
                   >
                     Connect Hyperliquid
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    class="inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-3 text-[12px] font-medium"
+                    variant="outline"
+                    class="h-8 px-3 text-[12px] font-medium"
                     onClick={() => {
                       focusVenue({ venue: "derive", focusWalletField: true })
                     }}
                   >
                     Connect Derive
-                  </button>
+                  </Button>
                 </div>
               </div>
             }
