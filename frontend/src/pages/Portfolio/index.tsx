@@ -8,7 +8,10 @@ import {
   onMount,
   Show,
 } from "solid-js"
+import * as Data from "effect/Data"
+import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
+import * as Schedule from "effect/Schedule"
 import { toast } from "solid-sonner"
 import hyperliquidIconUrl from "@/assets/venues/hyperliquid.png"
 import deriveIconUrl from "@/assets/venues/derive.png"
@@ -392,6 +395,39 @@ const AddPanelMenu = (props: IDockviewHeaderActionsProps) => {
   )
 }
 
+class Eip1193ProviderNotReady extends Data.TaggedError(
+  "Eip1193ProviderNotReady",
+) {}
+
+const EIP1193_PROVIDER_POLL_ATTEMPTS = 30
+const EIP1193_PROVIDER_POLL_INTERVAL_MS = 50
+
+const checkLiveEip1193Provider = (): Effect.Effect<
+  boolean,
+  Eip1193ProviderNotReady
+> =>
+  Effect.tryPromise({
+    try: () => hasLiveEip1193Provider(),
+    catch: () => new Eip1193ProviderNotReady(),
+  })
+
+const requireLiveEip1193Provider: Effect.Effect<void, Eip1193ProviderNotReady> =
+  checkLiveEip1193Provider().pipe(
+    Effect.flatMap(ready =>
+      ready ? Effect.void : Effect.fail(new Eip1193ProviderNotReady()),
+    ),
+  )
+
+// AppKit account callback can fire before getProvider is ready.
+const waitForLiveEip1193Provider = requireLiveEip1193Provider.pipe(
+  Effect.retry(
+    Schedule.intersect(
+      Schedule.recurs(EIP1193_PROVIDER_POLL_ATTEMPTS - 1),
+      Schedule.spaced(Duration.millis(EIP1193_PROVIDER_POLL_INTERVAL_MS)),
+    ),
+  ),
+)
+
 const PortfolioPage = () => {
   const { isNetworkSwitching } = useNetwork()
   const {
@@ -505,36 +541,48 @@ const PortfolioPage = () => {
       return
     }
 
-    void (async () => {
-      if (await hasLiveEip1193Provider()) {
-        continueHyperliquidAgentAuthorize()
-        return
-      }
-
-      // Remembered HL address loads the portfolio, but approveAgent needs a live
-      // injected provider. Opening AppKit here avoids the Hyperliquid-tab dead
-      // end (panel treats remembered address as already connected).
-      openHyperliquidConnectModal({
-        setMainAddress,
-        onConnected: () => {
-          void (async () => {
-            // AppKit account callback can fire before getProvider is ready.
-            for (let attempt = 0; attempt < 30; attempt += 1) {
-              if (await hasLiveEip1193Provider()) {
-                continueHyperliquidAgentAuthorize()
-                return
-              }
-              await new Promise<void>(resolve => {
-                window.setTimeout(resolve, 50)
-              })
+    void Effect.runPromise(
+      checkLiveEip1193Provider().pipe(
+        Effect.flatMap(ready =>
+          Effect.sync(() => {
+            if (ready) {
+              continueHyperliquidAgentAuthorize()
+              return
             }
-            toast.error(
-              "Wallet connected, but the signer is not ready. Click Connect Hyperliquid agent again.",
-            )
-          })()
-        },
-      })
-    })()
+
+            // Remembered HL address loads the portfolio, but approveAgent needs a live
+            // injected provider. Opening AppKit here avoids the Hyperliquid-tab dead
+            // end (panel treats remembered address as already connected).
+            openHyperliquidConnectModal({
+              setMainAddress,
+              onConnected: () => {
+                void Effect.runPromise(
+                  waitForLiveEip1193Provider.pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        continueHyperliquidAgentAuthorize()
+                      }),
+                    ),
+                    Effect.catchAll(() =>
+                      Effect.sync(() => {
+                        toast.error(
+                          "Wallet connected, but the signer is not ready. Click Connect Hyperliquid agent again.",
+                        )
+                      }),
+                    ),
+                  ),
+                )
+              },
+            })
+          }),
+        ),
+        Effect.catchAll(error =>
+          Effect.sync(() => {
+            toast.error(getErrorMessage(error))
+          }),
+        ),
+      ),
+    )
   }
 
   const handlePrimaryStagedAction = () => {

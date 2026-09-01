@@ -245,6 +245,8 @@ const messageForTag = (error: TaggedError): string | null => {
         ? `Derive rejected the request: ${message}`
         : "Derive rejected the request."
     }
+    case "Eip1193ProviderNotReady":
+      return "Wallet connected, but the signer is not ready. Click Connect Hyperliquid agent again."
     case "HyperliquidClientLoadFailed":
       return "Could not load Hyperliquid trading. Please try again."
     case "BitcoinAddressValidatorLoadFailed":
