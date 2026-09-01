@@ -160,6 +160,29 @@ export const WalletProvider = (props: ParentProps) => {
     createSignal<HyperliquidClientLoad>({ state: "loading" })
   let walletContextRevision = 0
   let activeWalletOperation: symbol | null = null
+  const walletOperationWaiters: Array<() => void> = []
+
+  const acquireWalletOperation = (token: symbol): Effect.Effect<void> =>
+    Effect.async(resume => {
+      const tryAcquire = () => {
+        if (activeWalletOperation === null) {
+          activeWalletOperation = token
+          resume(Effect.void)
+          return
+        }
+        walletOperationWaiters.push(tryAcquire)
+      }
+      tryAcquire()
+    })
+
+  const releaseWalletOperation = (token: symbol): void => {
+    if (activeWalletOperation !== token) {
+      return
+    }
+    activeWalletOperation = null
+    const nextWaiter = walletOperationWaiters.shift()
+    nextWaiter?.()
+  }
 
   // Verified PIN for this SPA session only (never persisted). Cleared on full
   // disconnect / storage wipes for both venues.
@@ -374,10 +397,24 @@ export const WalletProvider = (props: ParentProps) => {
     },
     pin?: string,
   ): Effect.Effect<void, WalletConnectError> => {
-    const mode = networkMode()
     const contextRevision = walletContextRevision
+    const operationToken = Symbol("connect-derive")
 
+    // Effect.gen runs after the click handler; later queued calls must see
+    // context changes from earlier serialized work.
+    // eslint-disable-next-line solid/reactivity
     return Effect.gen(function* () {
+      yield* acquireWalletOperation(operationToken)
+
+      if (walletContextRevision !== contextRevision) {
+        return yield* Effect.fail(
+          new WalletConnectError({
+            cause: new WalletConnectionContextChanged(),
+          }),
+        )
+      }
+
+      const mode = networkMode()
       const resolvedPin = yield* resolvePin(pin)
 
       yield* validatePinAgainstStoredSessions(resolvedPin).pipe(
@@ -430,7 +467,14 @@ export const WalletProvider = (props: ParentProps) => {
         deriveCredentialsFromSession(session, parsedKey.sessionPrivateKey),
       )
       syncStoredSessionState()
-    })
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseWalletOperation(operationToken)
+        }),
+      ),
+      Effect.asVoid,
+    )
   }
 
   /**
