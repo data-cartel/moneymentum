@@ -21,6 +21,7 @@ export const ExpiryTabButtons = (props: {
           "d-expiry-active": props.selectedUnix() === tab.unix,
           "shrink-0": true,
         }}
+        aria-pressed={props.selectedUnix() === tab.unix}
         onMouseDown={() => {
           props.onSelect(tab.unix)
         }}
