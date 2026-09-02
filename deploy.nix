@@ -101,6 +101,59 @@ in
         map (name: "systemctl reset-failed ${name} || true") enabledServices
       );
 
+      # Remote preflight plus the local logind poll, shared by deployServer and
+      # deployStaged. Runs on the remote host via heredoc so nested quotes do
+      # not break shellcheck or the generated scripts (SC2026).
+      preflightScript = ''
+        ssh -i "$identity" "root@$host_ip" bash -s <<'REMOTE_PREFLIGHT'
+        set -eu
+        systemctl stop 'nixos-rebuild-switch-to-configuration*' 2>/dev/null || true
+        pkill -9 -f '[s]witch-to-configuration' || true
+        rm -f /run/nixos/switch-to-configuration.lock
+        systemctl stop moneymentum-markets-refresh.timer staging-markets-refresh.timer 2>/dev/null || true
+        systemctl disable moneymentum-markets-refresh.timer staging-markets-refresh.timer 2>/dev/null || true
+        ${serviceResetLines}
+        systemd-run --on-active=3s --collect --unit=moneymentum-deploy-dbus-heal \
+          /bin/sh -c 'systemctl reset-failed dbus-broker systemd-logind || true; systemctl restart dbus-broker; systemctl restart systemd-logind' \
+          || true
+        REMOTE_PREFLIGHT
+
+        # dbus heal is scheduled for +3s after preflight SSH closes; poll logind
+        # before deploy-rs activation so wedged logind fails fast instead of timing
+        # out for the full activation window (nixpkgs#527469).
+        for ((attempt = 1; attempt <= 15; attempt++)); do
+          if ssh -i "$identity" "root@$host_ip" loginctl list-users >/dev/null 2>&1; then
+            break
+          fi
+          if [ "$attempt" -eq 15 ]; then
+            echo "ERROR: logind still unhealthy after deploy preflight" >&2
+            exit 1
+          fi
+          sleep 2
+        done
+      '';
+
+      # Health-and-markets verification against the freshly deployed staging
+      # instance: migrations applied to a real database, the binary serving, and
+      # the live Hyperliquid fetch working from the host's IP.
+      stagingGateScript = ''
+        echo "==> Verifying staging"
+        staging_ok=""
+        for delay in 2 4 8 16 32 32; do
+          if curl -sSf --max-time 20 "http://$host_ip:8080/api/health" >/dev/null &&
+            curl -sSf --max-time 30 "http://$host_ip:8080/api/hyperliquid/markets?network=mainnet" >/dev/null; then
+            staging_ok=1
+            break
+          fi
+          echo "staging not healthy yet; retrying in ''${delay}s"
+          sleep "$delay"
+        done
+        if [ -z "$staging_ok" ]; then
+          echo "ERROR: staging failed verification" >&2
+          exit 1
+        fi
+      '';
+
     in
     {
       deployNixos = pkgs.writeShellApplication {
@@ -128,37 +181,64 @@ in
         runtimeInputs = deployInputs ++ [ pkgs.openssh ];
         text = ''
           ${deployPreamble}
-
-          # Preflight runs on the remote host via heredoc so nested quotes do not
-          # break shellcheck or the generated deploy-server script (SC2026).
-          ssh -i "$identity" "root@$host_ip" bash -s <<'REMOTE_PREFLIGHT'
-          set -eu
-          systemctl stop 'nixos-rebuild-switch-to-configuration*' 2>/dev/null || true
-          pkill -9 -f '[s]witch-to-configuration' || true
-          rm -f /run/nixos/switch-to-configuration.lock
-          systemctl stop moneymentum-markets-refresh.timer staging-markets-refresh.timer 2>/dev/null || true
-          systemctl disable moneymentum-markets-refresh.timer staging-markets-refresh.timer 2>/dev/null || true
-          ${serviceResetLines}
-          systemd-run --on-active=3s --collect --unit=moneymentum-deploy-dbus-heal \
-            /bin/sh -c 'systemctl reset-failed dbus-broker systemd-logind || true; systemctl restart dbus-broker; systemctl restart systemd-logind' \
-            || true
-          REMOTE_PREFLIGHT
-
-          # dbus heal is scheduled for +3s after preflight SSH closes; poll logind
-          # before deploy-rs activation so wedged logind fails fast instead of timing
-          # out for the full activation window (nixpkgs#527469).
-          for ((attempt = 1; attempt <= 15; attempt++)); do
-            if ssh -i "$identity" "root@$host_ip" loginctl list-users >/dev/null 2>&1; then
-              break
-            fi
-            if [ "$attempt" -eq 15 ]; then
-              echo "ERROR: logind still unhealthy after deploy preflight" >&2
-              exit 1
-            fi
-            sleep 2
-          done
-
+          ${preflightScript}
           deploy ${deployFlags} --hostname "$host_ip" ''${ssh_flag:+"$ssh_flag"} "$@" .#moneymentum
+        '';
+      };
+
+      # Staged rollout: the new binary must prove itself on staging before
+      # production is touched. System profile first (shared host config), then
+      # staging, then a health-and-markets gate against staging, and only then
+      # the production service. A staging failure aborts with production still
+      # on its previous generation.
+      #
+      # Residual risk: the system profile is shared, so unit or host config
+      # changes still reach production units before the gate (#422).
+      deployStaged = pkgs.writeShellApplication {
+        name = "deploy-staged";
+        runtimeInputs = deployInputs ++ [
+          pkgs.openssh
+          pkgs.curl
+        ];
+        text = ''
+          ${deployPreamble}
+          ${preflightScript}
+
+          echo "==> Deploying the system profile"
+          deploy ${deployFlags} --hostname "$host_ip" ''${ssh_flag:+"$ssh_flag"} .#moneymentum.system
+
+          echo "==> Deploying staging"
+          deploy ${deployFlags} --hostname "$host_ip" ''${ssh_flag:+"$ssh_flag"} .#moneymentum.staging
+
+          ${stagingGateScript}
+
+          echo "==> Staging verified; deploying production"
+          deploy ${deployFlags} --hostname "$host_ip" ''${ssh_flag:+"$ssh_flag"} .#moneymentum.moneymentum
+        '';
+      };
+
+      # Pull-request gate: deploy the PR's binary to staging and verify it, so
+      # a reviewer knows the change survives a real deploy BEFORE merging. Only
+      # the staging service profile is deployed -- an unmerged PR must not
+      # reshape shared host config, so the system profile stays whatever master
+      # last activated and system-level changes are verified by deployStaged at
+      # merge time.
+      deployStagingVerify = pkgs.writeShellApplication {
+        name = "deploy-staging-verify";
+        runtimeInputs = deployInputs ++ [
+          pkgs.openssh
+          pkgs.curl
+        ];
+        text = ''
+          ${deployPreamble}
+          ${preflightScript}
+
+          echo "==> Deploying this revision to staging"
+          deploy ${deployFlags} --hostname "$host_ip" ''${ssh_flag:+"$ssh_flag"} .#moneymentum.staging
+
+          ${stagingGateScript}
+
+          echo "==> Staging verified"
         '';
       };
 

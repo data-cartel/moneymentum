@@ -166,6 +166,8 @@ the next user-facing priority; it runs in parallel to the Dev track above.
       ([#444](https://github.com/dataclique/moneymentum/pull/444))
 - [x] [a race-loser ingestion run poisons the newest view row and breaks the status endpoint](https://github.com/dataclique/moneymentum/issues/445)
       ([#446](https://github.com/dataclique/moneymentum/pull/446))
+- [x] [green PRs produce failing deploys: CI never builds the deploy artifact and the smoke test misses staging and the markets endpoint](https://github.com/dataclique/moneymentum/issues/447)
+      ([#448](https://github.com/dataclique/moneymentum/pull/448))
 - [x] [frontend markets requests 404: GET /hyperliquid/markets no longer exists](https://github.com/dataclique/moneymentum/issues/429)
       ([#433](https://github.com/dataclique/moneymentum/pull/433))
 - [x] [systemd moneymentum-ingest timer curls the removed POST /ingest every six hours](https://github.com/dataclique/moneymentum/issues/430)

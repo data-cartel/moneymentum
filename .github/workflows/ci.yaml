@@ -81,6 +81,12 @@ jobs:
       - name: Clippy
         run: nix build -L --log-format raw .#moneymentum-clippy
 
+      # The exact derivation the deploy activates, release-profile tests
+      # included. Green CI therefore guarantees the deploy's build phase, and
+      # cachix turns the deploy build into a cache pull instead of a rebuild.
+      - name: Build the deploy artifact
+        run: nix build -L --log-format raw .#moneymentum
+
   frontend:
     runs-on: ubuntu-latest
     steps:

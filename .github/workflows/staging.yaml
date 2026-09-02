@@ -1,0 +1,95 @@
+# Deploys the PR's backend to the staging instance and verifies it (health +
+# markets endpoint), so a reviewer knows the change survives a real deploy --
+# migrations against a real database included -- BEFORE hitting merge.
+#
+# Only the staging service profile is deployed: an unmerged PR must not reshape
+# shared host config. System-level changes are verified by the staged rollout
+# on master. Staging afterwards keeps running the PR's binary until the next
+# deploy touches it; it is a proving ground, not an environment with uptime
+# guarantees.
+
+name: Staging
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "migrations/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "config/**"
+      - "*.nix"
+      - "flake.lock"
+      - ".github/workflows/staging.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize against master deploys and other PRs -- staging is one shared
+# instance and deployServer/deployStaged touch it too.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-and-verify-staging:
+    # Fork PRs have no SSH_KEY secret; only same-repo branches deploy.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+        with:
+          nix_version: "2.31.2"
+          nix_conf: |
+            accept-flake-config = true
+            fallback = true
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            keep-env-derivations = true
+            keep-outputs = true
+
+      - uses: cachix/cachix-action@ad2ddac53f961de1989924296a1f236fcfbaa4fc # v15
+        with:
+          name: data-cartel-public
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-deploy-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-deploy-
+          gc-max-store-size-linux: 5G
+
+      - name: Setup SSH
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Resolve host IP
+        run: |
+          host_ip=$(nix run .#resolveIp)
+          echo "::add-mask::$host_ip"
+
+          # The host key is pinned in keys.nix, not fetched from the target host.
+          host_key=$(nix eval --raw --file keys.nix keys.host)
+          if [ -z "$host_key" ]; then
+            echo "Host key is empty" >&2
+            exit 1
+          fi
+
+          echo "$host_ip $host_key" > ~/.ssh/known_hosts
+
+      - name: Deploy this revision to staging and verify
+        run: nix run .#deployStagingVerify
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -rf ~/.ssh

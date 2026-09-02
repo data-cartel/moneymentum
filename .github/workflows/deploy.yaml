@@ -83,8 +83,12 @@ jobs:
           bun install --frozen-lockfile
           bun run build
 
-      - name: Deploy system and backend
-        run: nix run .#deployServer
+      # Staged rollout: system profile, then staging, then a health-and-markets
+      # gate against staging -- production only deploys after staging proves
+      # the new binary. A staging failure leaves production on its previous
+      # generation.
+      - name: Deploy staged (system, staging, gate, production)
+        run: nix run .#deployStaged
 
       - name: Deploy frontend
         run: nix run .#deployFrontend
@@ -136,6 +140,8 @@ jobs:
         env:
           FRONTEND_URL: ${{ vars.DEPLOY_FRONTEND_URL }}
           HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL }}
+          STAGING_HEALTH_URL: ${{ vars.DEPLOY_STAGING_HEALTH_URL }}
+          MARKETS_URL: ${{ vars.DEPLOY_MARKETS_URL }}
           SMOKE_HOST: ${{ vars.DEPLOY_SMOKE_HOST }}
           SMOKE_INSECURE: ${{ vars.DEPLOY_SMOKE_INSECURE }}
         run: |
@@ -148,6 +154,8 @@ jobs:
 
           frontend_url="${FRONTEND_URL:-http://$host_ip/}"
           health_url="${HEALTH_URL:-http://$host_ip/api/health}"
+          staging_health_url="${STAGING_HEALTH_URL:-http://$host_ip:8080/api/health}"
+          markets_url="${MARKETS_URL:-http://$host_ip/api/hyperliquid/markets?network=mainnet}"
 
           health_response_ok() {
             response_file="$1"
@@ -228,6 +236,13 @@ jobs:
 
           retry_url "$frontend_url" "" true
           retry_url "$health_url"
+          # Staging runs the same binary against its own database; a crash loop
+          # there wedges the next deploy's system activation, so catch it here.
+          retry_url "$staging_health_url"
+          # The Portfolio page's symbol universe and rebalancing both depend on
+          # this endpoint; a deploy that leaves it failing bricks the frontend
+          # even while /api/health stays green.
+          retry_url "$markets_url"
 
       - name: Cleanup SSH
         if: always()
